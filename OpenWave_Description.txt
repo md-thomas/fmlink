@@ -1,0 +1,133 @@
+OpenWave - An Open Digital Radio Stack
+
+OpenWave is an open, modern digital radio framework designed for 
+high-performance wireless communications. It provides a flexible, 
+modular stack for building interoperable digital radio systems, 
+with a focus on maximizing data throughput while minimizing occupied 
+spectral bandwidth.
+
+Built for experimentation, research, and real-world deployment, 
+OpenWave aims to provide an open foundation for next-generation 
+Amateur Radio and SDR applications.
+
+Channel Bandwidth:
+VHF: 	Modes 0-3 within 15 kHz channels
+UHF:  	Modes 0-4 within 25 kHz channels
+
+Modem Chain:
+	Application Data
+    		|
+    Packet Builder (Header + Payload + CRC32)
+            |
+    FEC Encoder
+    		|
+    Interleaver
+    		|
+    π/4-QPSK Modulator
+    		|
+    RRC Filter
+    		|
+            RF
+
+Physical Layer (PHY)
+    Modulation: 		    π/4-QPSK (2 bits/symbol)
+    Symbol Rates: 	        600, 1200, 2400, 4800, 9600 symbols/sec
+    Raw Bit Rates: 	        1.2 kbps - 19.2 kbps
+    Filtering:  		    Root Raised Cosine
+    Roll-off: 		        0.35
+    Synchronization:
+    Preamble detection
+    Carrier recovery
+    Symbol timing recovery
+    Forward Error Correction: 	TBD
+
+Link layer
+
+    Preamble:	8 bytes (timing preamble) 55 55 55 55 55 55 55 55
+    Sync Word: 	4 bytes (CCDS sync word) 0x1ACFFC1D (for correlation)
+	Header:	    32 bytes
+    Payload: 	Variable (maximum 1024 bytes)
+    CRC32:	    4 bytes
+
+    Header: 	Total 32 bytes
+        Version: 		1 byte
+        Packet Type:		1 byte
+        Waveform Mode ID:	1 byte
+		Flags: 			1 byte
+        Sequence Number:	2 bytes
+        Source ID:		8 bytes
+        Destination ID: 	8 bytes
+        Payload Length:	2 bytes
+        Reserved:		8 bytes
+
+        Packet Types:
+            0x01 = Data
+            0x02 = ACK
+            0x03 = Beacon
+            0x04 = Control
+
+        Waveform Modes:
+            Mode 0: 	600 symbols/sec  1200 bps raw
+            Mode 1: 	1200 symbols/sec 2400 bps raw
+            Mode 2: 	2400 symbols/sec 4800 bps raw
+            Mode 3: 	4800 symbols/sec 9600 bps raw
+            Mode 4: 	9600 symbols/sec 19200 bps raw
+
+	    Flags: 1 byte 
+            Bit 0: 	ACK Requested 
+                0 = No acknowledgment required 
+                1 = Sender requires ACK 
+            
+            Bit 1: 	ACK Response 
+                0 = Normal frame 
+                1 = This frame is an ACK response 
+            
+            Bit 2: 	Fragmented Frame 
+                0 = Complete payload 
+                1 = Payload is part of a fragmented message 
+
+            Bit 3: 	More Fragments 
+                0 = Last fragment 
+                1 = More fragments follow 
+
+            Bit 4: Priority 
+                0 = Normal priority 
+                1 = High priority 
+
+            Bit 5: Reserved 
+            Bit 6: Reserved 
+            Bit 7: Reserved 
+
+
+        Source ID / Destination ID Encoding:
+            Format:  	Fixed length 8-byte ASCII field
+            Encoding: 	UTF-8/ASCII characters Unused bytes padded with 0x00
+            Maximum Length: 8 characters
+
+    Examples:
+    "K0MDT"
+        ASCII: 4B 30 4D 44 54
+        Encoded 8-byte field: 4B 30 4D 44 54 00 00 00
+    "W1AW"
+        ASCII:  57 31 41 57
+        Encoded 8-byte field: 57 31 41 57 00 00 00 00
+    "BROADCAST"
+        Not valid (exceeds 8 bytes)
+
+
+    Example: 
+        55 55 55 55 55 55 55 55 	<- Preamble 
+        1A CF FC 1D 			<- Sync Word 
+        01 				<- Version 
+        02 				<- Waveform Mode ID (2400 bps) 
+        01 				<- Packet Type (Data) 
+        01 				<- Flags (ACK requested) 
+        00 01 				<- Sequence Number 
+        4B 30 4D 44 54 00 00 00 	<- Source ID "K0MDT" 
+        41 4C 4C 00 00 00 00 00 	<- Destination ID "ALL" 
+        00 05 				<- Payload Length (5 bytes) 
+        00 00 00 00 00 00 00 00 	<- Reserved 
+        48 65 6C 6C 6F 		<- Payload "Hello" 
+        A7 39 82 F1 			<- CRC32 (Header + Payload) 
+
+

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import grc; print\\(grc.__file__\\)\")",
+      "Bash(find / -iname \"*.py\" -path \"*grc*\")",
+      "Bash(grep -n -i \"reload\\\\|revert\" /usr/lib/python3/dist-packages/gnuradio/grc/gui/Actions.py /usr/lib/python3/dist-packages/gnuradio/grc/gui/Bars.py /usr/lib/python3/dist-packages/gnuradio/grc/gui/MainWindow.py)",
+      "Read(//usr/lib/python3/dist-packages/gnuradio/grc/gui/**)",
+      "Bash(grep -n \"def reload\" -A 15 /usr/lib/python3/dist-packages/gnuradio/grc/core/FlowGraph.py)",
+      "Read(//usr/lib/python3/dist-packages/gnuradio/grc/core/**)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

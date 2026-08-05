@@ -1,0 +1,638 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: ''
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: test1
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: QPSK Differential Modem
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 8]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: nfilts
+  id: variable
+  parameters:
+    comment: ''
+    value: '32'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [584, 8]
+    rotation: 0
+    state: enabled
+- name: qpsk_const
+  id: variable_constellation
+  parameters:
+    comment: ''
+    const_points: '[-1-1j, -1+1j, 1+1j, 1-1j]'
+    dims: '1'
+    normalization: digital.constellation.AMPLITUDE_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '4'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 3, 2]'
+    type: qpsk
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [864, 8]
+    rotation: 0
+    state: enabled
+- name: rrc_taps
+  id: variable_rrc_filter_taps
+  parameters:
+    alpha: '0.35'
+    comment: ''
+    gain: nfilts
+    ntaps: 11*sps*nfilts
+    samp_rate: nfilts
+    sym_rate: '1.0'
+    value: ''
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [704, 8]
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: symbol_rate*sps
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [464, 8]
+    rotation: 0
+    state: enabled
+- name: sps
+  id: variable
+  parameters:
+    comment: ''
+    value: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [344, 8]
+    rotation: 0
+    state: enabled
+- name: blocks_pack_k_bits_bb_0
+  id: blocks_pack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Regroup individual bits into 2-bit symbols (0..3)
+    k: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [304, 248.0]
+    rotation: 0
+    state: enabled
+- name: blocks_pack_k_bits_bb_1
+  id: blocks_pack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Repack individual bits into 8-bit bytes
+    k: '8'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1296, 528.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [960, 168.0]
+    rotation: 0
+    state: enabled
+- name: blocks_unpack_k_bits_bb_0
+  id: blocks_unpack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Unpack 8-bit bytes into individual bits
+    k: '8'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [248, 352.0]
+    rotation: 0
+    state: enabled
+- name: blocks_unpack_k_bits_bb_1
+  id: blocks_unpack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Split 2-bit symbols back into individual bits
+    k: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1136, 616.0]
+    rotation: 0
+    state: enabled
+- name: channels_channel_model_0
+  id: channels_channel_model
+  parameters:
+    affinity: ''
+    alias: ''
+    block_tags: 'False'
+    comment: ''
+    epsilon: '1.0'
+    freq_offset: '0.0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    noise_voltage: '0.001'
+    seed: '0'
+    taps: '1.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1136, 224.0]
+    rotation: 0
+    state: enabled
+- name: digital_chunks_to_symbols_xx_0
+  id: digital_chunks_to_symbols_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    dimension: '1'
+    in_type: byte
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_ports: '1'
+    out_type: complex
+    symbol_table: qpsk_const.points()
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [664, 168.0]
+    rotation: 0
+    state: enabled
+- name: digital_constellation_decoder_cb_0
+  id: digital_constellation_decoder_cb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    constellation: qpsk_const
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 616.0]
+    rotation: 0
+    state: enabled
+- name: digital_costas_loop_cc_0
+  id: digital_costas_loop_cc
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    order: '4'
+    use_snr: 'False'
+    w: '0.05'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [576, 488.0]
+    rotation: 0
+    state: enabled
+- name: digital_diff_decoder_bb_0
+  id: digital_diff_decoder_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    coding: digital.DIFF_DIFFERENTIAL
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    modulus: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1000, 520.0]
+    rotation: 0
+    state: enabled
+- name: digital_diff_encoder_bb_0
+  id: digital_diff_encoder_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    coding: digital.DIFF_DIFFERENTIAL
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    modulus: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [464, 280.0]
+    rotation: 0
+    state: enabled
+- name: digital_symbol_sync_xx_0
+  id: digital_symbol_sync_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    constellation: qpsk_const
+    damping: '1.0'
+    loop_bw: '0.045'
+    max_dev: '1.5'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nfilters: '128'
+    osps: '1'
+    pfb_mf_taps: '[]'
+    resamp_type: digital.IR_MMSE_8TAP
+    sps: sps
+    ted_gain: '1.0'
+    ted_type: digital.TED_MOD_MUELLER_AND_MULLER
+    type: cc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [176, 460.0]
+    rotation: 0
+    state: enabled
+- name: filter_interp_fir_filter_xxx_0
+  id: interp_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    interp: sps
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: firdes.root_raised_cosine(1.0, sps, 1.0, 0.35, 11*sps)
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 272.0]
+    rotation: 0
+    state: enabled
+- name: msg
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: ''
+    short_id: m
+    type: str
+    value: '"GNU Radio QPSK Differential Transmission Test 123!"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 8]
+    rotation: 0
+    state: enabled
+- name: pdu_pdu_to_tagged_stream_0
+  id: pdu_pdu_to_tagged_stream
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tag: packet_len
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [32, 280.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'True'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: ''
+    grid: 'False'
+    gui_hint: ''
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: '""'
+    nconnections: '1'
+    size: '1024'
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '1'
+    xmin: '-1'
+    ymax: '1'
+    ymin: '-1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [936, 400.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_0
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 0,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Send
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: msg
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [32, 120.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_1
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 1,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Received
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1448, 808.0]
+    rotation: 0
+    state: enabled
+- name: str_to_pdu_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nWraps an incoming string message (from a QT GUI Message\
+      \ Edit Box) into a\nzero-padded byte-vector PDU, ready for PDU to Tagged Stream.\n\
+      \nThe padding absorbs sync-loop acquisition transients and filter group delay\
+      \ so\nthe real payload isn't the first/last thing in each burst.\n\"\"\"\nfrom\
+      \ gnuradio import gr\nimport pmt\n\n\nclass blk(gr.basic_block):\n    \"\"\"\
+      String to Padded PDU\"\"\"\n\n    def __init__(self, pad=48):\n        gr.basic_block.__init__(self,\
+      \ name='String to Padded PDU', in_sig=[], out_sig=[])\n        self.pad = pad\n\
+      \        self.message_port_register_in(pmt.intern('msg'))\n        self.message_port_register_out(pmt.intern('pdus'))\n\
+      \        self.set_msg_handler(pmt.intern('msg'), self.handle_msg)\n\n    def\
+      \ handle_msg(self, msg):\n        if pmt.is_pair(msg):\n            msg = pmt.cdr(msg)\n\
+      \        text = pmt.symbol_to_string(msg) if pmt.is_symbol(msg) else str(msg)\n\
+      \        payload = b'\\x00' * self.pad + text.encode('utf-8') + b'\\x00' * self.pad\n\
+      \        pdu = pmt.cons(pmt.make_dict(), pmt.init_u8vector(len(payload), list(payload)))\n\
+      \        self.message_port_pub(pmt.intern('pdus'), pdu)\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    pad: '48'
+  states:
+    _io_cache: ('String to Padded PDU', 'blk', [('pad', '48')], [('msg', 'message',
+      1)], [('pdus', 'message', 1)], 'String to Padded PDU', ['pad'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [328, 128.0]
+    rotation: 0
+    state: enabled
+- name: stream_display_sink_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nScans a rolling buffer of the received byte stream for\
+      \ the zero-padding\nmarkers placed around each message on the TX side, and publishes\
+      \ the\nframed text as a message whenever it changes. Avoids relying on stream\n\
+      tags, which don't survive the adaptive symbol-sync/Costas loop chain\nprecisely\
+      \ enough for an isolated one-shot burst.\n\"\"\"\nimport numpy as np\nfrom gnuradio\
+      \ import gr\nimport pmt\n\n\nclass blk(gr.sync_block):\n    \"\"\"Rolling-buffer\
+      \ byte stream to message\"\"\"\n\n    def __init__(self, pad=8, bufsize=512):\n\
+      \        gr.sync_block.__init__(self, name='Stream to Message', in_sig=[np.uint8],\
+      \ out_sig=[])\n        self.pad = pad\n        self.bufsize = bufsize\n    \
+      \    self.buf = bytearray()\n        self.last = None\n        self.message_port_register_out(pmt.intern('msg'))\n\
+      \n    def work(self, input_items, output_items):\n        data = input_items[0].tobytes()\n\
+      \        self.buf.extend(data)\n        if len(self.buf) > self.bufsize:\n \
+      \           del self.buf[:len(self.buf) - self.bufsize]\n\n        zero_run\
+      \ = b'\\x00' * self.pad\n        buf = bytes(self.buf)\n\n        # Find every\
+      \ complete zero-delimited segment currently in the\n        # window and keep\
+      \ the last (most recent) one - older messages\n        # can still be sitting\
+      \ in the buffer alongside a newer one.\n        segments = []\n        pos =\
+      \ 0\n        while True:\n            start = buf.find(zero_run, pos)\n    \
+      \        if start == -1:\n                break\n            payload_start =\
+      \ start\n            while payload_start < len(buf) and buf[payload_start] ==\
+      \ 0:\n                payload_start += 1\n            end = buf.find(zero_run,\
+      \ payload_start)\n            if end == -1 or end <= payload_start:\n      \
+      \          break\n            segments.append(buf[payload_start:end])\n    \
+      \        pos = end\n\n        if segments:\n            text = segments[-1].decode('utf-8',\
+      \ errors='replace')\n            if text and text != self.last:\n          \
+      \      self.last = text\n                self.message_port_pub(pmt.intern('msg'),\
+      \ pmt.string_to_symbol(text))\n\n        return len(data)\n"
+    affinity: ''
+    alias: ''
+    bufsize: '512'
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    pad: '8'
+  states:
+    _io_cache: ('Stream to Message', 'blk', [('pad', '8'), ('bufsize', '512')], [('0',
+      'byte', 1)], [('msg', 'message', 1)], 'Rolling-buffer byte stream to message',
+      ['bufsize', 'pad'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1296, 700.0]
+    rotation: 0
+    state: enabled
+- name: symbol_rate
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: ''
+    short_id: r
+    type: intx
+    value: '4800'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [176, 8]
+    rotation: 0
+    state: enabled
+
+connections:
+- [blocks_pack_k_bits_bb_0, '0', digital_diff_encoder_bb_0, '0']
+- [blocks_pack_k_bits_bb_1, '0', stream_display_sink_0, '0']
+- [blocks_throttle2_0, '0', channels_channel_model_0, '0']
+- [blocks_unpack_k_bits_bb_0, '0', blocks_pack_k_bits_bb_0, '0']
+- [blocks_unpack_k_bits_bb_1, '0', blocks_pack_k_bits_bb_1, '0']
+- [channels_channel_model_0, '0', digital_symbol_sync_xx_0, '0']
+- [digital_chunks_to_symbols_xx_0, '0', filter_interp_fir_filter_xxx_0, '0']
+- [digital_constellation_decoder_cb_0, '0', digital_diff_decoder_bb_0, '0']
+- [digital_costas_loop_cc_0, '0', digital_constellation_decoder_cb_0, '0']
+- [digital_costas_loop_cc_0, '0', qtgui_const_sink_x_0, '0']
+- [digital_diff_decoder_bb_0, '0', blocks_unpack_k_bits_bb_1, '0']
+- [digital_diff_encoder_bb_0, '0', digital_chunks_to_symbols_xx_0, '0']
+- [digital_symbol_sync_xx_0, '0', digital_costas_loop_cc_0, '0']
+- [filter_interp_fir_filter_xxx_0, '0', blocks_throttle2_0, '0']
+- [pdu_pdu_to_tagged_stream_0, '0', blocks_unpack_k_bits_bb_0, '0']
+- [qtgui_edit_box_msg_0, msg, str_to_pdu_0, msg]
+- [str_to_pdu_0, pdus, pdu_pdu_to_tagged_stream_0, pdus]
+- [stream_display_sink_0, msg, qtgui_edit_box_msg_1, val]
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2
