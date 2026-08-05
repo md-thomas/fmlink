@@ -103,16 +103,16 @@ class test2(gr.top_block, Qt.QWidget):
         for c in range(0, 1):
             self.top_grid_layout.setColumnStretch(c, 1)
         self.qtgui_const_sink_x_0 = qtgui.const_sink_c(
-            1024, #size
+            256, #size
             "", #name
             1, #number of inputs
             None # parent
         )
         self.qtgui_const_sink_x_0.set_update_time(0.10)
-        self.qtgui_const_sink_x_0.set_y_axis((-1), 1)
-        self.qtgui_const_sink_x_0.set_x_axis((-1), 1)
+        self.qtgui_const_sink_x_0.set_y_axis((-1.5), 1.5)
+        self.qtgui_const_sink_x_0.set_x_axis((-1.5), 1.5)
         self.qtgui_const_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, "")
-        self.qtgui_const_sink_x_0.enable_autoscale(True)
+        self.qtgui_const_sink_x_0.enable_autoscale(False)
         self.qtgui_const_sink_x_0.enable_grid(False)
         self.qtgui_const_sink_x_0.enable_axis_labels(True)
 

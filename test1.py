@@ -99,7 +99,7 @@ class test1(gr.top_block, Qt.QWidget):
         for c in range(0, 1):
             self.top_grid_layout.setColumnStretch(c, 1)
         self.qtgui_const_sink_x_0 = qtgui.const_sink_c(
-            1024, #size
+            256, #size
             "", #name
             1, #number of inputs
             None # parent
