@@ -337,7 +337,7 @@ blocks:
     maxoutbuf: '0'
     minoutbuf: '0'
     samp_delay: '0'
-    taps: firdes.root_raised_cosine(1.0, sps, 1.0, 0.35, 11*sps)
+    taps: firdes.root_raised_cosine(sps, sps, 1.0, 0.35, 11*sps)
     type: ccf
   states:
     bus_sink: false

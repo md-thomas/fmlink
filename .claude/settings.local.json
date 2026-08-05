@@ -7,7 +7,8 @@
       "Read(//usr/lib/python3/dist-packages/gnuradio/grc/gui/**)",
       "Bash(grep -n \"def reload\" -A 15 /usr/lib/python3/dist-packages/gnuradio/grc/core/FlowGraph.py)",
       "Read(//usr/lib/python3/dist-packages/gnuradio/grc/core/**)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(grcc test2.grc -o .)"
     ]
   }
 }
