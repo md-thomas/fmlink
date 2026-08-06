@@ -197,7 +197,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [784, 544.0]
+    coordinate: [832, 504.0]
     rotation: 0
     state: enabled
 - name: channels_channel_model_0
@@ -338,7 +338,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [48, 468.0]
+    coordinate: [48, 452.0]
     rotation: 0
     state: enabled
 - name: filter_interp_fir_filter_xxx_0
@@ -485,7 +485,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [552, 600.0]
+    coordinate: [600, 616.0]
     rotation: 0
     state: enabled
 - name: qtgui_edit_box_msg_0
@@ -529,7 +529,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1216, 528.0]
+    coordinate: [1456, 504.0]
     rotation: 0
     state: enabled
 - name: str_to_pdu_0
@@ -608,7 +608,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [976, 592.0]
+    coordinate: [1200, 560.0]
     rotation: 0
     state: enabled
 - name: symbol_rate
