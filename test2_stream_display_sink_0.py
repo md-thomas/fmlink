@@ -1,9 +1,15 @@
 """
-Scans a rolling buffer of the received byte stream for the zero-padding
-markers placed around each message on the TX side, and publishes the
-framed text as a message whenever it changes. Avoids relying on stream
-tags, which don't survive the adaptive symbol-sync chain precisely
-enough for an isolated one-shot burst.
+Uses the 'sync' tag emitted by the access-code correlator to know exactly
+which bit is the start of the payload - no more guessing a bit-to-byte
+phase. Packs bits into bytes from that point and publishes the payload
+once a run of zero bytes (temporary end-of-message marker, until a real
+Payload Length header field exists) is seen.
+
+term_len is deliberately smaller than how much zero padding TX actually
+sends (see str_to_pdu_0's end_pad), since the filter/timing-recovery
+pipeline's group delay means the last several trailing bytes never
+arrive once the finite burst source goes idle - there's nothing left to
+flush them through.
 """
 import numpy as np
 from gnuradio import gr
@@ -11,47 +17,41 @@ import pmt
 
 
 class blk(gr.sync_block):
-    """Rolling-buffer byte stream to message"""
+    """Sync-word-aligned bit stream to message"""
 
-    def __init__(self, pad=8, bufsize=512):
-        gr.sync_block.__init__(self, name='Stream to Message', in_sig=[np.uint8], out_sig=[])
-        self.pad = pad
-        self.bufsize = bufsize
-        self.buf = bytearray()
-        self.last = None
+    def __init__(self, term_len=8, max_payload_bytes=256, tagname='sync'):
+        gr.sync_block.__init__(self, name='Framed Stream to Message', in_sig=[np.uint8], out_sig=[])
+        self.term_len = term_len
+        self.max_payload_bytes = max_payload_bytes
+        self.tagname = tagname
+        self.bits = []
+        self.armed = False
         self.message_port_register_out(pmt.intern('msg'))
 
     def work(self, input_items, output_items):
-        data = input_items[0].tobytes()
-        self.buf.extend(data)
-        if len(self.buf) > self.bufsize:
-            del self.buf[:len(self.buf) - self.bufsize]
+        in0 = input_items[0]
+        tags = self.get_tags_in_window(0, 0, len(in0), pmt.intern(self.tagname))
+        tag_offsets = {t.offset - self.nitems_read(0) for t in tags}
 
-        zero_run = b'\x00' * self.pad
-        buf = bytes(self.buf)
+        for i, bit in enumerate(in0):
+            if i in tag_offsets:
+                self.bits = []
+                self.armed = True
+            if self.armed:
+                self.bits.append(int(bit))
+                if len(self.bits) >= self.max_payload_bytes * 8:
+                    self.armed = False
+                    self.bits = []
+                    continue
+                if len(self.bits) % 8 == 0 and len(self.bits) >= self.term_len * 8:
+                    byts = np.packbits(np.array(self.bits, dtype=np.uint8)).tobytes()
+                    zero_run = b'\x00' * self.term_len
+                    idx = byts.find(zero_run)
+                    if idx != -1:
+                        text = byts[:idx].decode('utf-8', errors='replace')
+                        if text:
+                            self.message_port_pub(pmt.intern('msg'), pmt.string_to_symbol(text))
+                        self.armed = False
+                        self.bits = []
 
-        # Find every complete zero-delimited segment currently in the
-        # window and keep the last (most recent) one - older messages
-        # can still be sitting in the buffer alongside a newer one.
-        segments = []
-        pos = 0
-        while True:
-            start = buf.find(zero_run, pos)
-            if start == -1:
-                break
-            payload_start = start
-            while payload_start < len(buf) and buf[payload_start] == 0:
-                payload_start += 1
-            end = buf.find(zero_run, payload_start)
-            if end == -1 or end <= payload_start:
-                break
-            segments.append(buf[payload_start:end])
-            pos = end
-
-        if segments:
-            text = segments[-1].decode('utf-8', errors='replace')
-            if text and text != self.last:
-                self.last = text
-                self.message_port_pub(pmt.intern('msg'), pmt.string_to_symbol(text))
-
-        return len(data)
+        return len(in0)

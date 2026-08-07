@@ -6,8 +6,8 @@
 #
 # GNU Radio Python Flow Graph
 # Title: OpenWave pi/4-QPSK PHY Test
-# Description: OpenWave phase 1 - pi/4-QPSK physical layer only, no framing yet
-# GNU Radio version: 3.10.9.2
+# Description: OpenWave phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.
+# GNU Radio version: 3.10.12.0
 
 from PyQt5 import Qt
 from gnuradio import qtgui
@@ -28,6 +28,7 @@ from gnuradio import gr, pdu
 import sip
 import test2_str_to_pdu_0 as str_to_pdu_0  # embedded python block
 import test2_stream_display_sink_0 as stream_display_sink_0  # embedded python block
+import threading
 
 
 
@@ -54,7 +55,7 @@ class test2(gr.top_block, Qt.QWidget):
         self.top_grid_layout = Qt.QGridLayout()
         self.top_layout.addLayout(self.top_grid_layout)
 
-        self.settings = Qt.QSettings("GNU Radio", "test2")
+        self.settings = Qt.QSettings("gnuradio/flowgraphs", "test2")
 
         try:
             geometry = self.settings.value("geometry")
@@ -62,6 +63,7 @@ class test2(gr.top_block, Qt.QWidget):
                 self.restoreGeometry(geometry)
         except BaseException as exc:
             print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
+        self.flowgraph_started = threading.Event()
 
         ##################################################
         # Parameters
@@ -78,6 +80,7 @@ class test2(gr.top_block, Qt.QWidget):
         8, 1, digital.constellation.NO_NORMALIZATION).base()
         self.tx_const.set_npwr(1.0)
         self.samp_rate = samp_rate = symbol_rate*sps
+        self.nfilters = nfilters = 128
         self.decode_const = decode_const = digital.constellation_calcdist([ring_points[1], ring_points[3], ring_points[5], ring_points[7]], [0, 1, 2, 3],
         4, 1, digital.constellation.NO_NORMALIZATION).base()
         self.decode_const.set_npwr(1.0)
@@ -86,8 +89,8 @@ class test2(gr.top_block, Qt.QWidget):
         # Blocks
         ##################################################
 
-        self.stream_display_sink_0 = stream_display_sink_0.blk(pad=8, bufsize=512)
-        self.str_to_pdu_0 = str_to_pdu_0.blk(pad=48)
+        self.stream_display_sink_0 = stream_display_sink_0.blk(term_len=8, max_payload_bytes=256, tagname='sync')
+        self.str_to_pdu_0 = str_to_pdu_0.blk(lead_pad=24, end_pad=24)
         self.qtgui_edit_box_msg_1 = qtgui.edit_box_msg(qtgui.STRING, "", 'Received', False, True, '', None)
         self._qtgui_edit_box_msg_1_win = sip.wrapinstance(self.qtgui_edit_box_msg_1.qwidget(), Qt.QWidget)
         self.top_grid_layout.addWidget(self._qtgui_edit_box_msg_1_win, 1, 0, 1, 1)
@@ -159,12 +162,13 @@ class test2(gr.top_block, Qt.QWidget):
             1.5,
             1,
             tx_const,
-            digital.IR_MMSE_8TAP,
-            128,
-            [])
+            digital.IR_PFB_MF,
+            nfilters,
+            firdes.root_raised_cosine(nfilters, sps*nfilters, 1.0, 0.35, 11*sps*nfilters))
         self.digital_map_bb_0 = digital.map_bb([1, 3, 5, 7])
         self.digital_diff_phasor_cc_0 = digital.diff_phasor_cc()
         self.digital_diff_encoder_bb_0 = digital.diff_encoder_bb(8, digital.DIFF_DIFFERENTIAL)
+        self.digital_correlate_access_code_tag_xx_0 = digital.correlate_access_code_tag_bb(''.join(format(b, '08b') for b in (b'\x55'*4 + b'\x1A\xCF\xFC\x1D')), 4, "sync")
         self.digital_constellation_decoder_cb_0 = digital.constellation_decoder_cb(decode_const)
         self.digital_chunks_to_symbols_xx_0 = digital.chunks_to_symbols_bc(tx_const.points(), 1)
         self.channels_channel_model_0 = channels.channel_model(
@@ -177,7 +181,6 @@ class test2(gr.top_block, Qt.QWidget):
         self.blocks_unpack_k_bits_bb_1 = blocks.unpack_k_bits_bb(2)
         self.blocks_unpack_k_bits_bb_0 = blocks.unpack_k_bits_bb(8)
         self.blocks_throttle2_0 = blocks.throttle( gr.sizeof_gr_complex*1, samp_rate, True, 0 if "auto" == "auto" else max( int(float(0.1) * samp_rate) if "auto" == "time" else int(0.1), 1) )
-        self.blocks_pack_k_bits_bb_1 = blocks.pack_k_bits_bb(8)
         self.blocks_pack_k_bits_bb_0 = blocks.pack_k_bits_bb(2)
 
 
@@ -188,13 +191,13 @@ class test2(gr.top_block, Qt.QWidget):
         self.msg_connect((self.str_to_pdu_0, 'pdus'), (self.pdu_pdu_to_tagged_stream_0, 'pdus'))
         self.msg_connect((self.stream_display_sink_0, 'msg'), (self.qtgui_edit_box_msg_1, 'val'))
         self.connect((self.blocks_pack_k_bits_bb_0, 0), (self.digital_map_bb_0, 0))
-        self.connect((self.blocks_pack_k_bits_bb_1, 0), (self.stream_display_sink_0, 0))
         self.connect((self.blocks_throttle2_0, 0), (self.channels_channel_model_0, 0))
         self.connect((self.blocks_unpack_k_bits_bb_0, 0), (self.blocks_pack_k_bits_bb_0, 0))
-        self.connect((self.blocks_unpack_k_bits_bb_1, 0), (self.blocks_pack_k_bits_bb_1, 0))
+        self.connect((self.blocks_unpack_k_bits_bb_1, 0), (self.digital_correlate_access_code_tag_xx_0, 0))
         self.connect((self.channels_channel_model_0, 0), (self.digital_symbol_sync_xx_0, 0))
         self.connect((self.digital_chunks_to_symbols_xx_0, 0), (self.filter_interp_fir_filter_xxx_0, 0))
         self.connect((self.digital_constellation_decoder_cb_0, 0), (self.blocks_unpack_k_bits_bb_1, 0))
+        self.connect((self.digital_correlate_access_code_tag_xx_0, 0), (self.stream_display_sink_0, 0))
         self.connect((self.digital_diff_encoder_bb_0, 0), (self.digital_chunks_to_symbols_xx_0, 0))
         self.connect((self.digital_diff_phasor_cc_0, 0), (self.digital_constellation_decoder_cb_0, 0))
         self.connect((self.digital_diff_phasor_cc_0, 0), (self.qtgui_const_sink_x_0, 0))
@@ -205,7 +208,7 @@ class test2(gr.top_block, Qt.QWidget):
 
 
     def closeEvent(self, event):
-        self.settings = Qt.QSettings("GNU Radio", "test2")
+        self.settings = Qt.QSettings("gnuradio/flowgraphs", "test2")
         self.settings.setValue("geometry", self.saveGeometry())
         self.stop()
         self.wait()
@@ -253,6 +256,12 @@ class test2(gr.top_block, Qt.QWidget):
         self.samp_rate = samp_rate
         self.blocks_throttle2_0.set_sample_rate(self.samp_rate)
 
+    def get_nfilters(self):
+        return self.nfilters
+
+    def set_nfilters(self, nfilters):
+        self.nfilters = nfilters
+
     def get_decode_const(self):
         return self.decode_const
 
@@ -263,7 +272,7 @@ class test2(gr.top_block, Qt.QWidget):
 
 
 def argument_parser():
-    description = 'OpenWave phase 1 - pi/4-QPSK physical layer only, no framing yet'
+    description = 'OpenWave phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.'
     parser = ArgumentParser(description=description)
     parser.add_argument(
         "-m", "--msg", dest="msg", type=str, default="OpenWave pi/4-QPSK PHY test 123!",
@@ -283,6 +292,7 @@ def main(top_block_cls=test2, options=None):
     tb = top_block_cls(msg=options.msg, symbol_rate=options.symbol_rate)
 
     tb.start()
+    tb.flowgraph_started.set()
 
     tb.show()
 
