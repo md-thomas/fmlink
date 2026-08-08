@@ -1,0 +1,1007 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: ''
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: OpenWave hardware bring-up - RX half, RTL-SDR.
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: test3_rx
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: OpenWave RX (RTL-SDR)
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [304, 16.0]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: baseband_rate
+  id: variable
+  parameters:
+    comment: Rate the PHY (Symbol Sync etc.) actually runs at - same as test2.grc's
+      samp_rate. Too low for the RTL-SDR's ADC to run at directly.
+    value: symbol_rate*sps
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [472, 16.0]
+    rotation: 0
+    state: enabled
+- name: decode_const
+  id: variable_constellation
+  parameters:
+    comment: Just the 4 odd (45/135/225/315 degree) ring positions, mapped back to
+      their original 2-bit symbol values - slices the diff_phasor_cc output straight
+      back to data with no separate differential-decode step
+    const_points: '[ring_points[1], ring_points[3], ring_points[5], ring_points[7]]'
+    dims: '1'
+    normalization: digital.constellation.NO_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '4'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 2, 3]'
+    type: calcdist
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1256, 4.0]
+    rotation: 0
+    state: enabled
+- name: freq_display_0
+  id: variable_qtgui_label
+  parameters:
+    comment: Live display of center_freq in MHz, 3 decimals - purely informational,
+      doesn't change the Hz value the RTL-SDR source actually uses.
+    formatter: 'lambda hz: f"{hz/1e6:.3f} MHz"'
+    gui_hint: 1,0,1,1
+    label: Center Freq
+    type: real
+    value: center_freq
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [288, 128.0]
+    rotation: 0
+    state: disabled
+- name: freq_offset
+  id: variable
+  parameters:
+    comment: RTL LO is tuned this far below center_freq, and the xlating filter shifts
+      back by the same amount while decimating - keeps the RTL-SDR's DC-offset spike
+      off of our actual signal instead of sitting right on top of it.
+    value: '100000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1144, 16.0]
+    rotation: 0
+    state: enabled
+- name: nfilters
+  id: variable
+  parameters:
+    comment: Number of arms in Symbol Sync's polyphase matched-filter bank
+    value: '128'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [480, 104.0]
+    rotation: 0
+    state: enabled
+- name: radio_rate
+  id: variable
+  parameters:
+    comment: RTL-SDR's actual ADC sample rate. Fixed at 1.92 MHz - a clean integer
+      multiple of baseband_rate for every OpenWave mode, within the RTL-SDR's valid
+      higher sample-rate range (900,001-3,200,000 Hz), and wide enough that the spectrum
+      plot's axis auto-displays in MHz instead of kHz (confirmed empirically - below
+      roughly 1-2 MHz of span it switches to kHz).
+    value: '1920000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [776, 16.0]
+    rotation: 0
+    state: enabled
+- name: resamp_factor
+  id: variable
+  parameters:
+    comment: Decimation factor from radio_rate down to baseband_rate
+    value: radio_rate // baseband_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [936, 16.0]
+    rotation: 0
+    state: enabled
+- name: ring_points
+  id: variable
+  parameters:
+    comment: 8 unit points at 0,45,90,...,315 degrees, sequential index order - the
+      union of both 45-degree-apart QPSK constellations that pi/4-QPSK alternates
+      between
+    value: '[1+0j, (2**0.5/2)+(2**0.5/2)*1j, 1j, -(2**0.5/2)+(2**0.5/2)*1j, -1+0j,
+      -(2**0.5/2)-(2**0.5/2)*1j, -1j, (2**0.5/2)-(2**0.5/2)*1j]'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [592, 16.0]
+    rotation: 0
+    state: enabled
+- name: sps
+  id: variable
+  parameters:
+    comment: ''
+    value: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [576, 104.0]
+    rotation: 0
+    state: enabled
+- name: tx_const
+  id: variable_constellation
+  parameters:
+    comment: All 8 ring points - used as Symbol Sync's decision-directed slicer
+    const_points: ring_points
+    dims: '1'
+    normalization: digital.constellation.NO_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '8'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 2, 3, 4, 5, 6, 7]'
+    type: calcdist
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [896, 12.0]
+    rotation: 0
+    state: enabled
+- name: blocks_unpack_k_bits_bb_1
+  id: blocks_unpack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Split 2-bit symbols back into individual bits
+    k: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1000, 400.0]
+    rotation: 0
+    state: enabled
+- name: center_freq
+  id: parameter
+  parameters:
+    alias: ''
+    comment: 70cm amateur band - must match test3_tx.grc's center_freq
+    hide: none
+    label: ''
+    short_id: f
+    type: intx
+    value: '433000000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 16.0]
+    rotation: 0
+    state: enabled
+- name: digital_constellation_decoder_cb_0
+  id: digital_constellation_decoder_cb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Slices straight back to the 2-bit symbol value
+    constellation: decode_const
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [952, 304.0]
+    rotation: 0
+    state: enabled
+- name: digital_correlate_access_code_tag_xx_0
+  id: digital_correlate_access_code_tag_xx
+  parameters:
+    access_code: '''''.join(format(b, ''08b'') for b in (b''\x55''*4 + b''\x1A\xCF\xFC\x1D''))'
+    affinity: ''
+    alias: ''
+    comment: Tags the bit immediately following a match against the last 4 bytes of
+      the preamble + the OpenWave sync word 0x1ACFFC1D. See test2.grc for why only
+      64 of the 96 preamble+syncword bits are used as the correlation target.
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tagname: '"sync"'
+    threshold: '4'
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [968, 472.0]
+    rotation: 0
+    state: enabled
+- name: digital_diff_phasor_cc_0
+  id: digital_diff_phasor_cc
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Differential phase detection - immune to constant carrier phase offset,
+      so no Costas loop needed. NOT immune to a moving frequency offset - if the Pluto/RTL-SDR
+      clock mismatch drifts faster than expected, this is the first place to look.
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [848, 240.0]
+    rotation: 0
+    state: enabled
+- name: digital_symbol_sync_xx_0
+  id: digital_symbol_sync_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: RRC matched filter, alpha=0.35, done as a polyphase matched filter inside
+      Symbol Sync itself - see test2.grc for why a separate pre-filter block caused
+      a symbol-count slip during acquisition.
+    constellation: tx_const
+    damping: '1.0'
+    loop_bw: '0.045'
+    max_dev: '1.5'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nfilters: nfilters
+    osps: '1'
+    pfb_mf_taps: firdes.root_raised_cosine(nfilters, sps*nfilters, 1.0, 0.35, 11*sps*nfilters)
+    resamp_type: digital.IR_PFB_MF
+    sps: sps
+    ted_gain: '1.0'
+    ted_type: digital.TED_MOD_MUELLER_AND_MULLER
+    type: cc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [520, 288.0]
+    rotation: 0
+    state: enabled
+- name: filter_freq_xlating_fir_filter_xxx_0
+  id: freq_xlating_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    center_freq: freq_offset
+    comment: Shifts the signal (offset-tuned to dodge the RTL-SDR's DC spike) back
+      to baseband while decimating from radio_rate down to baseband_rate. This is
+      channel selection, not RRC matched filtering - that's still done by Symbol Sync's
+      own PFB matched filter further down the chain, same as test2.grc. Cutoff/transition
+      are a reasonable starting point - may need tightening once real hardware is
+      in the loop.
+    decim: resamp_factor
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: radio_rate
+    taps: firdes.low_pass(1.0, radio_rate, baseband_rate*0.45, baseband_rate*0.35)
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [280, 288.0]
+    rotation: 0
+    state: enabled
+- name: osmosdr_source_0
+  id: osmosdr_source
+  parameters:
+    affinity: ''
+    alias: ''
+    ant0: ''
+    ant1: ''
+    ant10: ''
+    ant11: ''
+    ant12: ''
+    ant13: ''
+    ant14: ''
+    ant15: ''
+    ant16: ''
+    ant17: ''
+    ant18: ''
+    ant19: ''
+    ant2: ''
+    ant20: ''
+    ant21: ''
+    ant22: ''
+    ant23: ''
+    ant24: ''
+    ant25: ''
+    ant26: ''
+    ant27: ''
+    ant28: ''
+    ant29: ''
+    ant3: ''
+    ant30: ''
+    ant31: ''
+    ant4: ''
+    ant5: ''
+    ant6: ''
+    ant7: ''
+    ant8: ''
+    ant9: ''
+    args: '''rtl=0'''
+    bb_gain0: '20'
+    bb_gain1: '20'
+    bb_gain10: '20'
+    bb_gain11: '20'
+    bb_gain12: '20'
+    bb_gain13: '20'
+    bb_gain14: '20'
+    bb_gain15: '20'
+    bb_gain16: '20'
+    bb_gain17: '20'
+    bb_gain18: '20'
+    bb_gain19: '20'
+    bb_gain2: '20'
+    bb_gain20: '20'
+    bb_gain21: '20'
+    bb_gain22: '20'
+    bb_gain23: '20'
+    bb_gain24: '20'
+    bb_gain25: '20'
+    bb_gain26: '20'
+    bb_gain27: '20'
+    bb_gain28: '20'
+    bb_gain29: '20'
+    bb_gain3: '20'
+    bb_gain30: '20'
+    bb_gain31: '20'
+    bb_gain4: '20'
+    bb_gain5: '20'
+    bb_gain6: '20'
+    bb_gain7: '20'
+    bb_gain8: '20'
+    bb_gain9: '20'
+    bw0: '0'
+    bw1: '0'
+    bw10: '0'
+    bw11: '0'
+    bw12: '0'
+    bw13: '0'
+    bw14: '0'
+    bw15: '0'
+    bw16: '0'
+    bw17: '0'
+    bw18: '0'
+    bw19: '0'
+    bw2: '0'
+    bw20: '0'
+    bw21: '0'
+    bw22: '0'
+    bw23: '0'
+    bw24: '0'
+    bw25: '0'
+    bw26: '0'
+    bw27: '0'
+    bw28: '0'
+    bw29: '0'
+    bw3: '0'
+    bw30: '0'
+    bw31: '0'
+    bw4: '0'
+    bw5: '0'
+    bw6: '0'
+    bw7: '0'
+    bw8: '0'
+    bw9: '0'
+    clock_source0: ''
+    clock_source1: ''
+    clock_source2: ''
+    clock_source3: ''
+    clock_source4: ''
+    clock_source5: ''
+    clock_source6: ''
+    clock_source7: ''
+    comment: Tunes the RTL LO to center_freq - freq_offset; the xlating filter downstream
+      shifts back and decimates to baseband_rate.
+    corr0: rtl_ppm
+    corr1: '0'
+    corr10: '0'
+    corr11: '0'
+    corr12: '0'
+    corr13: '0'
+    corr14: '0'
+    corr15: '0'
+    corr16: '0'
+    corr17: '0'
+    corr18: '0'
+    corr19: '0'
+    corr2: '0'
+    corr20: '0'
+    corr21: '0'
+    corr22: '0'
+    corr23: '0'
+    corr24: '0'
+    corr25: '0'
+    corr26: '0'
+    corr27: '0'
+    corr28: '0'
+    corr29: '0'
+    corr3: '0'
+    corr30: '0'
+    corr31: '0'
+    corr4: '0'
+    corr5: '0'
+    corr6: '0'
+    corr7: '0'
+    corr8: '0'
+    corr9: '0'
+    dc_offset_mode0: '0'
+    dc_offset_mode1: '0'
+    dc_offset_mode10: '0'
+    dc_offset_mode11: '0'
+    dc_offset_mode12: '0'
+    dc_offset_mode13: '0'
+    dc_offset_mode14: '0'
+    dc_offset_mode15: '0'
+    dc_offset_mode16: '0'
+    dc_offset_mode17: '0'
+    dc_offset_mode18: '0'
+    dc_offset_mode19: '0'
+    dc_offset_mode2: '0'
+    dc_offset_mode20: '0'
+    dc_offset_mode21: '0'
+    dc_offset_mode22: '0'
+    dc_offset_mode23: '0'
+    dc_offset_mode24: '0'
+    dc_offset_mode25: '0'
+    dc_offset_mode26: '0'
+    dc_offset_mode27: '0'
+    dc_offset_mode28: '0'
+    dc_offset_mode29: '0'
+    dc_offset_mode3: '0'
+    dc_offset_mode30: '0'
+    dc_offset_mode31: '0'
+    dc_offset_mode4: '0'
+    dc_offset_mode5: '0'
+    dc_offset_mode6: '0'
+    dc_offset_mode7: '0'
+    dc_offset_mode8: '0'
+    dc_offset_mode9: '0'
+    freq0: center_freq - freq_offset
+    freq1: 100e6
+    freq10: 100e6
+    freq11: 100e6
+    freq12: 100e6
+    freq13: 100e6
+    freq14: 100e6
+    freq15: 100e6
+    freq16: 100e6
+    freq17: 100e6
+    freq18: 100e6
+    freq19: 100e6
+    freq2: 100e6
+    freq20: 100e6
+    freq21: 100e6
+    freq22: 100e6
+    freq23: 100e6
+    freq24: 100e6
+    freq25: 100e6
+    freq26: 100e6
+    freq27: 100e6
+    freq28: 100e6
+    freq29: 100e6
+    freq3: 100e6
+    freq30: 100e6
+    freq31: 100e6
+    freq4: 100e6
+    freq5: 100e6
+    freq6: 100e6
+    freq7: 100e6
+    freq8: 100e6
+    freq9: 100e6
+    gain0: rtl_gain
+    gain1: '10'
+    gain10: '10'
+    gain11: '10'
+    gain12: '10'
+    gain13: '10'
+    gain14: '10'
+    gain15: '10'
+    gain16: '10'
+    gain17: '10'
+    gain18: '10'
+    gain19: '10'
+    gain2: '10'
+    gain20: '10'
+    gain21: '10'
+    gain22: '10'
+    gain23: '10'
+    gain24: '10'
+    gain25: '10'
+    gain26: '10'
+    gain27: '10'
+    gain28: '10'
+    gain29: '10'
+    gain3: '10'
+    gain30: '10'
+    gain31: '10'
+    gain4: '10'
+    gain5: '10'
+    gain6: '10'
+    gain7: '10'
+    gain8: '10'
+    gain9: '10'
+    gain_mode0: 'False'
+    gain_mode1: 'False'
+    gain_mode10: 'False'
+    gain_mode11: 'False'
+    gain_mode12: 'False'
+    gain_mode13: 'False'
+    gain_mode14: 'False'
+    gain_mode15: 'False'
+    gain_mode16: 'False'
+    gain_mode17: 'False'
+    gain_mode18: 'False'
+    gain_mode19: 'False'
+    gain_mode2: 'False'
+    gain_mode20: 'False'
+    gain_mode21: 'False'
+    gain_mode22: 'False'
+    gain_mode23: 'False'
+    gain_mode24: 'False'
+    gain_mode25: 'False'
+    gain_mode26: 'False'
+    gain_mode27: 'False'
+    gain_mode28: 'False'
+    gain_mode29: 'False'
+    gain_mode3: 'False'
+    gain_mode30: 'False'
+    gain_mode31: 'False'
+    gain_mode4: 'False'
+    gain_mode5: 'False'
+    gain_mode6: 'False'
+    gain_mode7: 'False'
+    gain_mode8: 'False'
+    gain_mode9: 'False'
+    if_gain0: '20'
+    if_gain1: '20'
+    if_gain10: '20'
+    if_gain11: '20'
+    if_gain12: '20'
+    if_gain13: '20'
+    if_gain14: '20'
+    if_gain15: '20'
+    if_gain16: '20'
+    if_gain17: '20'
+    if_gain18: '20'
+    if_gain19: '20'
+    if_gain2: '20'
+    if_gain20: '20'
+    if_gain21: '20'
+    if_gain22: '20'
+    if_gain23: '20'
+    if_gain24: '20'
+    if_gain25: '20'
+    if_gain26: '20'
+    if_gain27: '20'
+    if_gain28: '20'
+    if_gain29: '20'
+    if_gain3: '20'
+    if_gain30: '20'
+    if_gain31: '20'
+    if_gain4: '20'
+    if_gain5: '20'
+    if_gain6: '20'
+    if_gain7: '20'
+    if_gain8: '20'
+    if_gain9: '20'
+    iq_balance_mode0: '0'
+    iq_balance_mode1: '0'
+    iq_balance_mode10: '0'
+    iq_balance_mode11: '0'
+    iq_balance_mode12: '0'
+    iq_balance_mode13: '0'
+    iq_balance_mode14: '0'
+    iq_balance_mode15: '0'
+    iq_balance_mode16: '0'
+    iq_balance_mode17: '0'
+    iq_balance_mode18: '0'
+    iq_balance_mode19: '0'
+    iq_balance_mode2: '0'
+    iq_balance_mode20: '0'
+    iq_balance_mode21: '0'
+    iq_balance_mode22: '0'
+    iq_balance_mode23: '0'
+    iq_balance_mode24: '0'
+    iq_balance_mode25: '0'
+    iq_balance_mode26: '0'
+    iq_balance_mode27: '0'
+    iq_balance_mode28: '0'
+    iq_balance_mode29: '0'
+    iq_balance_mode3: '0'
+    iq_balance_mode30: '0'
+    iq_balance_mode31: '0'
+    iq_balance_mode4: '0'
+    iq_balance_mode5: '0'
+    iq_balance_mode6: '0'
+    iq_balance_mode7: '0'
+    iq_balance_mode8: '0'
+    iq_balance_mode9: '0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nchan: '1'
+    num_mboards: '1'
+    sample_rate: radio_rate
+    sync: sync
+    time_source0: ''
+    time_source1: ''
+    time_source2: ''
+    time_source3: ''
+    time_source4: ''
+    time_source5: ''
+    time_source6: ''
+    time_source7: ''
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [40, 288.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: Plots the diff_phasor_cc output. Four tight clusters at 45/135/225/315
+      degrees means the modem is decoding cleanly.
+    grid: 'False'
+    gui_hint: 2,0,1,1
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: '""'
+    nconnections: '1'
+    size: '256'
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '1.5'
+    xmin: '-1.5'
+    ymax: '1.5'
+    ymin: '-1.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1056, 216.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_1
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 0,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Received
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [984, 680.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    average: '0.1'
+    axislabels: 'True'
+    bw: radio_rate
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: Raw spectrum straight off the RTL-SDR, before the xlating filter - useful
+      for finding the beacon and confirming freq_offset/ppm are sane.
+    ctrlpanel: 'False'
+    fc: center_freq
+    fftsize: '1024'
+    freqhalf: 'True'
+    grid: 'False'
+    gui_hint: 1,0,1,1
+    label: Relative Gain
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    name: '""'
+    nconnections: '1'
+    norm_window: 'False'
+    showports: 'False'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_tag: '""'
+    type: complex
+    units: dB
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    wintype: window.WIN_BLACKMAN_hARRIS
+    ymax: '10'
+    ymin: '-140'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [280, 480.0]
+    rotation: 0
+    state: enabled
+- name: rtl_gain
+  id: parameter
+  parameters:
+    alias: ''
+    comment: Manual RF gain in dB
+    hide: none
+    label: ''
+    short_id: g
+    type: eng_float
+    value: '40.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [216, 16.0]
+    rotation: 0
+    state: enabled
+- name: rtl_ppm
+  id: parameter
+  parameters:
+    alias: ''
+    comment: Manual frequency correction in ppm. Calibrate with `rtl_test -p` (or
+      equivalent) before the first test - RTL-SDR crystal error is often tens of ppm,
+      which at UHF can be several kHz, potentially larger than the whole channel.
+    hide: none
+    label: ''
+    short_id: c
+    type: eng_float
+    value: '0.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [120, 120.0]
+    rotation: 0
+    state: enabled
+- name: stream_display_sink_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nUses the 'sync' tag emitted by the access-code correlator\
+      \ to know exactly\nwhich bit is the start of the payload - no more guessing\
+      \ a bit-to-byte\nphase. Packs bits into bytes from that point and publishes\
+      \ the payload\nonce a run of zero bytes (temporary end-of-message marker, until\
+      \ a real\nPayload Length header field exists) is seen.\n\nterm_len is deliberately\
+      \ smaller than how much zero padding TX actually\nsends (see str_to_pdu_0's\
+      \ end_pad), since the filter/timing-recovery\npipeline's group delay means the\
+      \ last several trailing bytes never\narrive once the finite burst source goes\
+      \ idle - there's nothing left to\nflush them through.\n\"\"\"\nimport numpy\
+      \ as np\nfrom gnuradio import gr\nimport pmt\n\n\nclass blk(gr.sync_block):\n\
+      \    \"\"\"Sync-word-aligned bit stream to message\"\"\"\n\n    def __init__(self,\
+      \ term_len=8, max_payload_bytes=256, tagname='sync'):\n        gr.sync_block.__init__(self,\
+      \ name='Framed Stream to Message', in_sig=[np.uint8], out_sig=[])\n        self.term_len\
+      \ = term_len\n        self.max_payload_bytes = max_payload_bytes\n        self.tagname\
+      \ = tagname\n        self.bits = []\n        self.armed = False\n        self.message_port_register_out(pmt.intern('msg'))\n\
+      \n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n\
+      \        tags = self.get_tags_in_window(0, 0, len(in0), pmt.intern(self.tagname))\n\
+      \        tag_offsets = {t.offset - self.nitems_read(0) for t in tags}\n\n  \
+      \      for i, bit in enumerate(in0):\n            if i in tag_offsets:\n   \
+      \             self.bits = []\n                self.armed = True\n          \
+      \  if self.armed:\n                self.bits.append(int(bit))\n            \
+      \    if len(self.bits) >= self.max_payload_bytes * 8:\n                    self.armed\
+      \ = False\n                    self.bits = []\n                    continue\n\
+      \                if len(self.bits) % 8 == 0 and len(self.bits) >= self.term_len\
+      \ * 8:\n                    byts = np.packbits(np.array(self.bits, dtype=np.uint8)).tobytes()\n\
+      \                    zero_run = b'\\x00' * self.term_len\n                 \
+      \   idx = byts.find(zero_run)\n                    if idx != -1:\n         \
+      \               text = byts[:idx].decode('utf-8', errors='replace')\n      \
+      \                  if text:\n                            self.message_port_pub(pmt.intern('msg'),\
+      \ pmt.string_to_symbol(text))\n                        self.armed = False\n\
+      \                        self.bits = []\n\n        return len(in0)\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    max_payload_bytes: '256'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tagname: '''sync'''
+    term_len: '8'
+  states:
+    _io_cache: ('Framed Stream to Message', 'blk', [('term_len', '8'), ('max_payload_bytes',
+      '256'), ('tagname', "'sync'")], [('0', 'byte', 1)], [('msg', 'message', 1)],
+      'Sync-word-aligned bit stream to message', ['max_payload_bytes', 'tagname',
+      'term_len'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [976, 576.0]
+    rotation: 0
+    state: enabled
+- name: symbol_rate
+  id: parameter
+  parameters:
+    alias: ''
+    comment: symbol rate in baud - one of the OpenWave modes 600/1200/2400/4800/9600.
+      Must match test3_tx.grc's symbol_rate.
+    hide: none
+    label: ''
+    short_id: r
+    type: intx
+    value: '600'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [112, 16.0]
+    rotation: 0
+    state: enabled
+
+connections:
+- [blocks_unpack_k_bits_bb_1, '0', digital_correlate_access_code_tag_xx_0, '0']
+- [digital_constellation_decoder_cb_0, '0', blocks_unpack_k_bits_bb_1, '0']
+- [digital_correlate_access_code_tag_xx_0, '0', stream_display_sink_0, '0']
+- [digital_diff_phasor_cc_0, '0', digital_constellation_decoder_cb_0, '0']
+- [digital_diff_phasor_cc_0, '0', qtgui_const_sink_x_0, '0']
+- [digital_symbol_sync_xx_0, '0', digital_diff_phasor_cc_0, '0']
+- [filter_freq_xlating_fir_filter_xxx_0, '0', digital_symbol_sync_xx_0, '0']
+- [osmosdr_source_0, '0', filter_freq_xlating_fir_filter_xxx_0, '0']
+- [osmosdr_source_0, '0', qtgui_freq_sink_x_0, '0']
+- [stream_display_sink_0, msg, qtgui_edit_box_msg_1, val]
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
