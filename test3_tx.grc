@@ -133,11 +133,12 @@ blocks:
     coordinate: [1064, 16.0]
     rotation: 0
     state: enabled
-- name: center_freq
+- name: center_freq_default
   id: parameter
   parameters:
     alias: ''
-    comment: 70cm amateur band
+    comment: 70cm amateur band - only the STARTING frequency; retune live via the
+      Center Freq slider once running.
     hide: none
     label: ''
     short_id: f
@@ -150,21 +151,40 @@ blocks:
     coordinate: [8, 88]
     rotation: 0
     state: enabled
-- name: freq_display_0
-  id: variable_qtgui_label
+- name: center_freq_mhz
+  id: variable_qtgui_range
   parameters:
-    comment: Live display of center_freq in MHz, 3 decimals - purely informational,
-      doesn't change the Hz value the Pluto sink actually uses.
-    formatter: 'lambda hz: f"{hz/1e6:.3f} MHz"'
+    comment: Live frequency tuning, in MHz (matches Pluto's own 47 MHz-6 GHz valid
+      range). center_freq (Hz) below is derived from this and is what every block
+      actually uses.
     gui_hint: 1,0,1,1
-    label: Center Freq
-    type: real
-    value: center_freq
+    label: Center Freq (MHz)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '47.0'
+    step: '0.001'
+    stop: '6000.0'
+    value: center_freq_default/1e6
+    widget: counter_slider
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [400, 88]
+    coordinate: [264, 152]
+    rotation: 0
+    state: enabled
+- name: center_freq
+  id: variable
+  parameters:
+    comment: Derived from the live center_freq_mhz control - everything downstream
+      (Pluto sink) references this, in Hz, unchanged.
+    value: int(center_freq_mhz*1e6)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [392, 152]
     rotation: 0
     state: enabled
 - name: pluto_uri

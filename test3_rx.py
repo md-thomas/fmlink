@@ -11,6 +11,7 @@
 
 from PyQt5 import Qt
 from gnuradio import qtgui
+from PyQt5 import QtCore
 from gnuradio import blocks
 from gnuradio import digital
 from gnuradio import filter
@@ -33,7 +34,7 @@ import threading
 
 class test3_rx(gr.top_block, Qt.QWidget):
 
-    def __init__(self, center_freq=433000000, rtl_gain=40.0, rtl_ppm=0.0, symbol_rate=600):
+    def __init__(self, center_freq_default=433000000, rtl_gain=40.0, rtl_ppm=0.0, symbol_rate=600):
         gr.top_block.__init__(self, "OpenWave RX (RTL-SDR)", catch_exceptions=True)
         Qt.QWidget.__init__(self)
         self.setWindowTitle("OpenWave RX (RTL-SDR)")
@@ -67,7 +68,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         ##################################################
         # Parameters
         ##################################################
-        self.center_freq = center_freq
+        self.center_freq_default = center_freq_default
         self.rtl_gain = rtl_gain
         self.rtl_ppm = rtl_ppm
         self.symbol_rate = symbol_rate
@@ -78,6 +79,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.sps = sps = 4
         self.ring_points = ring_points = [1+0j, (2**0.5/2)+(2**0.5/2)*1j, 1j, -(2**0.5/2)+(2**0.5/2)*1j, -1+0j, -(2**0.5/2)-(2**0.5/2)*1j, -1j, (2**0.5/2)-(2**0.5/2)*1j]
         self.radio_rate = radio_rate = 1920000
+        self.center_freq_mhz = center_freq_mhz = center_freq_default/1e6
         self.baseband_rate = baseband_rate = symbol_rate*sps
         self.tx_const = tx_const = digital.constellation_calcdist(ring_points, [0, 1, 2, 3, 4, 5, 6, 7],
         8, 1, digital.constellation.NO_NORMALIZATION).base()
@@ -88,6 +90,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.decode_const = decode_const = digital.constellation_calcdist([ring_points[1], ring_points[3], ring_points[5], ring_points[7]], [0, 1, 2, 3],
         4, 1, digital.constellation.NO_NORMALIZATION).base()
         self.decode_const.set_npwr(1.0)
+        self.center_freq = center_freq = int(center_freq_mhz*1e6)
 
         ##################################################
         # Blocks
@@ -97,7 +100,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.qtgui_freq_sink_x_0 = qtgui.freq_sink_c(
             1024, #size
             window.WIN_BLACKMAN_hARRIS, #wintype
-            center_freq, #fc
+            (center_freq - freq_offset), #fc
             radio_rate, #bw
             "", #name
             1,
@@ -109,7 +112,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.qtgui_freq_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, 0.0, 0, "")
         self.qtgui_freq_sink_x_0.enable_autoscale(False)
         self.qtgui_freq_sink_x_0.enable_grid(False)
-        self.qtgui_freq_sink_x_0.set_fft_average(0.1)
+        self.qtgui_freq_sink_x_0.set_fft_average(1.0)
         self.qtgui_freq_sink_x_0.enable_axis_labels(True)
         self.qtgui_freq_sink_x_0.enable_control_panel(False)
         self.qtgui_freq_sink_x_0.set_fft_window_normalized(False)
@@ -135,15 +138,15 @@ class test3_rx(gr.top_block, Qt.QWidget):
             self.qtgui_freq_sink_x_0.set_line_alpha(i, alphas[i])
 
         self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.qwidget(), Qt.QWidget)
-        self.top_grid_layout.addWidget(self._qtgui_freq_sink_x_0_win, 1, 0, 1, 1)
-        for r in range(1, 2):
+        self.top_grid_layout.addWidget(self._qtgui_freq_sink_x_0_win, 2, 0, 1, 1)
+        for r in range(2, 3):
             self.top_grid_layout.setRowStretch(r, 1)
         for c in range(0, 1):
             self.top_grid_layout.setColumnStretch(c, 1)
         self.qtgui_edit_box_msg_1 = qtgui.edit_box_msg(qtgui.STRING, "", 'Received', False, True, '', None)
         self._qtgui_edit_box_msg_1_win = sip.wrapinstance(self.qtgui_edit_box_msg_1.qwidget(), Qt.QWidget)
-        self.top_grid_layout.addWidget(self._qtgui_edit_box_msg_1_win, 0, 0, 1, 1)
-        for r in range(0, 1):
+        self.top_grid_layout.addWidget(self._qtgui_edit_box_msg_1_win, 1, 0, 1, 1)
+        for r in range(1, 2):
             self.top_grid_layout.setRowStretch(r, 1)
         for c in range(0, 1):
             self.top_grid_layout.setColumnStretch(c, 1)
@@ -187,8 +190,8 @@ class test3_rx(gr.top_block, Qt.QWidget):
             self.qtgui_const_sink_x_0.set_line_alpha(i, alphas[i])
 
         self._qtgui_const_sink_x_0_win = sip.wrapinstance(self.qtgui_const_sink_x_0.qwidget(), Qt.QWidget)
-        self.top_grid_layout.addWidget(self._qtgui_const_sink_x_0_win, 2, 0, 1, 1)
-        for r in range(2, 3):
+        self.top_grid_layout.addWidget(self._qtgui_const_sink_x_0_win, 3, 0, 1, 1)
+        for r in range(3, 4):
             self.top_grid_layout.setRowStretch(r, 1)
         for c in range(0, 1):
             self.top_grid_layout.setColumnStretch(c, 1)
@@ -203,7 +206,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.osmosdr_source_0.set_iq_balance_mode(0, 0)
         self.osmosdr_source_0.set_gain_mode(False, 0)
         self.osmosdr_source_0.set_gain(rtl_gain, 0)
-        self.osmosdr_source_0.set_if_gain(20, 0)
+        self.osmosdr_source_0.set_if_gain(30, 0)
         self.osmosdr_source_0.set_bb_gain(20, 0)
         self.osmosdr_source_0.set_antenna('', 0)
         self.osmosdr_source_0.set_bandwidth(0, 0)
@@ -223,6 +226,13 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.digital_diff_phasor_cc_0 = digital.diff_phasor_cc()
         self.digital_correlate_access_code_tag_xx_0 = digital.correlate_access_code_tag_bb(''.join(format(b, '08b') for b in (b'\x55'*4 + b'\x1A\xCF\xFC\x1D')), 4, "sync")
         self.digital_constellation_decoder_cb_0 = digital.constellation_decoder_cb(decode_const)
+        self._center_freq_mhz_range = qtgui.Range(24.0, 1766.0, 0.001, center_freq_default/1e6, 200)
+        self._center_freq_mhz_win = qtgui.RangeWidget(self._center_freq_mhz_range, self.set_center_freq_mhz, "Center Freq (MHz)", "eng_slider", float, QtCore.Qt.Horizontal)
+        self.top_grid_layout.addWidget(self._center_freq_mhz_win, 0, 0, 1, 1)
+        for r in range(0, 1):
+            self.top_grid_layout.setRowStretch(r, 1)
+        for c in range(0, 1):
+            self.top_grid_layout.setColumnStretch(c, 1)
         self.blocks_unpack_k_bits_bb_1 = blocks.unpack_k_bits_bb(2)
 
 
@@ -249,13 +259,12 @@ class test3_rx(gr.top_block, Qt.QWidget):
 
         event.accept()
 
-    def get_center_freq(self):
-        return self.center_freq
+    def get_center_freq_default(self):
+        return self.center_freq_default
 
-    def set_center_freq(self, center_freq):
-        self.center_freq = center_freq
-        self.osmosdr_source_0.set_center_freq((self.center_freq - self.freq_offset), 0)
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.center_freq, self.radio_rate)
+    def set_center_freq_default(self, center_freq_default):
+        self.center_freq_default = center_freq_default
+        self.set_center_freq_mhz(self.center_freq_default/1e6)
 
     def get_rtl_gain(self):
         return self.rtl_gain
@@ -300,7 +309,14 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.set_resamp_factor(self.radio_rate // self.baseband_rate)
         self.filter_freq_xlating_fir_filter_xxx_0.set_taps(firdes.low_pass(1.0, self.radio_rate, self.baseband_rate*0.45, self.baseband_rate*0.35))
         self.osmosdr_source_0.set_sample_rate(self.radio_rate)
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.center_freq, self.radio_rate)
+        self.qtgui_freq_sink_x_0.set_frequency_range((self.center_freq - self.freq_offset), self.radio_rate)
+
+    def get_center_freq_mhz(self):
+        return self.center_freq_mhz
+
+    def set_center_freq_mhz(self, center_freq_mhz):
+        self.center_freq_mhz = center_freq_mhz
+        self.set_center_freq(int(self.center_freq_mhz*1e6))
 
     def get_baseband_rate(self):
         return self.baseband_rate
@@ -335,6 +351,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.freq_offset = freq_offset
         self.filter_freq_xlating_fir_filter_xxx_0.set_center_freq(self.freq_offset)
         self.osmosdr_source_0.set_center_freq((self.center_freq - self.freq_offset), 0)
+        self.qtgui_freq_sink_x_0.set_frequency_range((self.center_freq - self.freq_offset), self.radio_rate)
 
     def get_decode_const(self):
         return self.decode_const
@@ -343,14 +360,22 @@ class test3_rx(gr.top_block, Qt.QWidget):
         self.decode_const = decode_const
         self.digital_constellation_decoder_cb_0.set_constellation(self.decode_const)
 
+    def get_center_freq(self):
+        return self.center_freq
+
+    def set_center_freq(self, center_freq):
+        self.center_freq = center_freq
+        self.osmosdr_source_0.set_center_freq((self.center_freq - self.freq_offset), 0)
+        self.qtgui_freq_sink_x_0.set_frequency_range((self.center_freq - self.freq_offset), self.radio_rate)
+
 
 
 def argument_parser():
     description = 'OpenWave hardware bring-up - RX half, RTL-SDR.'
     parser = ArgumentParser(description=description)
     parser.add_argument(
-        "-f", "--center-freq", dest="center_freq", type=intx, default=433000000,
-        help="Set center_freq [default=%(default)r]")
+        "-f", "--center-freq-default", dest="center_freq_default", type=intx, default=433000000,
+        help="Set center_freq_default [default=%(default)r]")
     parser.add_argument(
         "-g", "--rtl-gain", dest="rtl_gain", type=eng_float, default=eng_notation.num_to_str(float(40.0)),
         help="Set rtl_gain [default=%(default)r]")
@@ -369,7 +394,7 @@ def main(top_block_cls=test3_rx, options=None):
 
     qapp = Qt.QApplication(sys.argv)
 
-    tb = top_block_cls(center_freq=options.center_freq, rtl_gain=options.rtl_gain, rtl_ppm=options.rtl_ppm, symbol_rate=options.symbol_rate)
+    tb = top_block_cls(center_freq_default=options.center_freq_default, rtl_gain=options.rtl_gain, rtl_ppm=options.rtl_ppm, symbol_rate=options.symbol_rate)
 
     tb.start()
     tb.flowgraph_started.set()

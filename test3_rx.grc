@@ -46,6 +46,42 @@ blocks:
     coordinate: [472, 16.0]
     rotation: 0
     state: enabled
+- name: center_freq
+  id: variable
+  parameters:
+    comment: Derived from the live center_freq_mhz control - everything downstream
+      (RTL-SDR source, xlating filter, spectrum plot) references this, in Hz, unchanged.
+    value: int(center_freq_mhz*1e6)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 16.0]
+    rotation: 0
+    state: enabled
+- name: center_freq_mhz
+  id: variable_qtgui_range
+  parameters:
+    comment: Live frequency tuning, in MHz (24 MHz-1766 MHz covers the RTL-SDR/R820T2's
+      practical tuning range). center_freq (Hz) below is derived from this and is
+      what every block actually uses.
+    gui_hint: 0,0,1,1
+    label: Center Freq (MHz)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '24.0'
+    step: '0.001'
+    stop: '1766.0'
+    value: center_freq_default/1e6
+    widget: eng_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [240, 128.0]
+    rotation: 0
+    state: enabled
 - name: decode_const
   id: variable_constellation
   parameters:
@@ -65,26 +101,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1256, 4.0]
+    coordinate: [1096, 12.0]
     rotation: 0
     state: enabled
-- name: freq_display_0
-  id: variable_qtgui_label
-  parameters:
-    comment: Live display of center_freq in MHz, 3 decimals - purely informational,
-      doesn't change the Hz value the RTL-SDR source actually uses.
-    formatter: 'lambda hz: f"{hz/1e6:.3f} MHz"'
-    gui_hint: 1,0,1,1
-    label: Center Freq
-    type: real
-    value: center_freq
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [288, 128.0]
-    rotation: 0
-    state: disabled
 - name: freq_offset
   id: variable
   parameters:
@@ -96,7 +115,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1144, 16.0]
+    coordinate: [664, 104.0]
     rotation: 0
     state: enabled
 - name: nfilters
@@ -108,7 +127,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [480, 104.0]
+    coordinate: [520, 104.0]
     rotation: 0
     state: enabled
 - name: radio_rate
@@ -124,7 +143,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [776, 16.0]
+    coordinate: [768, 16.0]
     rotation: 0
     state: enabled
 - name: resamp_factor
@@ -136,7 +155,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [936, 16.0]
+    coordinate: [760, 104.0]
     rotation: 0
     state: enabled
 - name: ring_points
@@ -163,7 +182,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [576, 104.0]
+    coordinate: [592, 104.0]
     rotation: 0
     state: enabled
 - name: tx_const
@@ -183,7 +202,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [896, 12.0]
+    coordinate: [864, 12.0]
     rotation: 0
     state: enabled
 - name: blocks_unpack_k_bits_bb_1
@@ -202,11 +221,12 @@ blocks:
     coordinate: [1000, 400.0]
     rotation: 0
     state: enabled
-- name: center_freq
+- name: center_freq_default
   id: parameter
   parameters:
     alias: ''
-    comment: 70cm amateur band - must match test3_tx.grc's center_freq
+    comment: 70cm amateur band - must match test3_tx.grc's center_freq. Only the STARTING
+      frequency; retune live via the Center Freq slider once running.
     hide: none
     label: ''
     short_id: f
@@ -216,7 +236,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [8, 16.0]
+    coordinate: [8, 136.0]
     rotation: 0
     state: enabled
 - name: digital_constellation_decoder_cb_0
@@ -299,7 +319,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [520, 288.0]
+    coordinate: [544, 300.0]
     rotation: 0
     state: enabled
 - name: filter_freq_xlating_fir_filter_xxx_0
@@ -324,7 +344,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [280, 288.0]
+    coordinate: [312, 288.0]
     rotation: 0
     state: enabled
 - name: osmosdr_source_0
@@ -599,7 +619,7 @@ blocks:
     gain_mode7: 'False'
     gain_mode8: 'False'
     gain_mode9: 'False'
-    if_gain0: '20'
+    if_gain0: '30'
     if_gain1: '20'
     if_gain10: '20'
     if_gain11: '20'
@@ -682,7 +702,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [40, 288.0]
+    coordinate: [64, 300.0]
     rotation: 0
     state: enabled
 - name: qtgui_const_sink_x_0
@@ -715,7 +735,7 @@ blocks:
     comment: Plots the diff_phasor_cc output. Four tight clusters at 45/135/225/315
       degrees means the modem is decoding cleanly.
     grid: 'False'
-    gui_hint: 2,0,1,1
+    gui_hint: 3,0,1,1
     label1: ''
     label10: ''
     label2: ''
@@ -775,7 +795,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1056, 216.0]
+    coordinate: [1184, 224.0]
     rotation: 0
     state: enabled
 - name: qtgui_edit_box_msg_1
@@ -784,7 +804,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: ''
-    gui_hint: 0,0,1,1
+    gui_hint: 1,0,1,1
     is_pair: 'False'
     is_static: 'True'
     key: ''
@@ -816,7 +836,7 @@ blocks:
     alpha8: '1.0'
     alpha9: '1.0'
     autoscale: 'False'
-    average: '0.1'
+    average: '1.0'
     axislabels: 'True'
     bw: radio_rate
     color1: '"blue"'
@@ -832,11 +852,11 @@ blocks:
     comment: Raw spectrum straight off the RTL-SDR, before the xlating filter - useful
       for finding the beacon and confirming freq_offset/ppm are sane.
     ctrlpanel: 'False'
-    fc: center_freq
+    fc: center_freq - freq_offset
     fftsize: '1024'
     freqhalf: 'True'
     grid: 'False'
-    gui_hint: 1,0,1,1
+    gui_hint: 2,0,1,1
     label: Relative Gain
     label1: ''
     label10: ''
@@ -879,7 +899,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [280, 480.0]
+    coordinate: [320, 496.0]
     rotation: 0
     state: enabled
 - name: rtl_gain
@@ -896,7 +916,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [216, 16.0]
+    coordinate: [224, 16.0]
     rotation: 0
     state: enabled
 - name: rtl_ppm
@@ -915,7 +935,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [120, 120.0]
+    coordinate: [144, 136.0]
     rotation: 0
     state: enabled
 - name: stream_display_sink_0
