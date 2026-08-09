@@ -1,0 +1,59 @@
+Phase 1: Software Infrastructure & Audio I/OBefore writing any DSP math, establish how data moves through your programming environment.
+
+Task 1.1: Set up your development environment (e.g., Python, C++, or GNU Radio) and lock your internal processing sampling rate at a stable 48,000 Hz float32 format.
+
+Task 1.2: Write the audio loopback code to stream real-time audio samples seamlessly from a virtual microphone/input channel to an audio output channel without buffer underruns.
+
+Task 1.3: Implement a software Push-to-Talk (PTT) controller block capable of toggling your interface hardware (e.g., CAT control, serial RTS/DTR lines, or VOX tones) to key up a transceiver.
+
+
+Phase 2: Single-Carrier GMSK Modulator (TX)GMSK relies on continuous-phase frequency modulation shaped by a Gaussian filter.
+
+Task 2.1: Build a configurable symbol clock that adjusts the Samples Per Symbol (SPS) ratio dynamically (e.g., 40 samples/symbol for 1200 bps; 5 samples/symbol for 9600 bps).
+
+Task 2.2: Write a routine to generate a Gaussian Pulse-Shaping Filter look-up table based on your target bandwidth-time product (BT = 0.3 or 0.5).
+
+Task 2.3: Build the Frequency Modulator block that integrates the pulse-shaped bitstream continuously to output clean, constant-amplitude sinusoids.
+
+Task 2.4: Create a standard packet assembler that appends a stable bit-sync preamble (e.g., alternating 0101...) and a unique sync word ahead of your payload data.
+
+
+Phase 3: GMSK Demodulator (RX)Decoding requires translating frequency variations back into discrete bits.
+
+Task 3.1: Implement a Quadrature Demodulator (or frequency discriminator) to convert raw audio phase changes directly into a baseband voltage signal.
+
+Task 3.2: Build a low-pass Matched Filter to strip away high-frequency channel noise from the raw baseband signal.
+
+Task 3.3: Write a Symbol Timing Recovery algorithm (such as a Gardner loop or early-late gate) to determine the exact center point of each incoming symbol.
+
+Task 3.4: Create the Frame Sync Detector that continually scans the incoming bitstream for your specific sync word to mark the exact start of the payload data.
+
+
+Phase 4: Physical Layer FEC & Bit ScramblingProtecting the raw bitstream from common VHF/UHF channel impairments.
+
+Task 4.1: Integrate an open-source Forward Error Correction library (like Convolutional r=1/2, k=7 coding) to generate mathematical parity bits for error protection.
+
+Task 4.2: Implement a Matrix Interleaver/De-interleaver block to shuffle bit layouts over time, breaking up destructive noise bursts into manageable, isolated bit errors.
+
+Task 4.3: Add a pseudo-random Bit Scrambler/Whitener to eliminate long strings of identical bits (e.g., all 0s), ensuring continuous transitions for the receiver's clock recovery loop.
+
+
+Phase 5: The Decoupled Link Layer (OSI Layer 2)The logical brain of your protocol that handles error checking and connection tracking.
+
+Task 5.1: Design a fixed-size, structured link layer data frame containing fields for a 32-bit CRC, sequence tracking counters, and source/destination station callsigns.
+
+Task 5.2: Write the CRC-32 checksum calculator block to act as the ultimate validator of data frame payload integrity.
+
+Task 5.3: Build an ARQ (Automatic Repeat reQuest) state machine to monitor traffic and track packet acknowledgments using ACK and NACK frames.
+
+Task 5.4: Code a Dynamic Timeout Engine that automatically calculates the acknowledgment wait window based on the transmission's active PHY bit rate.
+
+
+Phase 6: Testing & OptimizationMoving from simulation to real-world over-the-air deployment.
+
+Task 6.1: Run a local software loopback test injecting simulated white noise and frequency offsets to measure your modem's bit error rate (BER) curves.
+
+Task 6.2: Test the hardware interface locally by running your software through two radios connected via RF attenuators or dummy loads.
+
+Task 6.3: Optimize execution loops to minimize CPU utilization, ensuring the DSP pipelines run cleanly on low-power single-board computers like a Raspberry Pi.
+
