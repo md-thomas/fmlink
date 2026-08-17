@@ -11,7 +11,7 @@ options:
     gen_linking: dynamic
     generate_options: qt_gui
     hier_block_src_path: '.:'
-    id: test3_rx
+    id: rx_rtlsdr
     max_nouts: '0'
     output_language: python
     placement: (0,0)
@@ -28,43 +28,44 @@ options:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [304, 16.0]
+    coordinate:
+    - 304
+    - 16.0
     rotation: 0
     state: enabled
-
 blocks:
 - name: baseband_rate
   id: variable
   parameters:
-    comment: Rate the PHY (Symbol Sync etc.) actually runs at - same as test2.grc's
-      samp_rate. Too low for the RTL-SDR's ADC to run at directly.
+    comment: Rate the PHY (Symbol Sync etc.) actually runs at - same as phy_sim_loopback.grc's samp_rate. Too low for the RTL-SDR's ADC to run at directly.
     value: symbol_rate*sps
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [472, 16.0]
+    coordinate:
+    - 472
+    - 16.0
     rotation: 0
     state: enabled
 - name: center_freq
   id: variable
   parameters:
-    comment: Derived from the live center_freq_mhz control - everything downstream
-      (RTL-SDR source, xlating filter, spectrum plot) references this, in Hz, unchanged.
+    comment: Derived from the live center_freq_mhz control - everything downstream (RTL-SDR source, xlating filter, spectrum plot) references this, in Hz, unchanged.
     value: int(center_freq_mhz*1e6)
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [8, 16.0]
+    coordinate:
+    - 8
+    - 16.0
     rotation: 0
     state: enabled
 - name: center_freq_mhz
   id: variable_qtgui_range
   parameters:
-    comment: Live frequency tuning, in MHz (24 MHz-1766 MHz covers the RTL-SDR/R820T2's
-      practical tuning range). center_freq (Hz) below is derived from this and is
-      what every block actually uses.
+    comment: Live frequency tuning, in MHz (24 MHz-1766 MHz covers the RTL-SDR/R820T2's practical tuning range). center_freq (Hz) below is derived from this and is what every block actually uses.
     gui_hint: 0,0,1,1
     label: Center Freq (MHz)
     min_len: '200'
@@ -79,15 +80,15 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [240, 128.0]
+    coordinate:
+    - 240
+    - 128.0
     rotation: 0
     state: enabled
 - name: decode_const
   id: variable_constellation
   parameters:
-    comment: Just the 4 odd (45/135/225/315 degree) ring positions, mapped back to
-      their original 2-bit symbol values - slices the diff_phasor_cc output straight
-      back to data with no separate differential-decode step
+    comment: Just the 4 odd (45/135/225/315 degree) ring positions, mapped back to their original 2-bit symbol values - slices the diff_phasor_cc output straight back to data with no separate differential-decode step
     const_points: '[ring_points[1], ring_points[3], ring_points[5], ring_points[7]]'
     dims: '1'
     normalization: digital.constellation.NO_NORMALIZATION
@@ -101,21 +102,23 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1096, 12.0]
+    coordinate:
+    - 1096
+    - 12.0
     rotation: 0
     state: enabled
 - name: freq_offset
   id: variable
   parameters:
-    comment: RTL LO is tuned this far below center_freq, and the xlating filter shifts
-      back by the same amount while decimating - keeps the RTL-SDR's DC-offset spike
-      off of our actual signal instead of sitting right on top of it.
+    comment: RTL LO is tuned this far below center_freq, and the xlating filter shifts back by the same amount while decimating - keeps the RTL-SDR's DC-offset spike off of our actual signal instead of sitting right on top of it.
     value: '100000'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [664, 104.0]
+    coordinate:
+    - 664
+    - 104.0
     rotation: 0
     state: enabled
 - name: nfilters
@@ -127,23 +130,23 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [520, 104.0]
+    coordinate:
+    - 520
+    - 104.0
     rotation: 0
     state: enabled
 - name: radio_rate
   id: variable
   parameters:
-    comment: RTL-SDR's actual ADC sample rate. Fixed at 1.92 MHz - a clean integer
-      multiple of baseband_rate for every OpenWave mode, within the RTL-SDR's valid
-      higher sample-rate range (900,001-3,200,000 Hz), and wide enough that the spectrum
-      plot's axis auto-displays in MHz instead of kHz (confirmed empirically - below
-      roughly 1-2 MHz of span it switches to kHz).
+    comment: RTL-SDR's actual ADC sample rate. Fixed at 1.92 MHz - a clean integer multiple of baseband_rate for every OpenWave mode, within the RTL-SDR's valid higher sample-rate range (900,001-3,200,000 Hz), and wide enough that the spectrum plot's axis auto-displays in MHz instead of kHz (confirmed empirically - below roughly 1-2 MHz of span it switches to kHz).
     value: '1920000'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [768, 16.0]
+    coordinate:
+    - 768
+    - 16.0
     rotation: 0
     state: enabled
 - name: resamp_factor
@@ -155,22 +158,23 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [760, 104.0]
+    coordinate:
+    - 760
+    - 104.0
     rotation: 0
     state: enabled
 - name: ring_points
   id: variable
   parameters:
-    comment: 8 unit points at 0,45,90,...,315 degrees, sequential index order - the
-      union of both 45-degree-apart QPSK constellations that pi/4-QPSK alternates
-      between
-    value: '[1+0j, (2**0.5/2)+(2**0.5/2)*1j, 1j, -(2**0.5/2)+(2**0.5/2)*1j, -1+0j,
-      -(2**0.5/2)-(2**0.5/2)*1j, -1j, (2**0.5/2)-(2**0.5/2)*1j]'
+    comment: 8 unit points at 0,45,90,...,315 degrees, sequential index order - the union of both 45-degree-apart QPSK constellations that pi/4-QPSK alternates between
+    value: '[1+0j, (2**0.5/2)+(2**0.5/2)*1j, 1j, -(2**0.5/2)+(2**0.5/2)*1j, -1+0j, -(2**0.5/2)-(2**0.5/2)*1j, -1j, (2**0.5/2)-(2**0.5/2)*1j]'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [592, 16.0]
+    coordinate:
+    - 592
+    - 16.0
     rotation: 0
     state: enabled
 - name: sps
@@ -182,7 +186,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [592, 104.0]
+    coordinate:
+    - 592
+    - 104.0
     rotation: 0
     state: enabled
 - name: tx_const
@@ -202,7 +208,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [864, 12.0]
+    coordinate:
+    - 864
+    - 12.0
     rotation: 0
     state: enabled
 - name: blocks_unpack_k_bits_bb_1
@@ -218,15 +226,16 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1000, 400.0]
+    coordinate:
+    - 1000
+    - 400.0
     rotation: 0
     state: enabled
 - name: center_freq_default
   id: parameter
   parameters:
     alias: ''
-    comment: 70cm amateur band - must match test3_tx.grc's center_freq. Only the STARTING
-      frequency; retune live via the Center Freq slider once running.
+    comment: 70cm amateur band - must match tx_pluto.grc's center_freq. Only the STARTING frequency; retune live via the Center Freq slider once running.
     hide: none
     label: ''
     short_id: f
@@ -236,7 +245,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [8, 136.0]
+    coordinate:
+    - 8
+    - 136.0
     rotation: 0
     state: enabled
 - name: digital_constellation_decoder_cb_0
@@ -252,18 +263,18 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [952, 304.0]
+    coordinate:
+    - 952
+    - 304.0
     rotation: 0
     state: enabled
 - name: digital_correlate_access_code_tag_xx_0
   id: digital_correlate_access_code_tag_xx
   parameters:
-    access_code: '''''.join(format(b, ''08b'') for b in (b''\x55''*4 + b''\x1A\xCF\xFC\x1D''))'
+    access_code: '''1001100000011000100111111100101100011010110011111111110000011101'''
     affinity: ''
     alias: ''
-    comment: Tags the bit immediately following a match against the last 4 bytes of
-      the preamble + the OpenWave sync word 0x1ACFFC1D. See test2.grc for why only
-      64 of the 96 preamble+syncword bits are used as the correlation target.
+    comment: Tags the bit immediately following a match against the last 4 bytes of the PN preamble (openwave_link.PREAMBLE) + the OpenWave sync word (openwave_link.SYNC_WORD). GNU Radio's correlator caps access codes at 64 bits, so the full preamble+syncword can't be used directly as the correlation target, though the full 32-byte preamble is still transmitted. This value is a hardcoded literal, not a live reference to openwave_link.py - GRC's Import block doesn't actually share its namespace with other blocks' parameter expressions in this GNU Radio version (confirmed empirically), so it can't be. Kept in sync by tests/test_flowgraphs_compile.py's access-code consistency check - if PREAMBLE or SYNC_WORD ever change, that test will fail until this literal is regenerated.
     maxoutbuf: '0'
     minoutbuf: '0'
     tagname: '"sync"'
@@ -273,7 +284,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [968, 472.0]
+    coordinate:
+    - 968
+    - 472.0
     rotation: 0
     state: enabled
 - name: digital_diff_phasor_cc_0
@@ -281,16 +294,16 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    comment: Differential phase detection - immune to constant carrier phase offset,
-      so no Costas loop needed. NOT immune to a moving frequency offset - if the Pluto/RTL-SDR
-      clock mismatch drifts faster than expected, this is the first place to look.
+    comment: Differential phase detection - immune to constant carrier phase offset, so no Costas loop needed. NOT immune to a moving frequency offset - if the Pluto/RTL-SDR clock mismatch drifts faster than expected, this is the first place to look.
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [848, 240.0]
+    coordinate:
+    - 848
+    - 240.0
     rotation: 0
     state: enabled
 - name: digital_symbol_sync_xx_0
@@ -298,9 +311,7 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    comment: RRC matched filter, alpha=0.35, done as a polyphase matched filter inside
-      Symbol Sync itself - see test2.grc for why a separate pre-filter block caused
-      a symbol-count slip during acquisition.
+    comment: RRC matched filter, alpha=0.35, done as a polyphase matched filter inside Symbol Sync itself - see phy_sim_loopback.grc for why a separate pre-filter block caused a symbol-count slip during acquisition.
     constellation: tx_const
     damping: '1.0'
     loop_bw: '0.045'
@@ -319,7 +330,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [544, 300.0]
+    coordinate:
+    - 544
+    - 300.0
     rotation: 0
     state: enabled
 - name: filter_freq_xlating_fir_filter_xxx_0
@@ -328,12 +341,7 @@ blocks:
     affinity: ''
     alias: ''
     center_freq: freq_offset
-    comment: Shifts the signal (offset-tuned to dodge the RTL-SDR's DC spike) back
-      to baseband while decimating from radio_rate down to baseband_rate. This is
-      channel selection, not RRC matched filtering - that's still done by Symbol Sync's
-      own PFB matched filter further down the chain, same as test2.grc. Cutoff/transition
-      are a reasonable starting point - may need tightening once real hardware is
-      in the loop.
+    comment: Shifts the signal (offset-tuned to dodge the RTL-SDR's DC spike) back to baseband while decimating from radio_rate down to baseband_rate. This is channel selection, not RRC matched filtering - that's still done by Symbol Sync's own PFB matched filter further down the chain, same as phy_sim_loopback.grc. Cutoff/transition are a reasonable starting point - may need tightening once real hardware is in the loop.
     decim: resamp_factor
     maxoutbuf: '0'
     minoutbuf: '0'
@@ -344,7 +352,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [312, 288.0]
+    coordinate:
+    - 312
+    - 288.0
     rotation: 0
     state: enabled
 - name: osmosdr_source_0
@@ -457,8 +467,7 @@ blocks:
     clock_source5: ''
     clock_source6: ''
     clock_source7: ''
-    comment: Tunes the RTL LO to center_freq - freq_offset; the xlating filter downstream
-      shifts back and decimates to baseband_rate.
+    comment: Tunes the RTL LO to center_freq - freq_offset; the xlating filter downstream shifts back and decimates to baseband_rate.
     corr0: rtl_ppm
     corr1: '0'
     corr10: '0'
@@ -702,7 +711,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [64, 300.0]
+    coordinate:
+    - 64
+    - 300.0
     rotation: 0
     state: enabled
 - name: qtgui_const_sink_x_0
@@ -732,8 +743,7 @@ blocks:
     color7: '"yellow"'
     color8: '"dark red"'
     color9: '"dark green"'
-    comment: Plots the diff_phasor_cc output. Four tight clusters at 45/135/225/315
-      degrees means the modem is decoding cleanly.
+    comment: Plots the diff_phasor_cc output. Four tight clusters at 45/135/225/315 degrees means the modem is decoding cleanly.
     grid: 'False'
     gui_hint: 3,0,1,1
     label1: ''
@@ -795,7 +805,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1184, 224.0]
+    coordinate:
+    - 1184
+    - 224.0
     rotation: 0
     state: enabled
 - name: qtgui_edit_box_msg_1
@@ -817,7 +829,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [984, 680.0]
+    coordinate:
+    - 984
+    - 680.0
     rotation: 0
     state: enabled
 - name: qtgui_freq_sink_x_0
@@ -849,8 +863,7 @@ blocks:
     color7: '"yellow"'
     color8: '"dark red"'
     color9: '"dark green"'
-    comment: Raw spectrum straight off the RTL-SDR, before the xlating filter - useful
-      for finding the beacon and confirming freq_offset/ppm are sane.
+    comment: Raw spectrum straight off the RTL-SDR, before the xlating filter - useful for finding the beacon and confirming freq_offset/ppm are sane.
     ctrlpanel: 'False'
     fc: center_freq - freq_offset
     fftsize: '1024'
@@ -899,7 +912,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [320, 496.0]
+    coordinate:
+    - 320
+    - 496.0
     rotation: 0
     state: enabled
 - name: rtl_gain
@@ -916,16 +931,16 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [224, 16.0]
+    coordinate:
+    - 224
+    - 16.0
     rotation: 0
     state: enabled
 - name: rtl_ppm
   id: parameter
   parameters:
     alias: ''
-    comment: Manual frequency correction in ppm. Calibrate with `rtl_test -p` (or
-      equivalent) before the first test - RTL-SDR crystal error is often tens of ppm,
-      which at UHF can be several kHz, potentially larger than the whole channel.
+    comment: Manual frequency correction in ppm. Calibrate with `rtl_test -p` (or equivalent) before the first test - RTL-SDR crystal error is often tens of ppm, which at UHF can be several kHz, potentially larger than the whole channel.
     hide: none
     label: ''
     short_id: c
@@ -935,68 +950,42 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [144, 136.0]
+    coordinate:
+    - 144
+    - 136.0
     rotation: 0
     state: enabled
 - name: stream_display_sink_0
   id: epy_block
   parameters:
-    _source_code: "\"\"\"\nUses the 'sync' tag emitted by the access-code correlator\
-      \ to know exactly\nwhich bit is the start of the payload - no more guessing\
-      \ a bit-to-byte\nphase. Packs bits into bytes from that point and publishes\
-      \ the payload\nonce a run of zero bytes (temporary end-of-message marker, until\
-      \ a real\nPayload Length header field exists) is seen.\n\nterm_len is deliberately\
-      \ smaller than how much zero padding TX actually\nsends (see str_to_pdu_0's\
-      \ end_pad), since the filter/timing-recovery\npipeline's group delay means the\
-      \ last several trailing bytes never\narrive once the finite burst source goes\
-      \ idle - there's nothing left to\nflush them through.\n\"\"\"\nimport numpy\
-      \ as np\nfrom gnuradio import gr\nimport pmt\n\n\nclass blk(gr.sync_block):\n\
-      \    \"\"\"Sync-word-aligned bit stream to message\"\"\"\n\n    def __init__(self,\
-      \ term_len=8, max_payload_bytes=256, tagname='sync'):\n        gr.sync_block.__init__(self,\
-      \ name='Framed Stream to Message', in_sig=[np.uint8], out_sig=[])\n        self.term_len\
-      \ = term_len\n        self.max_payload_bytes = max_payload_bytes\n        self.tagname\
-      \ = tagname\n        self.bits = []\n        self.armed = False\n        self.message_port_register_out(pmt.intern('msg'))\n\
-      \n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n\
-      \        tags = self.get_tags_in_window(0, 0, len(in0), pmt.intern(self.tagname))\n\
-      \        tag_offsets = {t.offset - self.nitems_read(0) for t in tags}\n\n  \
-      \      for i, bit in enumerate(in0):\n            if i in tag_offsets:\n   \
-      \             self.bits = []\n                self.armed = True\n          \
-      \  if self.armed:\n                self.bits.append(int(bit))\n            \
-      \    if len(self.bits) >= self.max_payload_bytes * 8:\n                    self.armed\
-      \ = False\n                    self.bits = []\n                    continue\n\
-      \                if len(self.bits) % 8 == 0 and len(self.bits) >= self.term_len\
-      \ * 8:\n                    byts = np.packbits(np.array(self.bits, dtype=np.uint8)).tobytes()\n\
-      \                    zero_run = b'\\x00' * self.term_len\n                 \
-      \   idx = byts.find(zero_run)\n                    if idx != -1:\n         \
-      \               text = byts[:idx].decode('utf-8', errors='replace')\n      \
-      \                  if text:\n                            self.message_port_pub(pmt.intern('msg'),\
-      \ pmt.string_to_symbol(text))\n                        self.armed = False\n\
-      \                        self.bits = []\n\n        return len(in0)\n"
+    _source_code: "\"\"\"\nUses the 'sync' tag from the access-code correlator to know exactly where the\nheader starts, then uses openwave_link.FrameParser to collect exactly\nHeader+Payload+CRC32 bytes (per the header's real Payload Length field) and\nverify the CRC before publishing. No zero-run-terminator guessing - the header\ntells us exactly how many bytes to expect, and the CRC tells us whether we got\nthem right.\n\nTracks Sequence Number (gap/duplicate detection) and parses Flags from each\nCRC-verified frame - never from a CRC-failed one, since a corrupted header can\nstill unpack without a struct error while holding garbage values. Counts and\nthe last frame's seq/flags are published on the 'stats' port.\n\nDistinguishes three kinds of CRC-verified frame:\n  - ACK frames (openwave_link.is_ack): publish the acknowledged seq on\n    'ack_received' instead of trying to decode the (empty) payload as text.\n  - Fragmented Data frames: fed through openwave_link.FragmentReassembler;\n\
+      \    'msg' is only published once the full run completes, transparently to\n    whoever's listening on 'msg' (a reassembled message looks identical to a\n    single-frame one).\n  - Plain Data frames: decoded and published on 'msg' directly, as before.\nA Data frame (fragmented or not) with the ack_requested flag publishes its\nseq on 'ack_needed'.\n\nNothing in this flowgraph currently transmits a real ACK back in response to\n'ack_needed', or feeds a real received ACK into 'ack_received' - RTL-SDR has\nno transmit capability at all, so this station can never send an ACK back\nover the air. These ports exist so the logic is ready for a future\nfull-duplex pairing.\n\"\"\"\nimport numpy as np\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport openwave_link as link\n\n\nclass blk(gr.sync_block):\n    \"\"\"Sync-word-aligned, header-framed bit stream to message\"\"\"\n\n    def __init__(self, tagname='sync'):\n\
+      \        gr.sync_block.__init__(self, name='Framed Stream to Message', in_sig=[np.uint8], out_sig=[])\n        self.tagname = tagname\n        self.parser = link.FrameParser()\n        self.reassembler = link.FragmentReassembler()\n        self.armed = False\n        self.bitpos = 0\n        self.curbyte = 0\n        self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'dup': 0, 'lost': 0,\n                        'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0}\n        self.last_seq = None\n        self.last_flags = 0\n        self.message_port_register_out(pmt.intern('msg'))\n        self.message_port_register_out(pmt.intern('stats'))\n        self.message_port_register_out(pmt.intern('ack_needed'))\n        self.message_port_register_out(pmt.intern('ack_received'))\n\n    def _publish_stats(self):\n        c = self.counts\n        seq_str = str(self.last_seq) if self.last_seq is not None else '-'\n        text = (f\"OK:{c['ok']}  CRC fail:{c['crc_fail']}  Bad length:{c['bad_length']}\
+      \  \"\n                f\"Dup:{c['dup']}  Lost:{c['lost']}  ACKs rx:{c['acks_rx']}  \"\n                f\"Frag abort:{c['frag_aborted']}  Frag overflow:{c['frag_overflow']}  |  \"\n                f\"Seq:{seq_str}  Flags:{link.format_flags(self.last_flags)}\")\n        self.message_port_pub(pmt.intern('stats'), pmt.string_to_symbol(text))\n\n    def _update_seq(self, header):\n        seq = header['seq']\n        if self.last_seq is not None:\n            if seq == self.last_seq:\n                self.counts['dup'] += 1\n            else:\n                gap = (seq - self.last_seq - 1) % link.SEQ_MODULUS\n                # Bound the gap we'll believe as real loss vs. e.g. TX having\n                # restarted (seq reset to 0) - avoids one bogus huge count.\n                if 0 < gap < 1000:\n                    self.counts['lost'] += gap\n        self.last_seq = seq\n        self.last_flags = header['flags']\n\n    def _publish_text_and_maybe_ack(self, header, payload_bytes):\n\
+      \        self.counts['ok'] += 1\n        text = payload_bytes.decode('utf-8', errors='replace')\n        if text:\n            self.message_port_pub(pmt.intern('msg'), pmt.string_to_symbol(text))\n        if link.needs_ack(header):\n            self.message_port_pub(pmt.intern('ack_needed'), pmt.from_long(header['seq']))\n\n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n        tags = self.get_tags_in_window(0, 0, len(in0), pmt.intern(self.tagname))\n        tag_offsets = {t.offset - self.nitems_read(0) for t in tags}\n\n        for i, bit in enumerate(in0):\n            if i in tag_offsets:\n                self.parser.reset()\n                self.armed = True\n                self.bitpos = 0\n                self.curbyte = 0\n\n            if not self.armed:\n                continue\n\n            self.curbyte = (self.curbyte << 1) | int(bit)\n            self.bitpos += 1\n            if self.bitpos == 8:\n                status, payload = self.parser.feed(self.curbyte)\n\
+      \                self.bitpos = 0\n                self.curbyte = 0\n                if status == 'ok':\n                    header = self.parser.last_header\n                    self._update_seq(header)\n\n                    if link.is_ack(header):\n                        self.counts['acks_rx'] += 1\n                        self.message_port_pub(pmt.intern('ack_received'), pmt.from_long(header['seq']))\n                    elif link.parse_flags(header['flags'])['fragmented']:\n                        frag_status, reassembled = self.reassembler.feed(header, payload)\n                        self.counts['frag_aborted'] = self.reassembler.abort_count\n                        self.counts['frag_overflow'] = self.reassembler.overflow_count\n                        if frag_status == 'complete':\n                            self._publish_text_and_maybe_ack(header, reassembled)\n                    else:\n                        self._publish_text_and_maybe_ack(header, payload)\n\n      \
+      \              self._publish_stats()\n                    self.armed = False\n                elif status in ('crc_fail', 'bad_length'):\n                    self.counts[status] += 1\n                    self._publish_stats()\n                    self.armed = False\n\n        return len(in0)\n"
     affinity: ''
     alias: ''
     comment: ''
-    max_payload_bytes: '256'
     maxoutbuf: '0'
     minoutbuf: '0'
     tagname: '''sync'''
-    term_len: '8'
   states:
-    _io_cache: ('Framed Stream to Message', 'blk', [('term_len', '8'), ('max_payload_bytes',
-      '256'), ('tagname', "'sync'")], [('0', 'byte', 1)], [('msg', 'message', 1)],
-      'Sync-word-aligned bit stream to message', ['max_payload_bytes', 'tagname',
-      'term_len'])
+    _io_cache: ('Framed Stream to Message', 'blk', [('tagname', "'sync'")], [('0', 'byte', 1)], [('msg', 'message', 1), ('stats', 'message', 1), ('ack_needed', 'message', 1), ('ack_received', 'message', 1)], 'Sync-word-aligned, header-framed bit stream to message', ['tagname'])
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [976, 576.0]
+    coordinate:
+    - 976
+    - 576.0
     rotation: 0
     state: enabled
 - name: symbol_rate
   id: parameter
   parameters:
     alias: ''
-    comment: symbol rate in baud - one of the OpenWave modes 600/1200/2400/4800/9600.
-      Must match test3_tx.grc's symbol_rate.
+    comment: symbol rate in baud - one of the OpenWave modes 600/1200/2400/4800/9600. Must match tx_pluto.grc's symbol_rate.
     hide: none
     label: ''
     short_id: r
@@ -1006,22 +995,80 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [112, 16.0]
+    coordinate:
+    - 112
+    - 16.0
     rotation: 0
     state: enabled
-
+- name: qtgui_edit_box_msg_stats
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 4,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Link Stats
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1200
+    - 720.0
+    rotation: 0
+    state: enabled
 connections:
-- [blocks_unpack_k_bits_bb_1, '0', digital_correlate_access_code_tag_xx_0, '0']
-- [digital_constellation_decoder_cb_0, '0', blocks_unpack_k_bits_bb_1, '0']
-- [digital_correlate_access_code_tag_xx_0, '0', stream_display_sink_0, '0']
-- [digital_diff_phasor_cc_0, '0', digital_constellation_decoder_cb_0, '0']
-- [digital_diff_phasor_cc_0, '0', qtgui_const_sink_x_0, '0']
-- [digital_symbol_sync_xx_0, '0', digital_diff_phasor_cc_0, '0']
-- [filter_freq_xlating_fir_filter_xxx_0, '0', digital_symbol_sync_xx_0, '0']
-- [osmosdr_source_0, '0', filter_freq_xlating_fir_filter_xxx_0, '0']
-- [osmosdr_source_0, '0', qtgui_freq_sink_x_0, '0']
-- [stream_display_sink_0, msg, qtgui_edit_box_msg_1, val]
-
+- - blocks_unpack_k_bits_bb_1
+  - '0'
+  - digital_correlate_access_code_tag_xx_0
+  - '0'
+- - digital_constellation_decoder_cb_0
+  - '0'
+  - blocks_unpack_k_bits_bb_1
+  - '0'
+- - digital_correlate_access_code_tag_xx_0
+  - '0'
+  - stream_display_sink_0
+  - '0'
+- - digital_diff_phasor_cc_0
+  - '0'
+  - digital_constellation_decoder_cb_0
+  - '0'
+- - digital_diff_phasor_cc_0
+  - '0'
+  - qtgui_const_sink_x_0
+  - '0'
+- - digital_symbol_sync_xx_0
+  - '0'
+  - digital_diff_phasor_cc_0
+  - '0'
+- - filter_freq_xlating_fir_filter_xxx_0
+  - '0'
+  - digital_symbol_sync_xx_0
+  - '0'
+- - osmosdr_source_0
+  - '0'
+  - filter_freq_xlating_fir_filter_xxx_0
+  - '0'
+- - osmosdr_source_0
+  - '0'
+  - qtgui_freq_sink_x_0
+  - '0'
+- - stream_display_sink_0
+  - msg
+  - qtgui_edit_box_msg_1
+  - val
+- - stream_display_sink_0
+  - stats
+  - qtgui_edit_box_msg_stats
+  - val
 metadata:
   file_format: 1
   grc_version: 3.10.12.0

@@ -1,0 +1,600 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: ''
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: OpenWave hardware bring-up - TX half, drives a PlutoSDR. Repeats the message as a beacon so the RX side (rx_rtlsdr.grc, RTL-SDR) can be tuned/found without coordinating manual send timing across two separate radios.
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: tx_pluto
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: OpenWave TX (PlutoSDR)
+    window_size: (600,300)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 360
+    - 8.0
+    rotation: 0
+    state: enabled
+blocks:
+- name: ring_points
+  id: variable
+  parameters:
+    comment: 8 unit points at 0,45,90,...,315 degrees, sequential index order - the union of both 45-degree-apart QPSK constellations that pi/4-QPSK alternates between
+    value: '[1+0j, (2**0.5/2)+(2**0.5/2)*1j, 1j, -(2**0.5/2)+(2**0.5/2)*1j, -1+0j, -(2**0.5/2)-(2**0.5/2)*1j, -1j, (2**0.5/2)-(2**0.5/2)*1j]'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 712
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: sps
+  id: variable
+  parameters:
+    comment: ''
+    value: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 536
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: baseband_rate
+  id: variable
+  parameters:
+    comment: Rate the PHY (RRC pulse shaping etc.) actually runs at - same as phy_sim_loopback.grc's samp_rate. Too low to hand straight to Pluto's DAC.
+    value: symbol_rate*sps
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 608
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: radio_rate
+  id: variable
+  parameters:
+    comment: Pluto's actual DAC sample rate. Fixed at 960 kHz - a clean integer multiple of baseband_rate for every OpenWave mode (600/1200/2400/4800/9600 baud * sps=4), and comfortably within Pluto's valid sample-rate range.
+    value: '960000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 808
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: resamp_factor
+  id: variable
+  parameters:
+    comment: Interpolation factor from baseband_rate up to radio_rate
+    value: radio_rate // baseband_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 936
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: tx_const
+  id: variable_constellation
+  parameters:
+    comment: All 8 ring points - used as the modulator's symbol table
+    const_points: ring_points
+    dims: '1'
+    normalization: digital.constellation.NO_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '8'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 2, 3, 4, 5, 6, 7]'
+    type: calcdist
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 896
+    - 12.0
+    rotation: 0
+    state: enabled
+- name: beacon_period_ms
+  id: variable
+  parameters:
+    comment: How often the beacon repeats the message, for RX-side tuning/hunting
+    value: '4000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1064
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: center_freq_default
+  id: parameter
+  parameters:
+    alias: ''
+    comment: 70cm amateur band - only the STARTING frequency; retune live via the Center Freq slider once running.
+    hide: none
+    label: ''
+    short_id: f
+    type: intx
+    value: '433000000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 88
+    rotation: 0
+    state: enabled
+- name: center_freq_mhz
+  id: variable_qtgui_range
+  parameters:
+    comment: Live frequency tuning, in MHz (matches Pluto's own 47 MHz-6 GHz valid range). center_freq (Hz) below is derived from this and is what every block actually uses.
+    gui_hint: 1,0,1,1
+    label: Center Freq (MHz)
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '47.0'
+    step: '0.001'
+    stop: '6000.0'
+    value: center_freq_default/1e6
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 264
+    - 152
+    rotation: 0
+    state: enabled
+- name: center_freq
+  id: variable
+  parameters:
+    comment: Derived from the live center_freq_mhz control - everything downstream (Pluto sink) references this, in Hz, unchanged.
+    value: int(center_freq_mhz*1e6)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 392
+    - 152
+    rotation: 0
+    state: enabled
+- name: pluto_uri
+  id: parameter
+  parameters:
+    alias: ''
+    comment: Leave blank to auto-discover over USB (iio.get_pluto_uri()); set explicitly for a network-attached Pluto, e.g. 'ip:192.168.2.1'
+    hide: none
+    label: ''
+    short_id: u
+    type: str
+    value: ''''''
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 136
+    - 88
+    rotation: 0
+    state: enabled
+- name: tx_atten
+  id: parameter
+  parameters:
+    alias: ''
+    comment: TX attenuation in dB (0 = max power). Start high (e.g. 50-60) for a bench test at close range, lower for range testing.
+    hide: none
+    label: ''
+    short_id: a
+    type: eng_float
+    value: '50.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 264
+    - 88
+    rotation: 0
+    state: enabled
+- name: msg
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: ''
+    short_id: m
+    type: str
+    value: '"OpenWave pi/4-QPSK PHY test 123!"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+- name: symbol_rate
+  id: parameter
+  parameters:
+    alias: ''
+    comment: symbol rate in baud - one of the OpenWave modes 600/1200/2400/4800/9600. Must match rx_rtlsdr.grc's symbol_rate.
+    hide: none
+    label: ''
+    short_id: r
+    type: intx
+    value: '600'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 192
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: blocks_message_strobe_0
+  id: blocks_message_strobe
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Beacon repeat - resends the (fixed, at flowgraph-start) message content on a timer, so the RX side has a known, repeating signal to find and tune against instead of needing a coordinated one-shot manual send.
+    msg: pmt.string_to_symbol(msg)
+    period: beacon_period_ms
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 32
+    - 232.0
+    rotation: 0
+    state: enabled
+- name: blocks_pack_k_bits_bb_0
+  id: blocks_pack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Regroup individual bits into 2-bit symbols (0..3)
+    k: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 328
+    - 200.0
+    rotation: 0
+    state: enabled
+- name: blocks_unpack_k_bits_bb_0
+  id: blocks_unpack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Unpack 8-bit bytes into individual bits
+    k: '8'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 320
+    - 312.0
+    rotation: 0
+    state: enabled
+- name: digital_chunks_to_symbols_xx_0
+  id: digital_chunks_to_symbols_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    dimension: '1'
+    in_type: byte
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_ports: '1'
+    out_type: complex
+    symbol_table: tx_const.points()
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 936
+    - 272.0
+    rotation: 0
+    state: enabled
+- name: digital_diff_encoder_bb_0
+  id: digital_diff_encoder_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    coding: digital.DIFF_DIFFERENTIAL
+    comment: Mod-8 phase accumulator - makes it pi/4-QPSK instead of plain QPSK. See phy_sim_loopback.grc for the full explanation.
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    modulus: '8'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 648
+    - 288.0
+    rotation: 0
+    state: enabled
+- name: digital_map_bb_0
+  id: digital_map_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Symbol value (0..3) -> odd ring position (1,3,5,7)
+    map: '[1, 3, 5, 7]'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 480
+    - 240.0
+    rotation: 0
+    state: enabled
+- name: filter_interp_fir_filter_xxx_0
+  id: interp_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: RRC pulse shaping, alpha=0.35 - runs at baseband_rate
+    interp: sps
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: firdes.root_raised_cosine(sps, sps, 1.0, 0.35, 11*sps)
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1160
+    - 304.0
+    rotation: 0
+    state: enabled
+- name: filter_rational_resampler_xxx_0
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Upsamples from baseband_rate (where the PHY runs) to radio_rate (Pluto's actual DAC rate) - a plain anti-imaging interpolator, not pulse shaping (that already happened above).
+    decim: '1'
+    fbw: '0'
+    interp: resamp_factor
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1368
+    - 304.0
+    rotation: 0
+    state: enabled
+- name: iio_pluto_sink_0
+  id: iio_pluto_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    attenuation1: tx_atten
+    bandwidth: '20000000'
+    buffer_size: '0x8000'
+    comment: ''
+    cyclic: 'False'
+    filter: ''
+    filter_source: '''Auto'''
+    fpass: '0'
+    fstop: '0'
+    frequency: center_freq
+    len_tag_key: '""'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samplerate: radio_rate
+    type: fc32
+    uri: pluto_uri
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1576
+    - 288.0
+    rotation: 0
+    state: enabled
+- name: pdu_pdu_to_tagged_stream_0
+  id: pdu_pdu_to_tagged_stream
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tag: packet_len
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 96
+    - 376.0
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_0
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Manual override - sends immediately on edit, independent of the beacon timer
+    gui_hint: 0,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Send now
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: msg
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 32
+    - 152.0
+    rotation: 0
+    state: enabled
+- name: str_to_pdu_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nWraps an incoming string message (from a QT GUI Message Edit Box or the\nbeacon strobe) into full OpenWave link-layer frame(s) - preamble, sync word,\nheader (with real Payload Length, Sequence Number, and Flags fields), payload,\nand CRC32 - using the shared openwave_link module so TX and RX can't drift out\nof sync on the framing format. Ready for PDU to Tagged Stream.\n\nMessages longer than openwave_link.MAX_PAYLOAD_LEN are automatically split\ninto multiple fragment frames (openwave_link.build_fragmented_frames) - each\nfragment is published as a separate PDU/burst, transparently to whoever\ncalled handle_msg. Sequence Number increments once per fragment (not once per\nlogical message): a fragmented message consumes several consecutive seq\nnumbers, one per fragment, since that's how RX's FragmentReassembler\ncorrelates them (see openwave_link.py's module docstring for the protocol-\ndesign gap this works around - there's no dedicated fragment-index field).\n\
+      \nack_requested sets the Flags byte's ACK Requested bit and engages\nopenwave_link.RetryManager, but ONLY for messages that fit in a single frame.\nRetryManager tracks one pending frame at a time, so partially tracking just a\nfragmented message's last fragment wouldn't actually guarantee the whole\nmessage arrived - fragmented sends are deliberately not ACK/retry-tracked in\nthis phase, regardless of ack_requested.\n\nIf 'tick' (wired to a periodic message strobe in the .grc) fires and the\npending (unfragmented) frame has timed out, it's retransmitted, up to\nack_max_retries times before giving up (published on 'delivery_failed'). Feed\na received ACK's seq into 'ack_received' to resolve a pending retry - nothing\nin this flowgraph currently wires that from a real over-the-air ACK (see\nstream_display_sink_0's docstring for why), so on tx_pluto.grc/\nphy_sim_loopback.grc as they stand today, ack_requested frames will always\neventually hit 'delivery_failed' - the retry logic itself\
+      \ is real and tested,\njust not yet connected to a real return path.\n\"\"\"\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport openwave_link as link\n\n\nclass blk(gr.basic_block):\n    \"\"\"String to OpenWave Frame PDU\"\"\"\n\n    def __init__(self, lead_pad=24, end_pad=24, ack_requested=False,\n                 ack_max_retries=3, ack_timeout_s=2.0):\n        gr.basic_block.__init__(self, name='String to OpenWave Frame PDU', in_sig=[], out_sig=[])\n        self.lead_pad = lead_pad\n        self.end_pad = end_pad\n        self.ack_requested = ack_requested\n        self.flags = link.FLAG_ACK_REQUESTED if ack_requested else 0\n        self.seq = 0\n        self.retry_mgr = link.RetryManager(max_retries=ack_max_retries, timeout_s=ack_timeout_s)\n        self._pending_payload = None\n        self.message_port_register_in(pmt.intern('msg'))\n        self.message_port_register_in(pmt.intern('ack_received'))\n\
+      \        self.message_port_register_in(pmt.intern('tick'))\n        self.message_port_register_out(pmt.intern('pdus'))\n        self.message_port_register_out(pmt.intern('delivery_failed'))\n        self.set_msg_handler(pmt.intern('msg'), self.handle_msg)\n        self.set_msg_handler(pmt.intern('ack_received'), self.handle_ack_received)\n        self.set_msg_handler(pmt.intern('tick'), self.handle_tick)\n\n    def _publish_frame(self, frame):\n        pdu = pmt.cons(pmt.make_dict(), pmt.init_u8vector(len(frame), list(frame)))\n        self.message_port_pub(pmt.intern('pdus'), pdu)\n\n    def _send_single_frame(self, payload, seq):\n        \"\"\"Used only for retransmitting an already-unfragmented pending frame -\n        fragmented messages are never retry-tracked, see class docstring.\"\"\"\n        frame = link.build_frame(payload, lead_pad=self.lead_pad, end_pad=self.end_pad,\n                                  seq=seq, flags=self.flags)\n        self._publish_frame(frame)\n\n\
+      \    def handle_msg(self, msg):\n        if pmt.is_pair(msg):\n            msg = pmt.cdr(msg)\n        text = pmt.symbol_to_string(msg) if pmt.is_symbol(msg) else str(msg)\n        payload = text.encode('utf-8')\n\n        frames, next_seq = link.build_fragmented_frames(\n            payload, seq_start=self.seq, flags=self.flags,\n            lead_pad=self.lead_pad, end_pad=self.end_pad,\n        )\n        fragmented = len(frames) > 1\n        first_seq = self.seq\n        self.seq = next_seq\n\n        for frame in frames:\n            self._publish_frame(frame)\n\n        if self.ack_requested and not fragmented:\n            self._pending_payload = payload\n            self.retry_mgr.note_sent(first_seq)\n\n    def handle_ack_received(self, msg):\n        acked_seq = pmt.to_long(msg)\n        self.retry_mgr.note_ack(acked_seq)\n\n    def handle_tick(self, msg):\n        status = self.retry_mgr.poll()\n        if status == 'retry':\n            seq = self.retry_mgr.pending_seq\n\
+      \            self._send_single_frame(self._pending_payload, seq)\n            self.retry_mgr.note_sent(seq)\n        elif status == 'give_up':\n            self.message_port_pub(pmt.intern('delivery_failed'), pmt.from_long(self.seq))\n            self._pending_payload = None\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    end_pad: '24'
+    lead_pad: '24'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ack_requested: 'False'
+    ack_max_retries: '3'
+    ack_timeout_s: '2.0'
+  states:
+    _io_cache: ('String to OpenWave Frame PDU', 'blk', [('lead_pad', '24'), ('end_pad', '24'), ('ack_requested', 'False'), ('ack_max_retries', '3'), ('ack_timeout_s', '2.0')], [('msg', 'message', 1), ('ack_received', 'message', 1), ('tick', 'message', 1)], [('pdus', 'message', 1), ('delivery_failed', 'message', 1)], 'String to OpenWave Frame PDU', ['lead_pad', 'end_pad', 'ack_requested', 'ack_max_retries', 'ack_timeout_s'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 56
+    - 288.0
+    rotation: 0
+    state: enabled
+- name: blocks_message_strobe_ack_tick
+  id: blocks_message_strobe
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Drives str_to_pdu_0's ACK-retry timeout polling - unrelated to (and much faster than) any beacon strobe in this flowgraph.
+    msg: pmt.PMT_T
+    period: '500'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 32
+    - 320.0
+    rotation: 0
+    state: enabled
+connections:
+- - blocks_message_strobe_0
+  - strobe
+  - str_to_pdu_0
+  - msg
+- - blocks_pack_k_bits_bb_0
+  - '0'
+  - digital_map_bb_0
+  - '0'
+- - blocks_unpack_k_bits_bb_0
+  - '0'
+  - blocks_pack_k_bits_bb_0
+  - '0'
+- - digital_chunks_to_symbols_xx_0
+  - '0'
+  - filter_interp_fir_filter_xxx_0
+  - '0'
+- - digital_diff_encoder_bb_0
+  - '0'
+  - digital_chunks_to_symbols_xx_0
+  - '0'
+- - digital_map_bb_0
+  - '0'
+  - digital_diff_encoder_bb_0
+  - '0'
+- - filter_interp_fir_filter_xxx_0
+  - '0'
+  - filter_rational_resampler_xxx_0
+  - '0'
+- - filter_rational_resampler_xxx_0
+  - '0'
+  - iio_pluto_sink_0
+  - '0'
+- - pdu_pdu_to_tagged_stream_0
+  - '0'
+  - blocks_unpack_k_bits_bb_0
+  - '0'
+- - qtgui_edit_box_msg_0
+  - msg
+  - str_to_pdu_0
+  - msg
+- - str_to_pdu_0
+  - pdus
+  - pdu_pdu_to_tagged_stream_0
+  - pdus
+- - blocks_message_strobe_ack_tick
+  - strobe
+  - str_to_pdu_0
+  - tick
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2

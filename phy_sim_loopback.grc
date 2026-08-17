@@ -1,0 +1,814 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: ''
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: OpenWave phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: phy_sim_loopback
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: OpenWave PHY Simulated Loopback
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 288
+    - 8.0
+    rotation: 0
+    state: enabled
+blocks:
+- name: decode_const
+  id: variable_constellation
+  parameters:
+    comment: Just the 4 odd (45/135/225/315 degree) ring positions, mapped back to their original 2-bit symbol values - slices the diff_phasor_cc output straight back to data with no separate differential-decode step
+    const_points: '[ring_points[1], ring_points[3], ring_points[5], ring_points[7]]'
+    dims: '1'
+    normalization: digital.constellation.NO_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '4'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 2, 3]'
+    type: calcdist
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1144
+    - 12.0
+    rotation: 0
+    state: enabled
+- name: nfilters
+  id: variable
+  parameters:
+    comment: Number of arms in Symbol Sync's polyphase matched-filter bank
+    value: '128'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 464
+    - 8.0
+    rotation: 0
+    state: enabled
+- name: ring_points
+  id: variable
+  parameters:
+    comment: 8 unit points at 0,45,90,...,315 degrees, sequential index order - the union of both 45-degree-apart QPSK constellations that pi/4-QPSK alternates between
+    value: '[1+0j, (2**0.5/2)+(2**0.5/2)*1j, 1j, -(2**0.5/2)+(2**0.5/2)*1j, -1+0j, -(2**0.5/2)-(2**0.5/2)*1j, -1j, (2**0.5/2)-(2**0.5/2)*1j]'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 712
+    - 8.0
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: symbol_rate*sps
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 616
+    - 8.0
+    rotation: 0
+    state: enabled
+- name: sps
+  id: variable
+  parameters:
+    comment: ''
+    value: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 544
+    - 8.0
+    rotation: 0
+    state: enabled
+- name: tx_const
+  id: variable_constellation
+  parameters:
+    comment: All 8 ring points - used as the modulator's symbol table and as Symbol Sync's decision-directed slicer
+    const_points: ring_points
+    dims: '1'
+    normalization: digital.constellation.NO_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '8'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 2, 3, 4, 5, 6, 7]'
+    type: calcdist
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 896
+    - 12.0
+    rotation: 0
+    state: enabled
+- name: blocks_pack_k_bits_bb_0
+  id: blocks_pack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Regroup individual bits into 2-bit symbols (0..3)
+    k: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 328
+    - 200.0
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1176
+    - 224.0
+    rotation: 0
+    state: enabled
+- name: blocks_unpack_k_bits_bb_0
+  id: blocks_unpack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Unpack 8-bit bytes into individual bits
+    k: '8'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 320
+    - 312.0
+    rotation: 0
+    state: enabled
+- name: blocks_unpack_k_bits_bb_1
+  id: blocks_unpack_k_bits_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Split 2-bit symbols back into individual bits
+    k: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 832
+    - 504.0
+    rotation: 0
+    state: enabled
+- name: channels_channel_model_0
+  id: channels_channel_model
+  parameters:
+    affinity: ''
+    alias: ''
+    block_tags: 'False'
+    comment: frequency_offset=0.0 - differential detection below is immune to constant phase offset but NOT to a moving frequency offset, so this hasn't been exercised
+    epsilon: '1.0'
+    freq_offset: '0.0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    noise_voltage: '0.1'
+    seed: '0'
+    taps: '1.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1336
+    - 312.0
+    rotation: 0
+    state: enabled
+- name: digital_chunks_to_symbols_xx_0
+  id: digital_chunks_to_symbols_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    dimension: '1'
+    in_type: byte
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_ports: '1'
+    out_type: complex
+    symbol_table: tx_const.points()
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 904
+    - 232.0
+    rotation: 0
+    state: enabled
+- name: digital_constellation_decoder_cb_0
+  id: digital_constellation_decoder_cb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Slices straight back to the 2-bit symbol value - no separate differential-decode step needed
+    constellation: decode_const
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 576
+    - 480.0
+    rotation: 0
+    state: enabled
+- name: digital_correlate_access_code_tag_xx_0
+  id: digital_correlate_access_code_tag_xx
+  parameters:
+    access_code: '''1001100000011000100111111100101100011010110011111111110000011101'''
+    affinity: ''
+    alias: ''
+    comment: Tags the bit immediately following a match against the last 4 bytes of the PN preamble (openwave_link.PREAMBLE) + the OpenWave sync word (openwave_link.SYNC_WORD). GNU Radio's correlator caps access codes at 64 bits, so the full preamble+syncword can't be used directly as the correlation target, though the full 32-byte preamble is still transmitted. This value is a hardcoded literal, not a live reference to openwave_link.py - GRC's Import block doesn't actually share its namespace with other blocks' parameter expressions in this GNU Radio version (confirmed empirically), so it can't be. Kept in sync by tests/test_flowgraphs_compile.py's access-code consistency check - if PREAMBLE or SYNC_WORD ever change, that test will fail until this literal is regenerated.
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tagname: '"sync"'
+    threshold: '4'
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 944
+    - 592.0
+    rotation: 0
+    state: enabled
+- name: digital_diff_encoder_bb_0
+  id: digital_diff_encoder_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    coding: digital.DIFF_DIFFERENTIAL
+    comment: Mod-8 phase accumulator. Accumulating an odd value mod 8 always flips the result's parity, so the transmitted point alternates between the "even" and "odd" halves of the ring every symbol - this is what actually makes it pi/4-QPSK instead of plain QPSK.
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    modulus: '8'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 648
+    - 288.0
+    rotation: 0
+    state: enabled
+- name: digital_diff_phasor_cc_0
+  id: digital_diff_phasor_cc
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Differential phase detection - recovers the original odd-ring increment directly from the phase difference between consecutive symbols. Immune to constant carrier phase offset, so no Costas loop is needed here the way plain QPSK needs one.
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 400
+    - 536.0
+    rotation: 0
+    state: enabled
+- name: digital_map_bb_0
+  id: digital_map_bb
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Symbol value (0..3) -> odd ring position (1,3,5,7). The even positions are never used directly as input.
+    map: '[1, 3, 5, 7]'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 480
+    - 240.0
+    rotation: 0
+    state: enabled
+- name: digital_symbol_sync_xx_0
+  id: digital_symbol_sync_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: RRC matched filter, alpha=0.35, done as a polyphase matched filter inside Symbol Sync itself rather than as a separate FIR block ahead of it. A separate pre-filter changes the pulse shape feeding the M&M timing error detector in a way that isn't accounted for by the loop's tuning, and was observed to cause a deterministic symbol-count offset (a "slip") during acquisition. Doing the matched filtering and timing recovery together in one block keeps the TED's operating point consistent.
+    constellation: tx_const
+    damping: '1.0'
+    loop_bw: '0.045'
+    max_dev: '1.5'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nfilters: nfilters
+    osps: '1'
+    pfb_mf_taps: firdes.root_raised_cosine(nfilters, sps*nfilters, 1.0, 0.35, 11*sps*nfilters)
+    resamp_type: digital.IR_PFB_MF
+    sps: sps
+    ted_gain: '1.0'
+    ted_type: digital.TED_MOD_MUELLER_AND_MULLER
+    type: cc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 48
+    - 452.0
+    rotation: 0
+    state: enabled
+- name: filter_interp_fir_filter_xxx_0
+  id: interp_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: RRC pulse shaping, alpha=0.35
+    interp: sps
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: firdes.root_raised_cosine(sps, sps, 1.0, 0.35, 11*sps)
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1016
+    - 352.0
+    rotation: 0
+    state: enabled
+- name: msg
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: ''
+    short_id: m
+    type: str
+    value: '"OpenWave pi/4-QPSK PHY test 123!"'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+- name: pdu_pdu_to_tagged_stream_0
+  id: pdu_pdu_to_tagged_stream
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tag: packet_len
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 120
+    - 384.0
+    rotation: 0
+    state: enabled
+- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: '"blue"'
+    color10: '"dark blue"'
+    color2: '"red"'
+    color3: '"green"'
+    color4: '"black"'
+    color5: '"cyan"'
+    color6: '"magenta"'
+    color7: '"yellow"'
+    color8: '"dark red"'
+    color9: '"dark green"'
+    comment: Plots the diff_phasor_cc output - the recovered phase increments, immune to carrier phase offset. Four tight clusters at 45/135/225/315 degrees means the modem is decoding cleanly.
+    grid: 'False'
+    gui_hint: 2,0,1,1
+    label1: ''
+    label10: ''
+    label2: ''
+    label3: ''
+    label4: ''
+    label5: ''
+    label6: ''
+    label7: ''
+    label8: ''
+    label9: ''
+    legend: 'True'
+    marker1: '0'
+    marker10: '0'
+    marker2: '0'
+    marker3: '0'
+    marker4: '0'
+    marker5: '0'
+    marker6: '0'
+    marker7: '0'
+    marker8: '0'
+    marker9: '0'
+    name: '""'
+    nconnections: '1'
+    size: '256'
+    style1: '0'
+    style10: '0'
+    style2: '0'
+    style3: '0'
+    style4: '0'
+    style5: '0'
+    style6: '0'
+    style7: '0'
+    style8: '0'
+    style9: '0'
+    tr_chan: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    xmax: '1.5'
+    xmin: '-1.5'
+    ymax: '1.5'
+    ymin: '-1.5'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 600
+    - 616.0
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_0
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 0,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Send
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: msg
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 32
+    - 136.0
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_1
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 1,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Received
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1504
+    - 504.0
+    rotation: 0
+    state: enabled
+- name: qtgui_edit_box_msg_stats
+  id: qtgui_edit_box_msg
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gui_hint: 3,0,1,1
+    is_pair: 'False'
+    is_static: 'True'
+    key: ''
+    label: Link Stats
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: string
+    value: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1200
+    - 720.0
+    rotation: 0
+    state: enabled
+- name: str_to_pdu_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nWraps an incoming string message (from a QT GUI Message Edit Box or the\nbeacon strobe) into full OpenWave link-layer frame(s) - preamble, sync word,\nheader (with real Payload Length, Sequence Number, and Flags fields), payload,\nand CRC32 - using the shared openwave_link module so TX and RX can't drift out\nof sync on the framing format. Ready for PDU to Tagged Stream.\n\nMessages longer than openwave_link.MAX_PAYLOAD_LEN are automatically split\ninto multiple fragment frames (openwave_link.build_fragmented_frames) - each\nfragment is published as a separate PDU/burst, transparently to whoever\ncalled handle_msg. Sequence Number increments once per fragment (not once per\nlogical message): a fragmented message consumes several consecutive seq\nnumbers, one per fragment, since that's how RX's FragmentReassembler\ncorrelates them (see openwave_link.py's module docstring for the protocol-\ndesign gap this works around - there's no dedicated fragment-index field).\n\
+      \nack_requested sets the Flags byte's ACK Requested bit and engages\nopenwave_link.RetryManager, but ONLY for messages that fit in a single frame.\nRetryManager tracks one pending frame at a time, so partially tracking just a\nfragmented message's last fragment wouldn't actually guarantee the whole\nmessage arrived - fragmented sends are deliberately not ACK/retry-tracked in\nthis phase, regardless of ack_requested.\n\nIf 'tick' (wired to a periodic message strobe in the .grc) fires and the\npending (unfragmented) frame has timed out, it's retransmitted, up to\nack_max_retries times before giving up (published on 'delivery_failed'). The\n'ack_received' input is fed a real loop in this flowgraph specifically:\nstream_display_sink_0's ack_needed -> ack_responder_0 -> back through this\nsame TX chain -> the channel -> stream_display_sink_0 again -> ack_received.\ntx_pluto.grc's copy of this block has no such loop (its RX counterpart,\nrx_rtlsdr.grc, has no transmit capability at all,\
+      \ so a real over-the-air ACK\ncan never come back there) - only this simulated flowgraph can close the loop.\n\"\"\"\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport openwave_link as link\n\n\nclass blk(gr.basic_block):\n    \"\"\"String to OpenWave Frame PDU\"\"\"\n\n    def __init__(self, lead_pad=24, end_pad=24, ack_requested=False,\n                 ack_max_retries=3, ack_timeout_s=2.0):\n        gr.basic_block.__init__(self, name='String to OpenWave Frame PDU', in_sig=[], out_sig=[])\n        self.lead_pad = lead_pad\n        self.end_pad = end_pad\n        self.ack_requested = ack_requested\n        self.flags = link.FLAG_ACK_REQUESTED if ack_requested else 0\n        self.seq = 0\n        self.retry_mgr = link.RetryManager(max_retries=ack_max_retries, timeout_s=ack_timeout_s)\n        self._pending_payload = None\n        self.message_port_register_in(pmt.intern('msg'))\n        self.message_port_register_in(pmt.intern('ack_received'))\n\
+      \        self.message_port_register_in(pmt.intern('tick'))\n        self.message_port_register_out(pmt.intern('pdus'))\n        self.message_port_register_out(pmt.intern('delivery_failed'))\n        self.set_msg_handler(pmt.intern('msg'), self.handle_msg)\n        self.set_msg_handler(pmt.intern('ack_received'), self.handle_ack_received)\n        self.set_msg_handler(pmt.intern('tick'), self.handle_tick)\n\n    def _publish_frame(self, frame):\n        pdu = pmt.cons(pmt.make_dict(), pmt.init_u8vector(len(frame), list(frame)))\n        self.message_port_pub(pmt.intern('pdus'), pdu)\n\n    def _send_single_frame(self, payload, seq):\n        \"\"\"Used only for retransmitting an already-unfragmented pending frame -\n        fragmented messages are never retry-tracked, see class docstring.\"\"\"\n        frame = link.build_frame(payload, lead_pad=self.lead_pad, end_pad=self.end_pad,\n                                  seq=seq, flags=self.flags)\n        self._publish_frame(frame)\n\n\
+      \    def handle_msg(self, msg):\n        if pmt.is_pair(msg):\n            msg = pmt.cdr(msg)\n        text = pmt.symbol_to_string(msg) if pmt.is_symbol(msg) else str(msg)\n        payload = text.encode('utf-8')\n\n        frames, next_seq = link.build_fragmented_frames(\n            payload, seq_start=self.seq, flags=self.flags,\n            lead_pad=self.lead_pad, end_pad=self.end_pad,\n        )\n        fragmented = len(frames) > 1\n        first_seq = self.seq\n        self.seq = next_seq\n\n        for frame in frames:\n            self._publish_frame(frame)\n\n        if self.ack_requested and not fragmented:\n            self._pending_payload = payload\n            self.retry_mgr.note_sent(first_seq)\n\n    def handle_ack_received(self, msg):\n        acked_seq = pmt.to_long(msg)\n        self.retry_mgr.note_ack(acked_seq)\n\n    def handle_tick(self, msg):\n        status = self.retry_mgr.poll()\n        if status == 'retry':\n            seq = self.retry_mgr.pending_seq\n\
+      \            self._send_single_frame(self._pending_payload, seq)\n            self.retry_mgr.note_sent(seq)\n        elif status == 'give_up':\n            self.message_port_pub(pmt.intern('delivery_failed'), pmt.from_long(self.seq))\n            self._pending_payload = None\n"
+    ack_requested: 'True'
+    affinity: ''
+    alias: ''
+    comment: ''
+    end_pad: '24'
+    lead_pad: '24'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ack_max_retries: '3'
+    ack_timeout_s: '2.0'
+  states:
+    _io_cache: ('String to OpenWave Frame PDU', 'blk', [('lead_pad', '24'), ('end_pad', '24'), ('ack_requested', 'False'), ('ack_max_retries', '3'), ('ack_timeout_s', '2.0')], [('msg', 'message', 1), ('ack_received', 'message', 1), ('tick', 'message', 1)], [('pdus', 'message', 1), ('delivery_failed', 'message', 1)], 'String to OpenWave Frame PDU', ['lead_pad', 'end_pad', 'ack_requested', 'ack_max_retries', 'ack_timeout_s'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 56
+    - 288.0
+    rotation: 0
+    state: enabled
+- name: stream_display_sink_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nUses the 'sync' tag from the access-code correlator to know exactly where the\nheader starts, then uses openwave_link.FrameParser to collect exactly\nHeader+Payload+CRC32 bytes (per the header's real Payload Length field) and\nverify the CRC before publishing. No zero-run-terminator guessing - the header\ntells us exactly how many bytes to expect, and the CRC tells us whether we got\nthem right.\n\nTracks Sequence Number (gap/duplicate detection) and parses Flags from each\nCRC-verified frame - never from a CRC-failed one, since a corrupted header can\nstill unpack without a struct error while holding garbage values. Counts and\nthe last frame's seq/flags are published on the 'stats' port.\n\nDistinguishes three kinds of CRC-verified frame:\n  - ACK frames (openwave_link.is_ack): publish the acknowledged seq on\n    'ack_received' instead of trying to decode the (empty) payload as text.\n    Deliberately excluded from the Data-frame seq/dup/lost tracker below -\
+      \ an\n    ACK frame's Sequence Number mirrors the frame it's acknowledging (see\n    openwave_link.build_ack_frame), not an independent counter of its own, so\n    running it through that tracker would misreport every successful ACK as a\n    duplicate of the original data frame.\n  - Fragmented Data frames: fed through openwave_link.FragmentReassembler;\n    'msg' is only published once the full run completes, transparently to\n    whoever's listening on 'msg' (a reassembled message looks identical to a\n    single-frame one).\n  - Plain Data frames: decoded and published on 'msg' directly, as before.\nA Data frame (fragmented or not) with the ack_requested flag publishes its\nseq on 'ack_needed'.\n\"\"\"\nimport numpy as np\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport openwave_link as link\n\n\nclass blk(gr.sync_block):\n    \"\"\"Sync-word-aligned, header-framed bit stream to message\"\"\"\n\n\
+      \    def __init__(self, tagname='sync'):\n        gr.sync_block.__init__(self, name='Framed Stream to Message', in_sig=[np.uint8], out_sig=[])\n        self.tagname = tagname\n        self.parser = link.FrameParser()\n        self.reassembler = link.FragmentReassembler()\n        self.armed = False\n        self.bitpos = 0\n        self.curbyte = 0\n        self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'dup': 0, 'lost': 0,\n                        'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0}\n        self.last_seq = None\n        self.last_flags = 0\n        self.message_port_register_out(pmt.intern('msg'))\n        self.message_port_register_out(pmt.intern('stats'))\n        self.message_port_register_out(pmt.intern('ack_needed'))\n        self.message_port_register_out(pmt.intern('ack_received'))\n\n    def _publish_stats(self):\n        c = self.counts\n        seq_str = str(self.last_seq) if self.last_seq is not None else '-'\n        text = (f\"OK:{c['ok']} \
+      \ CRC fail:{c['crc_fail']}  Bad length:{c['bad_length']}  \"\n                f\"Dup:{c['dup']}  Lost:{c['lost']}  ACKs rx:{c['acks_rx']}  \"\n                f\"Frag abort:{c['frag_aborted']}  Frag overflow:{c['frag_overflow']}  |  \"\n                f\"Seq:{seq_str}  Flags:{link.format_flags(self.last_flags)}\")\n        self.message_port_pub(pmt.intern('stats'), pmt.string_to_symbol(text))\n\n    def _update_seq(self, header):\n        seq = header['seq']\n        if self.last_seq is not None:\n            if seq == self.last_seq:\n                self.counts['dup'] += 1\n            else:\n                gap = (seq - self.last_seq - 1) % link.SEQ_MODULUS\n                # Bound the gap we'll believe as real loss vs. e.g. TX having\n                # restarted (seq reset to 0) - avoids one bogus huge count.\n                if 0 < gap < 1000:\n                    self.counts['lost'] += gap\n        self.last_seq = seq\n        self.last_flags = header['flags']\n\n    def _publish_text_and_maybe_ack(self,\
+      \ header, payload_bytes):\n        self.counts['ok'] += 1\n        text = payload_bytes.decode('utf-8', errors='replace')\n        if text:\n            self.message_port_pub(pmt.intern('msg'), pmt.string_to_symbol(text))\n        if link.needs_ack(header):\n            self.message_port_pub(pmt.intern('ack_needed'), pmt.from_long(header['seq']))\n\n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n        tags = self.get_tags_in_window(0, 0, len(in0), pmt.intern(self.tagname))\n        tag_offsets = {t.offset - self.nitems_read(0) for t in tags}\n\n        for i, bit in enumerate(in0):\n            if i in tag_offsets:\n                self.parser.reset()\n                self.armed = True\n                self.bitpos = 0\n                self.curbyte = 0\n\n            if not self.armed:\n                continue\n\n            self.curbyte = (self.curbyte << 1) | int(bit)\n            self.bitpos += 1\n            if self.bitpos == 8:\n              \
+      \  status, payload = self.parser.feed(self.curbyte)\n                self.bitpos = 0\n                self.curbyte = 0\n                if status == 'ok':\n                    header = self.parser.last_header\n\n                    if link.is_ack(header):\n                        self.counts['acks_rx'] += 1\n                        self.message_port_pub(pmt.intern('ack_received'), pmt.from_long(header['seq']))\n                    else:\n                        self._update_seq(header)\n                        if link.parse_flags(header['flags'])['fragmented']:\n                            frag_status, reassembled = self.reassembler.feed(header, payload)\n                            self.counts['frag_aborted'] = self.reassembler.abort_count\n                            self.counts['frag_overflow'] = self.reassembler.overflow_count\n                            if frag_status == 'complete':\n                                self._publish_text_and_maybe_ack(header, reassembled)\n     \
+      \                   else:\n                            self._publish_text_and_maybe_ack(header, payload)\n\n                    self._publish_stats()\n                    self.armed = False\n                elif status in ('crc_fail', 'bad_length'):\n                    self.counts[status] += 1\n                    self._publish_stats()\n                    self.armed = False\n\n        return len(in0)\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    tagname: '''sync'''
+  states:
+    _io_cache: ('Framed Stream to Message', 'blk', [('tagname', "'sync'")], [('0', 'byte', 1)], [('msg', 'message', 1), ('stats', 'message', 1), ('ack_needed', 'message', 1), ('ack_received', 'message', 1)], 'Sync-word-aligned, header-framed bit stream to message', ['tagname'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1256
+    - 560.0
+    rotation: 0
+    state: enabled
+- name: symbol_rate
+  id: parameter
+  parameters:
+    alias: ''
+    comment: symbol rate in baud - one of the OpenWave modes 600/1200/2400/4800/9600
+    hide: none
+    label: ''
+    short_id: r
+    type: intx
+    value: '9600'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 184
+    - 16.0
+    rotation: 0
+    state: enabled
+- name: blocks_message_strobe_ack_tick
+  id: blocks_message_strobe
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Drives str_to_pdu_0's ACK-retry timeout polling - unrelated to (and much faster than) any beacon strobe in this flowgraph.
+    msg: pmt.PMT_T
+    period: '500'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 32
+    - 320.0
+    rotation: 0
+    state: enabled
+- name: ack_responder_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nTurns a needed-ACK notification (a Sequence Number, from\nstream_display_sink_0's 'ack_needed' port) into an actual ACK frame PDU,\nready for PDU to Tagged Stream - the piece that was previously missing: RX\ncould recognize that a received frame wanted acknowledging, but nothing\nbuilt and transmitted the response.\n\nDeliberately simple, with no retry/reliability logic of its own - an ACK\nframe that itself gets lost just means the original sender's RetryManager\nwill retry the original message and (if this response path is reachable\nagain) get acknowledged on a later attempt.\n\"\"\"\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport openwave_link as link\n\n\nclass blk(gr.basic_block):\n    \"\"\"Ack Needed to ACK Frame PDU\"\"\"\n\n    def __init__(self, lead_pad=24, end_pad=24):\n        gr.basic_block.__init__(self, name='Ack Responder', in_sig=[], out_sig=[])\n        self.lead_pad\
+      \ = lead_pad\n        self.end_pad = end_pad\n        self.message_port_register_in(pmt.intern('ack_needed'))\n        self.message_port_register_out(pmt.intern('pdus'))\n        self.set_msg_handler(pmt.intern('ack_needed'), self.handle_ack_needed)\n\n    def handle_ack_needed(self, msg):\n        acked_seq = pmt.to_long(msg)\n        frame = link.build_ack_frame(acked_seq, lead_pad=self.lead_pad, end_pad=self.end_pad)\n        pdu = pmt.cons(pmt.make_dict(), pmt.init_u8vector(len(frame), list(frame)))\n        self.message_port_pub(pmt.intern('pdus'), pdu)\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    end_pad: '24'
+    lead_pad: '24'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    _io_cache: ('Ack Responder', 'blk', [('lead_pad', '24'), ('end_pad', '24')], [('ack_needed', 'message', 1)], [('pdus', 'message', 1)], 'Ack Needed to ACK Frame PDU', ['lead_pad', 'end_pad'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 96
+    - 616.0
+    rotation: 0
+    state: enabled
+connections:
+- - blocks_pack_k_bits_bb_0
+  - '0'
+  - digital_map_bb_0
+  - '0'
+- - blocks_throttle2_0
+  - '0'
+  - channels_channel_model_0
+  - '0'
+- - blocks_unpack_k_bits_bb_0
+  - '0'
+  - blocks_pack_k_bits_bb_0
+  - '0'
+- - blocks_unpack_k_bits_bb_1
+  - '0'
+  - digital_correlate_access_code_tag_xx_0
+  - '0'
+- - channels_channel_model_0
+  - '0'
+  - digital_symbol_sync_xx_0
+  - '0'
+- - digital_chunks_to_symbols_xx_0
+  - '0'
+  - filter_interp_fir_filter_xxx_0
+  - '0'
+- - digital_constellation_decoder_cb_0
+  - '0'
+  - blocks_unpack_k_bits_bb_1
+  - '0'
+- - digital_correlate_access_code_tag_xx_0
+  - '0'
+  - stream_display_sink_0
+  - '0'
+- - digital_diff_encoder_bb_0
+  - '0'
+  - digital_chunks_to_symbols_xx_0
+  - '0'
+- - digital_diff_phasor_cc_0
+  - '0'
+  - digital_constellation_decoder_cb_0
+  - '0'
+- - digital_diff_phasor_cc_0
+  - '0'
+  - qtgui_const_sink_x_0
+  - '0'
+- - digital_map_bb_0
+  - '0'
+  - digital_diff_encoder_bb_0
+  - '0'
+- - digital_symbol_sync_xx_0
+  - '0'
+  - digital_diff_phasor_cc_0
+  - '0'
+- - filter_interp_fir_filter_xxx_0
+  - '0'
+  - blocks_throttle2_0
+  - '0'
+- - pdu_pdu_to_tagged_stream_0
+  - '0'
+  - blocks_unpack_k_bits_bb_0
+  - '0'
+- - qtgui_edit_box_msg_0
+  - msg
+  - str_to_pdu_0
+  - msg
+- - str_to_pdu_0
+  - pdus
+  - pdu_pdu_to_tagged_stream_0
+  - pdus
+- - stream_display_sink_0
+  - msg
+  - qtgui_edit_box_msg_1
+  - val
+- - stream_display_sink_0
+  - stats
+  - qtgui_edit_box_msg_stats
+  - val
+- - blocks_message_strobe_ack_tick
+  - strobe
+  - str_to_pdu_0
+  - tick
+- - stream_display_sink_0
+  - ack_needed
+  - ack_responder_0
+  - ack_needed
+- - ack_responder_0
+  - pdus
+  - pdu_pdu_to_tagged_stream_0
+  - pdus
+- - stream_display_sink_0
+  - ack_received
+  - str_to_pdu_0
+  - ack_received
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
