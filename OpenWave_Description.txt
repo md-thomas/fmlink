@@ -43,7 +43,13 @@ Physical Layer (PHY)
 
 Link layer
 
-    Preamble:	8 bytes (timing preamble) 55 55 55 55 55 55 55 55
+    Preamble:	32 bytes (LFSR pseudo-noise sequence, seed 1, 9-bit register,
+			taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE).
+			Chosen over a repeating pattern (e.g. 55 55...) because a PN
+			sequence's autocorrelation has a sharp, unambiguous peak
+			(worst sidelobe ~9% of peak) vs. a repeating pattern's ~99%
+			sidelobes at every symbol-period offset, which made exact
+			frame-start detection under noise unreliable.
     Sync Word: 	4 bytes (CCDS sync word) 0x1ACFFC1D (for correlation)
 	Header:	    32 bytes
     Payload: 	Variable (maximum 1024 bytes)
@@ -115,9 +121,12 @@ Link layer
         Not valid (exceeds 8 bytes)
 
 
-    Example: 
-        55 55 55 55 55 55 55 55 	<- Preamble 
-        1A CF FC 1D 			<- Sync Word 
+    Example:
+        80 7D 33 D8 A1 52 4E 11 	<- Preamble (32 bytes,
+        1E 42 5E FB 93 7E 20 21 	   LFSR pseudo-noise
+        D5 1A 78 FD B4 8C C8 B1 	   sequence, shown here
+        B8 C3 2D 60 98 18 9F CB 	   across 4 lines)
+        1A CF FC 1D 			<- Sync Word
         01 				<- Version 
         02 				<- Waveform Mode ID (2400 bps) 
         01 				<- Packet Type (Data) 

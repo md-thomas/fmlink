@@ -31,7 +31,10 @@ FragmentReassembler's docstring for the full reasoning.
 
 The other header fields (Waveform Mode ID, Source/Destination ID) are written
 at their correct fixed offsets so the 32-byte layout matches the full spec,
-but are placeholder values on TX and are not parsed/acted on by RX yet.
+but are placeholder (zero/empty) values on every TX chain so far. rx_rtlsdr.grc
+is the one RX chain that parses and acts on them now (format_mode() for
+display, is_for_station() for Destination ID address filtering) -
+phy_sim_loopback.grc's loopback RX does not.
 """
 import struct
 import time
@@ -91,6 +94,20 @@ PACKET_TYPE_DATA = 0x01
 PACKET_TYPE_ACK = 0x02
 PACKET_TYPE_BEACON = 0x03
 PACKET_TYPE_CONTROL = 0x04
+
+_PACKET_TYPE_NAMES = {
+    PACKET_TYPE_DATA: 'Data',
+    PACKET_TYPE_ACK: 'ACK',
+    PACKET_TYPE_BEACON: 'Beacon',
+    PACKET_TYPE_CONTROL: 'Control',
+}
+
+
+def format_packet_type(packet_type):
+    """Packet Type byte -> display name, e.g. 'Data' or 'Unknown(0x05)'."""
+    name = _PACKET_TYPE_NAMES.get(packet_type)
+    return name if name is not None else f'Unknown(0x{packet_type:02X})'
+
 
 VERSION = 1
 
@@ -165,6 +182,29 @@ def build_frame(payload, lead_pad=24, end_pad=24, **header_kwargs):
     somewhere to flow into before the burst source goes idle.
     """
     header = build_header(len(payload), **header_kwargs)
+    crc = zlib.crc32(header + payload) & 0xFFFFFFFF
+    packet = header + payload + struct.pack('>I', crc)
+    return b'\x00' * lead_pad + PREAMBLE + SYNC_WORD + packet + b'\x00' * end_pad
+
+
+def build_frame_with_bad_length(payload, declared_length, lead_pad=24, end_pad=24,
+                                 version=VERSION, packet_type=PACKET_TYPE_DATA,
+                                 mode_id=0, flags=0, seq=0, src_id=b'', dst_id=b''):
+    """Like build_frame(), but writes declared_length into the header's
+    Payload Length field instead of len(payload) - for deliberately testing
+    FrameParser's 'bad_length' rejection path (see openwave_cli.py's `send
+    --bad-length`). declared_length is NOT range-checked (that's the point -
+    a real payload_len this far outside 0..MAX_PAYLOAD_LEN should never occur
+    naturally); FrameParser catches it immediately after parsing the header,
+    before it would ever try to read declared_length bytes of payload or
+    check a CRC over them - so the CRC computed here (over the real
+    header+payload, which is a lie once declared_length disagrees with
+    len(payload)) is never actually checked by a well-behaved receiver."""
+    header = _HEADER_STRUCT.pack(
+        version, packet_type, mode_id, flags, seq % SEQ_MODULUS,
+        src_id[:8].ljust(8, b'\x00'), dst_id[:8].ljust(8, b'\x00'),
+        declared_length % 0x10000, b'\x00' * 8,
+    )
     crc = zlib.crc32(header + payload) & 0xFFFFFFFF
     packet = header + payload + struct.pack('>I', crc)
     return b'\x00' * lead_pad + PREAMBLE + SYNC_WORD + packet + b'\x00' * end_pad
@@ -245,6 +285,257 @@ def needs_ack(header):
 def is_ack(header):
     """True if a received (CRC-verified) header is itself an ACK response."""
     return header['packet_type'] == PACKET_TYPE_ACK and parse_flags(header['flags'])['ack_response']
+
+
+def iter_frames(data):
+    """Scan raw bytes for PREAMBLE+SYNC_WORD occurrences (as produced by
+    build_frame()/build_fragmented_frames()) and yield a
+    (status, header_or_None, payload_or_None) tuple for each: ('ok', header,
+    payload), ('crc_fail', None, None), or ('bad_length', None, None).
+
+    Byte-granularity and noise-free - this is for offline/file-based testing
+    of the link layer itself (see openwave_cli.py), NOT a stand-in for a
+    real sync-word correlator over a noisy sample stream. That job (finding
+    the sync word in a bitstream that's gone through modulation, a channel,
+    and demodulation) is what digital_correlate_access_code_tag_bb +
+    FrameParser do together inside the GNU Radio flowgraphs - this function
+    only has to find literal bytes in a literal buffer.
+    """
+    marker = PREAMBLE + SYNC_WORD
+    pos = 0
+    while True:
+        idx = data.find(marker, pos)
+        if idx == -1:
+            return
+        parser = FrameParser()
+        i = idx + len(marker)
+        found_result = False
+        while i < len(data):
+            status, payload = parser.feed(data[i])
+            i += 1
+            if status == 'ok':
+                yield 'ok', parser.last_header, payload
+                found_result = True
+                break
+            if status in ('crc_fail', 'bad_length'):
+                yield status, None, None
+                found_result = True
+                break
+        if not found_result:
+            return  # ran out of bytes mid-frame; nothing more to find
+        pos = idx + 1
+
+
+def describe_frames(data):
+    """Like iter_frames(), but yields full diagnostic detail instead of just
+    (header, payload) - every raw byte range (preamble, sync word, header,
+    payload, CRC) plus whether the CRC actually matched, for tools that want
+    to *display* a frame rather than just consume it (see openwave_cli.py's
+    `dump` command). Byte-granularity and noise-free, same caveat as
+    iter_frames() about not being a stand-in for a real sync-word correlator.
+
+    Yields one dict per PREAMBLE+SYNC_WORD marker found in data:
+      {'offset': int, 'status': 'ok'|'crc_fail'|'bad_length'|'truncated',
+       'preamble': bytes, 'sync_word': bytes,
+       'header_bytes': bytes or None, 'header': dict or None,
+       'payload': bytes or None, 'crc_bytes': bytes or None,
+       'total_len': int or None}
+    'header'/'payload'/'crc_bytes'/'total_len' are None whenever there
+    weren't enough bytes left to parse that far (status 'truncated'), or
+    (header_bytes/header only) when payload_len itself was out of range
+    (status 'bad_length' - the header parsed, but nothing past it can be
+    trusted to be at the right offset)."""
+    marker = PREAMBLE + SYNC_WORD
+    pos = 0
+    while True:
+        idx = data.find(marker, pos)
+        if idx == -1:
+            return
+        preamble = data[idx:idx + len(PREAMBLE)]
+        sync_word = data[idx + len(PREAMBLE):idx + len(marker)]
+        header_start = idx + len(marker)
+        header_bytes = data[header_start:header_start + HEADER_LEN]
+
+        if len(header_bytes) < HEADER_LEN:
+            yield {'offset': idx, 'status': 'truncated', 'preamble': preamble,
+                   'sync_word': sync_word, 'header_bytes': None, 'header': None,
+                   'payload': None, 'crc_bytes': None, 'total_len': None}
+            return
+
+        header = parse_header(header_bytes)
+        if not (0 <= header['payload_len'] <= MAX_PAYLOAD_LEN):
+            yield {'offset': idx, 'status': 'bad_length', 'preamble': preamble,
+                   'sync_word': sync_word, 'header_bytes': header_bytes, 'header': header,
+                   'payload': None, 'crc_bytes': None, 'total_len': None}
+            pos = idx + 1
+            continue
+
+        payload_start = header_start + HEADER_LEN
+        payload_end = payload_start + header['payload_len']
+        crc_end = payload_end + CRC_LEN
+        if len(data) < crc_end:
+            yield {'offset': idx, 'status': 'truncated', 'preamble': preamble,
+                   'sync_word': sync_word, 'header_bytes': header_bytes, 'header': header,
+                   'payload': None, 'crc_bytes': None, 'total_len': None}
+            return
+
+        payload = data[payload_start:payload_end]
+        crc_bytes = data[payload_end:crc_end]
+        received_crc, = struct.unpack('>I', crc_bytes)
+        status = 'ok' if (zlib.crc32(header_bytes + payload) & 0xFFFFFFFF) == received_crc else 'crc_fail'
+
+        yield {'offset': idx, 'status': status, 'preamble': preamble, 'sync_word': sync_word,
+               'header_bytes': header_bytes, 'header': header, 'payload': payload,
+               'crc_bytes': crc_bytes, 'total_len': crc_end - idx}
+        pos = idx + 1
+
+
+class LinkReceiver:
+    """RX dispatch logic: address filtering, ACK vs. fragmented vs. plain
+    Data frame handling, sequence gap/duplicate tracking, and a formatted
+    stats line. This is the byte-level, GNU-Radio-free counterpart to the
+    dispatch logic embedded in rx_rtlsdr.grc's stream_display_sink_0
+    epy_block - feed it (header, payload) pairs from iter_frames() (offline/
+    file-based use) or your own sync detector + FrameParser, and it behaves
+    the same way.
+
+    on_message/on_ack_needed/on_ack_received are optional callbacks (default
+    no-ops), fired as described in feed_frame().
+    """
+
+    def __init__(self, station_id='', on_message=None, on_ack_needed=None, on_ack_received=None):
+        self.station_id = station_id
+        self.reassembler = FragmentReassembler()
+        self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'dup': 0, 'lost': 0,
+                        'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0, 'not_for_us': 0}
+        self.last_seq = None
+        self.last_flags = 0
+        self.last_mode = 0
+        self.last_src = ''
+        self.last_dst = ''
+        self._on_message = on_message or (lambda text: None)
+        self._on_ack_needed = on_ack_needed or (lambda seq: None)
+        self._on_ack_received = on_ack_received or (lambda seq: None)
+
+    def _update_seq(self, header):
+        seq = header['seq']
+        if self.last_seq is not None:
+            if seq == self.last_seq:
+                self.counts['dup'] += 1
+            else:
+                gap = (seq - self.last_seq - 1) % SEQ_MODULUS
+                # Bound the gap we'll believe as real loss vs. e.g. TX having
+                # restarted (seq reset to 0) - avoids one bogus huge count.
+                if 0 < gap < 1000:
+                    self.counts['lost'] += gap
+        self.last_seq = seq
+        self.last_flags = header['flags']
+
+    def _update_addressing(self, header):
+        self.last_mode = header['mode_id']
+        self.last_src = decode_station_id(header['src_id'])
+        self.last_dst = decode_station_id(header['dst_id'])
+
+    def _publish(self, header, payload_bytes):
+        self.counts['ok'] += 1
+        text = payload_bytes.decode('utf-8', errors='replace')
+        if text:
+            self._on_message(text)
+        if needs_ack(header):
+            self._on_ack_needed(header['seq'])
+
+    def feed_frame(self, header, payload):
+        """Feed one CRC-verified (header, payload) pair - e.g. the 'ok'
+        result from FrameParser.feed(), or one yielded by iter_frames().
+        Updates counts/last_* and fires callbacks:
+          - dropped silently (counted under 'not_for_us') if Destination ID
+            doesn't clear is_for_station()
+          - an ACK frame -> on_ack_received(seq)
+          - a fragment -> buffered until the run completes, then on_message
+            fires with the full reassembled text
+          - a plain Data frame -> on_message fires immediately
+        A Data frame (fragmented or not) with the ack_requested flag also
+        fires on_ack_needed(seq), in addition to the above."""
+        self._update_seq(header)
+        self._update_addressing(header)
+
+        if not is_for_station(header['dst_id'], self.station_id):
+            self.counts['not_for_us'] += 1
+            return
+
+        if is_ack(header):
+            self.counts['acks_rx'] += 1
+            self._on_ack_received(header['seq'])
+            return
+
+        if parse_flags(header['flags'])['fragmented']:
+            frag_status, reassembled = self.reassembler.feed(header, payload)
+            self.counts['frag_aborted'] = self.reassembler.abort_count
+            self.counts['frag_overflow'] = self.reassembler.overflow_count
+            if frag_status == 'complete':
+                self._publish(header, reassembled)
+            return
+
+        self._publish(header, payload)
+
+    def feed_crc_failure(self, status):
+        """Call for a non-'ok' FrameParser.feed()/iter_frames() result:
+        status is 'crc_fail' or 'bad_length'."""
+        self.counts[status] += 1
+
+    def stats_line(self):
+        """Formatted one-line summary, matching rx_rtlsdr.grc's 'stats' port."""
+        c = self.counts
+        seq_str = str(self.last_seq) if self.last_seq is not None else '-'
+        return (f"OK:{c['ok']}  CRC fail:{c['crc_fail']}  Bad length:{c['bad_length']}  "
+                f"Dup:{c['dup']}  Lost:{c['lost']}  ACKs rx:{c['acks_rx']}  "
+                f"Frag abort:{c['frag_aborted']}  Frag overflow:{c['frag_overflow']}  "
+                f"Not for us:{c['not_for_us']}  |  "
+                f"Seq:{seq_str}  Flags:{format_flags(self.last_flags)}  "
+                f"{format_mode(self.last_mode)}  "
+                f"Src:{self.last_src or '-'}  Dst:{self.last_dst or '-'}")
+
+
+WAVEFORM_MODE_SYMBOL_RATES = {0: 600, 1: 1200, 2: 2400, 3: 4800, 4: 9600}
+
+BROADCAST_ID = 'ALL'
+
+
+def format_mode(mode_id):
+    """Waveform Mode ID -> short display string, e.g. 'Mode 2 (2400 sym/s)'."""
+    rate = WAVEFORM_MODE_SYMBOL_RATES.get(mode_id)
+    if rate is None:
+        return f'Mode {mode_id} (unknown)'
+    return f'Mode {mode_id} ({rate} sym/s)'
+
+
+def decode_station_id(id_bytes):
+    """Decode an 8-byte Source/Destination ID field per spec: zero-padded
+    ASCII/UTF-8 with trailing 0x00 stripped. Never raises on malformed input
+    (replaces undecodable bytes) - a CRC-verified frame's src/dst field is
+    still only as trustworthy as whatever the sender actually put there, and
+    every TX chain so far sends an all-zero placeholder (decodes to '')."""
+    return id_bytes.rstrip(b'\x00').decode('utf-8', errors='replace')
+
+
+def is_for_station(dst_id_bytes, station_id):
+    """True if a received frame's Destination ID should be accepted by a
+    receiver identifying as station_id.
+
+    station_id='' means "not configured to filter" - accepts every frame.
+    This is also the only sane default today since no TX chain populates a
+    real Destination ID yet (see this module's docstring): they all send the
+    same all-zero placeholder, which decodes to ''.
+
+    When station_id IS set, accepts an exact match or either spelling of
+    broadcast: the literal 'ALL' callsign from OpenWave_Description.txt's
+    example, or an empty/placeholder dst_id (so today's TX chains keep being
+    heard by an addressed receiver instead of silently going unheard just
+    because they don't populate a real destination yet)."""
+    if not station_id:
+        return True
+    dst = decode_station_id(dst_id_bytes)
+    return dst in ('', BROADCAST_ID, station_id)
 
 
 class RetryManager:

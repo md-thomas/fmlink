@@ -1,12 +1,87 @@
-test1.grc - Interactive QPSK Differential Modem
-================================================
+OpenWave - Implementation Overview
+===================================
 
-This flow graph is a loopback QPSK modem test bench: type a message into the
-"Send" box, it gets modulated, pushed through a simulated noisy channel, then
-demodulated and shown in the "Received" box. It's meant for exercising/
-demonstrating a differentially-encoded QPSK modem chain, not as a real
-transmit/receive system (there's no radio hardware involved - the "channel"
-is a software noise/impairment model).
+This file explains what's actually in this repo and how the pieces fit
+together. For the protocol/wire-format spec itself (frame layout, header
+fields, Waveform Modes), see OpenWave_Description.txt. For the current
+status of each piece and what's not done yet, see tasklist.txt.
+
+File map
+--------
+openwave_link.py
+    The link layer. Header build/parse, CRC32, ACK/retry, fragmentation,
+    the preamble/sync-word, and a full RX dispatch implementation
+    (LinkReceiver) - all pure Python, zero GNU Radio dependency. This is
+    the single source of truth for the framing format; phy_sim_loopback.grc,
+    tx_pluto.grc, and rx_rtlsdr.grc's embedded blocks all import it so they
+    can't drift out of sync with each other. See its module docstring and
+    tests/test_openwave_link.py for the full API.
+
+openwave_cli.py
+    Command-line, file-based testing of the link layer - build and parse
+    real frame bytes with no GNU Radio and no hardware. `send` writes a
+    frame to a file (plain text or JSON payload, with options to
+    deliberately corrupt it for negative testing); `dump` hex-dumps and
+    labels every field of every frame in a file; `recv` decodes a file
+    through the full LinkReceiver pipeline. Run `python3 openwave_cli.py
+    help` for usage and examples.
+
+openwave_modem.py
+    PHY-layer bits <-> symbols mapping (currently BPSK only - see
+    tasklist.txt Phase 6 for the eventual multi-mode plan). Pure Python,
+    zero dependencies. Deliberately has no symbol-rate concept - see its
+    module docstring for why that's a hard boundary until pulse shaping.
+
+openwave_pulse.py
+    RRC pulse shaping: symbols <-> real timed samples. Needs numpy - the
+    first stage where a real DSP dependency became unavoidable. alpha=0.35
+    and an 11-symbol filter span match the convention already used in
+    tx_pluto.grc/phy_sim_loopback.grc's firdes.root_raised_cosine() calls.
+
+modulate.py / pulseshape.py / matchedfilter.py / demodulate.py / plot_constellation.py
+    CLI stages built on the two modules above, chained together into a
+    full bits -> symbols -> RRC samples -> symbols -> bits pipeline with a
+    visualization step in the middle. See "PHY-Layer Pipeline" below for
+    the full command sequence, what each stage does, and why matched
+    filtering is required (not optional) for a clean constellation.
+
+phy_sim_loopback.grc (formerly test1.grc / test2.grc)
+    Simulated loopback testbench: TX -> AWGN channel model -> RX, all in one
+    GNU Radio process, no hardware involved. The GUI test bench for
+    exercising the full modem+link-layer chain end to end. Detailed below.
+
+tx_pluto.grc / rx_rtlsdr.grc (formerly test3_tx.grc / test3_rx.grc)
+    Real SDR hardware bring-up, split into independent TX and RX stations:
+    tx_pluto.grc drives an ADALM-Pluto (iio_pluto_sink), rx_rtlsdr.grc
+    receives on an RTL-SDR (osmosdr). This is a validation step on the way
+    to the actual deployment target (driving real transceivers through
+    their audio ports - see tasklist.txt Phase 5), not the destination
+    itself. Detailed below.
+
+tests/
+    Regression suite - run everything with `./run_tests.sh`, or a single
+    module with `./run_tests.sh tests.test_openwave_link`.
+      test_openwave_link.py   - fast, pure-Python tests of the link layer
+      test_phy_loopback.py    - headless GNU Radio runs of phy_sim_loopback.grc
+      test_flowgraphs_compile.py - grcc compile check for all three .grc files
+
+test.grc, test1.grc, test1_*.py, test2.py, test2_*.py
+    Earlier prototypes, superseded by phy_sim_loopback.grc. test2.grc itself
+    was removed; test2.py (its last compiled output) and its companion
+    epy_block .py files are orphaned leftovers. Left in the repo for history
+    but not maintained.
+
+
+phy_sim_loopback.grc - Interactive pi/4-QPSK Modem Loopback
+=============================================================
+
+Type a message into the "Send" box, it gets framed (real header, CRC32,
+optionally fragmented) and modulated, pushed through a simulated noisy
+channel, then demodulated, parsed, and shown in the "Received" box, with a
+running "Link Stats" line (frame counts, sequence/flag info, mode, src/dst).
+There's no radio hardware involved - the "channel" is a software noise
+model - so this is for exercising/demonstrating the modem+link-layer chain,
+not a real transmit/receive system.
 
 Variables & Parameters
 -----------------------
@@ -16,139 +91,257 @@ msg (Parameter, -m/--msg)
     Send box is what gets transmitted.
 
 symbol_rate (Parameter, -r/--symbol-rate)
-    Baud rate in symbols/sec, 1200-19200. Command-line configurable.
+    Baud rate in symbols/sec - one of the OpenWave modes 600-9600.
+    Command-line configurable.
 
 sps (Variable = 4)
     Samples per symbol used throughout the modulator/demodulator.
 
 samp_rate (Variable = symbol_rate * sps)
-    The complex sample rate the TX/channel/RX chain actually runs at.
-    Only feeds the Throttle block below - it's what makes the simulation
-    run at a realistic pace instead of as fast as the CPU allows.
+    The complex sample rate the TX/channel/RX chain actually runs at. Feeds
+    the Throttle block - makes the simulation run at a realistic pace
+    instead of as fast as the CPU allows.
 
-nfilts / rrc_taps (Variables)
-    Left over from an earlier design that used a polyphase-filterbank
-    resampler in Symbol Sync. The current Symbol Sync block uses the
-    simpler MMSE 8-tap interpolator instead, so these two are effectively
-    unused - harmless, just not doing anything anymore.
-
-qpsk_const (Variable, Constellation Object)
-    The QPSK constellation (4 points, Gray-coded symbol map) shared by the
-    modulator, demodulator, and Symbol Sync's slicer.
+ring_points / qpsk_const-equivalent (variable_constellation)
+    An 8-point ring constellation, differentially encoded (modulus 8) on
+    TX and un-wound with a differential phasor on RX. This is the standard
+    trick for pi/4-QPSK: alternating between two 4-point QPSK constellations
+    45 degrees apart, which is what actually produces the "pi/4" phase
+    rotation between symbols. Also resolves the Costas loop's phase
+    ambiguity, same as plain differential QPSK does.
 
 Transmit chain
 --------------
-QT GUI Message Edit Box ("Send", qtgui_edit_box_msg_0)
-    Text box. Posts a message with the typed text every time you press
-    Enter (or the box loses focus).
+QT GUI Message Edit Box ("Send")
+    Posts a message with the typed text every time you press Enter (or the
+    box loses focus).
 
-str_to_pdu (embedded Python block)
-    Bridges the plain string message from the Send box into a proper 
-    Protocol Data Unit (PDU):
-    pads the text with 48 zero bytes on each side and wraps it as a
-    byte-vector message. The padding exists so the real payload isn't the
-    very first/last thing in the burst - it gives the receiver's Costas
-    loop and Symbol Sync time to lock on before the real data arrives, and
-    absorbs the TX/RX filters' group delay at the tail end.
+str_to_pdu_0 (embedded Python block)
+    Wraps the message into a full OpenWave link-layer frame (or several, if
+    it's long enough to need fragmenting) using openwave_link.build_fragmented_frames -
+    real preamble, sync word, header (Sequence Number, Flags, Payload
+    Length, etc.), payload, and CRC32. If ack_requested is enabled, engages
+    openwave_link.RetryManager and retransmits on timeout (driven by a
+    500ms message-strobe tick) until acknowledged or max_retries is
+    exhausted. See the block's own docstring in the .grc for the full
+    fragmentation/ACK interaction.
 
-PDU to Tagged Stream (pdu_pdu_to_tagged_stream_0)
-    Converts the incoming PDU into an actual byte stream burst (with a
-    "packet_len" tag marking its start) so it can flow into the ordinary
-    streaming blocks below. This is what actually kicks off transmission -
-    nothing flows through the rest of the TX chain until a message arrives
-    here.
+PDU to Tagged Stream / Unpack K Bits / Pack K Bits / Differential Encoder
+    Converts the frame byte PDU into a bitstream, then 8-bit-to-symbol
+    groups, then differentially encodes each symbol (modulus 8) relative to
+    the previous one - same phase-ambiguity fix described above.
 
-Unpack K Bits, k=8 (blocks_unpack_k_bits_bb_0)
-    Splits each byte into 8 individual bits (1 bit per output item).
+Chunks to Symbols / Interpolating FIR Filter (RRC)
+    Maps symbols to the ring constellation's complex points, then upsamples
+    by sps and applies root-raised-cosine pulse shaping (0.35 roll-off) to
+    produce the transmitted complex baseband signal.
 
-Pack K Bits, k=2 (blocks_pack_k_bits_bb_0)
-    Regroups those individual bits into 2-bit symbols (values 0-3) - one
-    output item per QPSK symbol.
-
-Differential Encoder, modulus 4 (digital_diff_encoder_bb_0)
-    Encodes each symbol relative to the previous one instead of in
-    absolute terms. This is the fix for the Costas loop's 4-fold phase
-    ambiguity below: a QPSK Costas loop can lock onto the correct phase or
-    any 90/180/270-degree rotation of it, and has no way to tell which.
-    Differential encoding/decoding makes the recovered bits correct
-    regardless of which of the 4 lock points the receiver settles on.
-
-Chunks to Symbols (digital_chunks_to_symbols_xx_0)
-    Maps each 2-bit symbol value to its complex QPSK constellation point.
-
-Interpolating FIR Filter / RRC pulse shaping (filter_interp_fir_filter_xxx_0)
-    Upsamples by sps (4x) and applies root-raised-cosine pulse shaping
-    (excess bandwidth 0.35), producing the actual complex baseband signal.
-
-Throttle (blocks_throttle2_0)
+Throttle
     Paces the flow graph to samp_rate instead of free-running as fast as
-    the CPU allows. Not needed for correctness with these message-driven
-    bursts, but keeps CPU usage sane and makes the timing behave like a
-    real modem running at the chosen baud rate.
+    the CPU allows.
 
 Channel simulation
 -------------------
-Channel Model (channels_channel_model_0)
-    Adds a small amount of AWGN noise (noise_voltage=0.001) to the
-    transmitted signal. frequency_offset and epsilon (timing offset) are
-    both left at 0/1.0 (no impairment) - noise is the only thing actually
-    being simulated right now.
+Channel Model
+    Adds a small amount of AWGN noise to the transmitted signal - the only
+    impairment currently simulated (frequency/timing offset left at
+    none/1.0).
 
 Receive chain
 -------------
-Symbol Sync (digital_symbol_sync_xx_0)
-    Recovers symbol timing using a Modified Mueller & Muller timing-error
-    detector and an MMSE 8-tap interpolator, decimating back down to one
-    sample per symbol.
+Symbol Sync / Costas Loop / Constellation Decoder / Differential Phasor
+    Timing recovery (Modified M&M TED, MMSE 8-tap interpolator), carrier
+    phase recovery (order-4 Costas loop), slicing to the nearest ring point,
+    and differential decoding to resolve the Costas loop's phase ambiguity -
+    same roles as in the TX chain, run in reverse.
 
-Costas Loop, order 4 (digital_costas_loop_cc_0)
-    Recovers carrier phase for QPSK. As noted above, it has a 4-fold phase
-    ambiguity that's resolved downstream by differential decoding rather
-    than here.
+Correlate Access Code Tag
+    Finds the sync word in the recovered bitstream and tags exactly where
+    the header starts (tag name "sync") - this replaces any zero-run/marker
+    guessing from earlier prototype versions.
 
-Constellation Decoder (digital_constellation_decoder_cb_0)
-    Slices each received complex sample to the nearest QPSK constellation
-    point and outputs the corresponding 2-bit symbol value.
+stream_display_sink_0 (embedded Python block)
+    Uses the "sync" tag to know exactly where the header starts, then
+    openwave_link.FrameParser to collect Header+Payload+CRC32 (per the
+    header's real Payload Length field) and verify the CRC. Tracks Sequence
+    Number (gap/duplicate detection), decodes Mode ID and Source/
+    Destination ID, handles ACK frames and fragment reassembly, and
+    publishes a formatted stats line. See openwave_link.LinkReceiver for the
+    GNU-Radio-free version of this same dispatch logic.
 
-Differential Decoder, modulus 4 (digital_diff_decoder_bb_0)
-    Undoes the differential encoding from the TX side, making the output
-    correct regardless of the Costas loop's phase-lock ambiguity.
+ack_responder_0 (embedded Python block)
+    Turns a needed-ACK notification from stream_display_sink_0's
+    'ack_needed' port into a real ACK frame PDU. Feeds back through the same
+    TX chain and channel, closing a real ACK/retry loop entirely within this
+    one flow graph - something tx_pluto.grc/rx_rtlsdr.grc structurally can't
+    do, since an RTL-SDR receiver has no transmit capability at all.
 
-Unpack K Bits, k=2 (blocks_unpack_k_bits_bb_1)
-    Splits each 2-bit symbol back into individual bits.
+QT GUI Message Edit Box ("Received") / ("Link Stats")
+    Display the decoded message text and the running stats line,
+    respectively.
 
-Pack K Bits, k=8 (blocks_pack_k_bits_bb_1)
-    Repacks those bits into full 8-bit bytes - the final recovered byte
-    stream.
+QT GUI Constellation Sink
+    Plots the complex samples after carrier recovery (before slicing) - the
+    "is the modem actually locked" visual. A clean run shows eight tight
+    clusters (the ring constellation); a still-acquiring or badly-tuned loop
+    shows a smeared ring or a rotating blob instead.
 
-stream_display_sink (embedded Python block)
-    Keeps a rolling 512-byte buffer of the recovered bytes and continuously
-    scans it for the zero-padding markers str_to_pdu added on the way out.
-    Whenever it finds a complete, new (changed) message framed between two
-    such markers, it publishes it as a string message.
 
-    This is deliberately NOT tag-based (i.e. it doesn't use the
-    "packet_len" tag from PDU to Tagged Stream): an earlier version tried
-    that with Tagged Stream to PDU and it crashed - the Costas loop/Symbol
-    Sync only preserve tag positions approximately, which is fine for a
-    continuous repeating stream but not exact enough for a strict,
-    isolated one-shot burst. Scanning for the zero-padding markers is more
-    forgiving and is what actually works reliably here.
+tx_pluto.grc / rx_rtlsdr.grc - Real SDR Hardware Bring-Up
+=============================================================
 
-QT GUI Message Edit Box ("Received", qtgui_edit_box_msg_1)
-    Displays whatever text stream_display_sink publishes.
+Same modem and link-layer chain as phy_sim_loopback.grc, but split into two
+independent stations talking over real RF instead of a simulated channel -
+tx_pluto.grc transmits on an ADALM-Pluto, rx_rtlsdr.grc receives on an
+RTL-SDR. Run them as two separate processes (optionally on two different
+machines).
 
-QT GUI Constellation Sink (qtgui_const_sink_x_0)
-    Plots the complex samples coming out of the Costas loop (i.e. after
-    carrier recovery, before slicing/decoding) - this is the "is the modem
-    actually locked" visual. A clean run shows four tight clusters; a
-    still-acquiring or badly-tuned loop shows a smeared ring or a rotating
-    blob instead.
+tx_pluto.grc parameters
+------------------------
+msg (-m/--msg), symbol_rate (-r/--symbol-rate)
+    Same as phy_sim_loopback.grc.
 
-GUI layout note
-----------------
-Both Message Edit Boxes have an explicit "GUI Hint" (0,0,1,1 for Send,
-1,0,1,1 for Received) so Send always renders above Received. Without a GUI
-Hint, GNU Radio Companion falls back to its own internal widget ordering,
-which doesn't necessarily match canvas position or the order blocks appear
-in the file.
+center_freq_default (-f/--center-freq-default)
+    Center frequency in Hz (default 433 MHz, 70cm amateur band). Must match
+    rx_rtlsdr.grc's center_freq_default.
+
+pluto_uri (-u/--pluto-uri)
+    IIO URI for the Pluto device (blank = auto-detect).
+
+tx_atten (-a/--tx-atten)
+    Pluto TX attenuation in dB (higher = less power).
+
+rx_rtlsdr.grc parameters
+--------------------------
+symbol_rate (-r/--symbol-rate), center_freq_default (-f/--center-freq-default)
+    Same as above - center_freq_default must match tx_pluto.grc's.
+
+rtl_gain (-g/--rtl-gain), rtl_ppm (-c/--rtl-ppm)
+    Manual RF gain in dB, and frequency correction in ppm (calibrate with
+    `rtl_test -p` or equivalent before first use - RTL-SDR crystal error can
+    be tens of ppm, which at UHF can exceed the whole channel width).
+
+station_id (-s/--station-id)
+    This receiver's own callsign. Blank (default) = accept every frame
+    unfiltered - the only sane default today since no TX chain populates a
+    real Destination ID yet. Once set, only frames addressed to station_id
+    or a broadcast (the literal 'ALL' callsign, or that same placeholder)
+    are processed further; everything else is dropped and counted under
+    'not_for_us' in the stats line. See openwave_link.is_for_station().
+
+capture_file (-o/--capture-file)
+    Path to append every completed frame attempt to - successful, CRC-
+    failed, and bad-length alike - in openwave_link.build_frame()'s exact
+    byte format. Blank (default) = disabled. A capture file can be inspected
+    later with no conversion:
+        python3 openwave_cli.py dump -i capture.bin
+        python3 openwave_cli.py recv -i capture.bin
+    This is the tool for "something went wrong on the air, let me look at
+    exactly what was received afterward."
+
+What's not simulated here that phy_sim_loopback.grc doesn't have to deal
+with: real RF impairments (frequency offset, multipath, actual noise floor),
+and the fact that RTL-SDR is receive-only, so rx_rtlsdr.grc structurally
+cannot transmit an ACK back even when a received frame requests one - the
+ACK/retry loop only closes in phy_sim_loopback.grc today (see tasklist.txt
+2.9 for the sketch of what full-duplex hardware would take).
+
+
+openwave_cli.py - File-Based Link-Layer Testing
+====================================================
+
+Run `python3 openwave_cli.py help` (or with no arguments) for full usage.
+Quick reference:
+
+    send: build a frame and write it to a file
+        python3 openwave_cli.py send "hello world" -o burst.bin
+        python3 openwave_cli.py send --json '{"cmd": "ping"}' -o burst.bin
+        python3 openwave_cli.py send "for w1aw" -o net.bin --src K0MDT --dst W1AW
+        python3 openwave_cli.py send "long msg..." -o frag.bin --chunk-size 4
+
+        Negative testing - inject a specific kind of bad frame on purpose:
+        python3 openwave_cli.py send "x" -o bad.bin --corrupt-crc
+        python3 openwave_cli.py send "x" -o bad.bin --corrupt-payload
+        python3 openwave_cli.py send "x" -o bad.bin --corrupt-header
+        python3 openwave_cli.py send "x" -o bad.bin --bad-length 9999
+
+    dump: hex-dump and label every field of every frame in a file
+        python3 openwave_cli.py dump -i burst.bin
+
+    recv: decode a file through the full LinkReceiver pipeline
+        python3 openwave_cli.py recv -i burst.bin --station-id W1AW
+
+None of this touches GNU Radio or any hardware - it exercises
+openwave_link.py directly, which is useful both for quick sanity-checking
+the framing logic and for offline analysis of a real capture (see
+rx_rtlsdr.grc's capture_file parameter above).
+
+
+PHY-Layer Pipeline: Bits to Samples and Back
+=================================================
+
+A file-based, GNU-Radio-free path from a real link-layer frame all the way
+down to RRC-shaped baseband samples and back, mirroring what tx_pluto.grc/
+rx_rtlsdr.grc do internally - useful for testing/understanding the modem in
+isolation, and a step toward the eventual GNU-Radio-free stack (see
+tasklist.txt's "No GNU Radio, eventually" note under Phase 5).
+
+Requires numpy (openwave_pulse.py) and plotly (plot_constellation.py only).
+Neither is a GNU Radio dependency - if the system Python is externally
+managed (PEP 668, e.g. Debian/Ubuntu) and you don't want a venv:
+    pip install --user --break-system-packages plotly
+
+Full pipeline, one stage at a time:
+
+    # 1. Build a real OpenWave frame (see openwave_cli.py above)
+    python3 openwave_cli.py send "hello world" -o test.bin --src K0MDT --dst W1AW
+
+    # 2. Inspect the frame's fields by hand
+    python3 openwave_cli.py dump -i test.bin
+
+    # 3. Modulate: bits -> BPSK symbols (no sample rate involved yet)
+    python3 modulate.py -t bpsk -i test.bin -o symbols.cfile
+
+    # 4. Pulse-shape: symbols -> oversampled RRC baseband samples
+    python3 pulseshape.py -i symbols.cfile -o shaped.cfile
+
+    # 5. Plot BEFORE matched filtering - expect a smeared line, not clean
+    #    points (a single RRC filter alone is NOT zero-ISI)
+    python3 plot_constellation.py -i shaped.cfile -o before_mf.html \
+        --title "before matched filter"
+
+    # 6. Matched filter + decimate: back down to one sample/symbol
+    python3 matchedfilter.py -i shaped.cfile -o recovered_symbols.cfile
+
+    # 7. Plot AFTER matched filtering - expect two clean dots at +/-1.0
+    #    (TX RRC + RX RRC in cascade = a full raised-cosine response,
+    #    which IS zero-ISI at the correct symbol-spaced sampling instant)
+    python3 plot_constellation.py -i recovered_symbols.cfile -o after_mf.html \
+        --title "after matched filter"
+
+    # 8. Demodulate: symbols -> bits/bytes
+    python3 demodulate.py -t bpsk -i recovered_symbols.cfile -o out.bin
+
+    # 9. Verify the round trip reproduced the original frame exactly
+    cmp test.bin out.bin && echo "IDENTICAL"
+
+    # 10. Confirm it still decodes correctly through the link layer
+    python3 openwave_cli.py recv -i out.bin
+
+Notes:
+  - openwave_cli.py's dump/recv only understand byte-level frame files
+    (test.bin/out.bin) - never point them at a .cfile (raw complex samples).
+  - Steps 3+8 alone (skip 4-7) also round-trip correctly, if you just want
+    to test the bits<->symbols mapping without pulse shaping.
+  - --alpha/--sps/--span on pulseshape.py and matchedfilter.py must match
+    between the two (matchedfilter.py can't know what the sender used - see
+    each script's -h for defaults, currently alpha=0.35, sps=4, span=11).
+  - plot_constellation.py writes a self-contained interactive HTML file
+    (zoom/pan/hover for exact I/Q values) - open it in any browser, no
+    display/X11 forwarding required on a remote box. It deliberately uses
+    plain SVG rendering (Plotly's go.Scatter, not go.Scattergl) rather than
+    WebGL, so it works even in browsers/VMs without WebGL support.
+  - Nothing in this pipeline adds noise yet - it's a clean round trip by
+    design, meant to validate the modulation math itself. Noise injection
+    on top of pulseshape.py's output is the natural next stage (see
+    tasklist.txt).

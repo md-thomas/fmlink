@@ -1,59 +1,187 @@
-Phase 1: Software Infrastructure & Audio I/OBefore writing any DSP math, establish how data moves through your programming environment.
+OpenWave Task List
+===================
+(Reconciled 2026-08-17, updated same day after pulling openwave_link.py +
+tests/ from laptop. Matches OpenWave_Description.txt: GNU Radio + SDR
+hardware implementation, pi/4-QPSK PHY, shared link-layer framing module.)
 
-Task 1.1: Set up your development environment (e.g., Python, C++, or GNU Radio) and lock your internal processing sampling rate at a stable 48,000 Hz float32 format.
+Phase 1: PHY Modem Chain (Simulation) - DONE
+---------------------------------------------
+Validated in phy_sim_loopback.grc (formerly test1.grc/test2.grc) as a
+loopback testbench (see readme.txt).
 
-Task 1.2: Write the audio loopback code to stream real-time audio samples seamlessly from a virtual microphone/input channel to an audio output channel without buffer underruns.
+  [x] 1.1 pi/4-QPSK modulator: differential encoding over an 8-point ring
+          constellation (digital_diff_encoder_bb, modulus 8) + chunks-to-
+          symbols, resolving the Costas loop's phase ambiguity.
+  [x] 1.2 RRC pulse shaping (interpolating FIR, roll-off 0.35) and matching
+          RRC/MMSE-based Symbol Sync on RX.
+  [x] 1.3 Carrier recovery (Costas loop, order 4) and symbol timing recovery
+          (Modified M&M TED, MMSE 8-tap interpolator).
+  [x] 1.4 Configurable symbol rate (600-9600 sym/s) via samp_rate = symbol_rate * sps.
+  [x] 1.5 AWGN channel model for loopback BER-style sanity checking.
 
-Task 1.3: Implement a software Push-to-Talk (PTT) controller block capable of toggling your interface hardware (e.g., CAT control, serial RTS/DTR lines, or VOX tones) to key up a transceiver.
+Phase 2: Link-Layer Framing - MOSTLY DONE
+--------------------------------------------
+Implemented in openwave_link.py, shared by phy_sim_loopback.grc, tx_pluto.grc,
+and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
 
+  [x] 2.1 Preamble replaced: 32-byte LFSR pseudo-noise sequence (9-bit
+          register, taps 1/2/5/9) instead of the old repeating 0x55 x8
+          pattern - sharp autocorrelation peak (~9% worst sidelobe) vs. the
+          old pattern's ~99% sidelobes, for reliable frame-start detection
+          under noise. Sync word (0x1ACFFC1D) unchanged.
+  [x] 2.2 Real 32-byte header (build_header/parse_header): Version, Packet
+          Type, Waveform Mode ID, Flags, Sequence Number, Source ID,
+          Destination ID, Payload Length, Reserved - matches
+          OpenWave_Description.txt's byte layout exactly (struct '>BBBBH8s8sH8s').
+          Mode ID and Source/Destination ID are written at the correct
+          offsets but are placeholder values on TX and not yet parsed/acted
+          on by RX.
+  [x] 2.3 CRC32 over Header+Payload (build_frame/FrameParser); RX now knows
+          exact frame length from the header's Payload Length field instead
+          of scanning for a zero-run marker, and drops frames on CRC mismatch.
+  [x] 2.4 stream_display_sink's marker-scanning hack replaced by
+          FrameParser's incremental, CRC-verified header/payload collection.
+  [x] 2.5 ACK/retry: build_ack_frame() + RetryManager (max_retries/timeout,
+          pure state machine, no RF knowledge) using the ACK Requested/ACK
+          Response Flags bits and Sequence Number. Wired into a real closed
+          loop in phy_sim_loopback.grc only (RX ack_needed -> ack_responder_0
+          -> TX/channel -> RX -> ack_received); tx_pluto.grc/rx_rtlsdr.grc
+          are structurally one-directional (RTL-SDR RX can't transmit, Pluto
+          TX has no RX chain) so they can't close this loop yet - ready for a
+          future full-duplex pairing.
+  [x] 2.6 Fragmentation: build_fragmented_frames()/FragmentReassembler using
+          the Fragmented/More Fragments Flags bits, each fragment sent as its
+          own independent burst. Known protocol gap: the header has no
+          fragment-index/reassembly-ID field, so a lost *first* fragment of a
+          run can't be distinguished from "no run in progress" - only
+          mid-run gaps are detected (via Sequence Number). Fragmented sends
+          are NOT ACK/retry-tracked in this phase regardless of ack_requested.
+  [ ] 2.7 Dynamic ACK timeout based on active Waveform Mode's bit rate
+          (RetryManager.timeout_s is currently a fixed default, not derived
+          from mode/symbol rate).
+  [x] 2.8 Parse/act on Waveform Mode ID and Destination ID on RX, in
+          rx_rtlsdr.grc only: openwave_link.format_mode()/decode_station_id()
+          decode and display both; a new station_id parameter (blank by
+          default = unfiltered, matching every current TX chain's all-zero
+          placeholder Destination ID) enables address filtering via
+          openwave_link.is_for_station() - non-matching frames are dropped
+          and counted under 'not_for_us'. phy_sim_loopback.grc's loopback RX
+          does not have this (out of scope - self-loopback, no real
+          addressing to test).
+  [ ] 2.9 Consider closing the ACK loop for tx_pluto.grc/rx_rtlsdr.grc once
+          a full-duplex hardware pairing exists (needs a second radio pair
+          or TDD scheme, not just software).
+  [x] 2.10 LinkReceiver class + iter_frames()/describe_frames() added to
+          openwave_link.py: the RX dispatch logic (address filtering, ACK/
+          fragment handling, seq gap/dup tracking, stats) as a plain Python
+          class, driven by byte-level frame scanning rather than a GNU Radio
+          bitstream. This makes the *entire* link layer (not just framing)
+          usable/testable with zero GNU Radio dependency - see the "no GNU
+          Radio" note under Phase 5. rx_rtlsdr.grc's epy_block still has its
+          own separate copy of the same dispatch logic (predates this) -
+          not yet refactored to share LinkReceiver, a follow-up worth doing
+          to remove the duplication.
 
-Phase 2: Single-Carrier GMSK Modulator (TX)GMSK relies on continuous-phase frequency modulation shaped by a Gaussian filter.
+Phase 3: Forward Error Correction & Interleaving - TBD in spec
+-----------------------------------------------------------------
+  [ ] 3.1 Pick and integrate a FEC scheme (spec currently lists this as TBD -
+          e.g. convolutional r=1/2 k=7, or a modern option like LDPC).
+  [ ] 3.2 Bit interleaver/de-interleaver to break up burst errors.
+  [ ] 3.3 Re-run Phase 1's loopback BER test with FEC+interleaving enabled
+          and compare against the uncoded baseline.
 
-Task 2.1: Build a configurable symbol clock that adjusts the Samples Per Symbol (SPS) ratio dynamically (e.g., 40 samples/symbol for 1200 bps; 5 samples/symbol for 9600 bps).
+Phase 4: SDR Hardware Bring-Up (Testing Only) - IN PROGRESS
+----------------------------------------------------------------
+Split from the single loopback graph into standalone TX/RX flow graphs,
+renamed to reflect their target hardware: tx_pluto.grc (was test3_tx.grc),
+rx_rtlsdr.grc (was test3_rx.grc). This is a validation step, not the
+deployment target - Pluto/RTL-SDR let the modem/framing be exercised over
+real RF before committing to real transceiver hardware. See Phase 5 for
+where this is actually headed.
 
-Task 2.2: Write a routine to generate a Gaussian Pulse-Shaping Filter look-up table based on your target bandwidth-time product (BT = 0.3 or 0.5).
+  [x] 4.1 tx_pluto.grc: TX chain on a real SDR sink (ADALM-Pluto via
+          iio_pluto_sink) instead of a simulated channel, using the shared
+          openwave_link.py framing.
+  [x] 4.2 rx_rtlsdr.grc: RX chain on a real SDR source (RTL-SDR via
+          osmosdr), with frequency-translating filter, tunable center
+          frequency, frequency (spectrum) display, and shared framing.
+  [ ] 4.3 Over-the-air test between the Pluto TX and RTL-SDR RX (or two
+          matched radios) to confirm lock/decode outside of simulation.
+  [ ] 4.4 Tune AGC/gain settings (rtl_gain, if/bb gain) and frequency offset
+          correction (rtl_ppm) for real-world signal conditions.
+  [ ] 4.5 Validate performance across all defined symbol rates (600-9600
+          sym/s) and both VHF (15 kHz) / UHF (25 kHz) channel constraints.
+  [x] 4.6 capture_file parameter (-o/--capture-file) on rx_rtlsdr.grc: appends
+          every completed frame attempt - ok, crc_fail, AND bad_length alike,
+          not just clean decodes - to a file in openwave_link.build_frame()'s
+          exact byte format, so a real-world capture can be inspected later
+          with openwave_cli.py's dump/recv commands with zero conversion.
 
-Task 2.3: Build the Frequency Modulator block that integrates the pulse-shaped bitstream continuously to output clean, constant-amplitude sinusoids.
+Phase 5: Audio-Interfaced Radio Deployment (Eventual Target) - NOT STARTED
+------------------------------------------------------------------------------
+The actual deployment target: driving real transceivers (VHF/UHF radios)
+through their audio ports instead of SDR hardware, once the modem/framing is
+validated per Phase 4. Distinct from the SDR work above - this is about the
+I/O interface (soundcard in/out + PTT), not the modulation (still pi/4-QPSK
+per the spec, not the old tasklist's GMSK direction).
 
-Task 2.4: Create a standard packet assembler that appends a stable bit-sync preamble (e.g., alternating 0101...) and a unique sync word ahead of your payload data.
+No GNU Radio, eventually: GNU Radio itself is scaffolding for this whole
+project, not the permanent tech stack - the plan is to test TX/RX with a
+Pluto SDR directly outside GNU Radio at some point, and this audio-deployment
+phase is expected to be GNU-Radio-free too. Favor keeping core logic
+(openwave_link.py already has zero GNU Radio imports, including the
+LinkReceiver dispatch class - see 2.10) portable rather than assuming GNU
+Radio is a permanent dependency.
 
+  [ ] 5.1 Real-time audio I/O: stream the pi/4-QPSK baseband through a
+          soundcard interface (TX: samples out to radio's mic/data input;
+          RX: samples in from radio's speaker/data output) without buffer
+          underruns.
+  [ ] 5.2 PTT control to key the transceiver for TX bursts (e.g. CAT control,
+          serial RTS/DTR, or VOX tone), gated on frame transmission.
+  [ ] 5.3 Handle the transceiver audio passband/deviation characteristics
+          (unlike Pluto/RTL-SDR's direct complex baseband, real radios impose
+          their own audio bandpass and possibly FM discriminator response) -
+          likely needs a baseband<->audio-passband translation stage.
+  [ ] 5.4 Over-the-air test between two audio-interfaced radios running
+          OpenWave, using the same framing validated in Phase 4.
 
-Phase 3: GMSK Demodulator (RX)Decoding requires translating frequency variations back into discrete bits.
+Phase 6: Multi-Modulation Support - DEFERRED
+-----------------------------------------------
+Long-term goal: make Waveform Mode ID select among multiple modulations
+(BPSK, QPSK, pi/4-QPSK, 8PSK, 16QAM, OFDM), not just today's pi/4-QPSK.
+Not being worked on yet - listed here so Phase 2/3 framing decisions don't
+accidentally assume pi/4-QPSK is the only mode.
 
-Task 3.1: Implement a Quadrature Demodulator (or frequency discriminator) to convert raw audio phase changes directly into a baseband voltage signal.
+  [ ] 6.1 Generalize the modulator/demodulator blocks to be constellation-
+          pluggable per Waveform Mode ID rather than hardcoded.
+  [ ] 6.2 Add BPSK, QPSK, 8PSK, 16QAM modes (straightforward extensions of
+          the existing constellation-based chain).
+  [ ] 6.3 Design an OFDM mode (bigger lift - new sync/framing needs, not a
+          drop-in replacement for the single-carrier chain).
+  [ ] 6.4 Define mode-selection/negotiation behavior at the link layer.
 
-Task 3.2: Build a low-pass Matched Filter to strip away high-frequency channel noise from the raw baseband signal.
+Phase 7: Testing & Optimization - IN PROGRESS
+--------------------------------------------------
+Regression suite added under tests/ (run via ./run_tests.sh): unit tests for
+openwave_link.py's framing/CRC/ACK/fragmentation (test_openwave_link.py), the
+simulated loopback (test_phy_loopback.py), and a flow-graph compile check
+(test_flowgraphs_compile.py).
 
-Task 3.3: Write a Symbol Timing Recovery algorithm (such as a Gardner loop or early-late gate) to determine the exact center point of each incoming symbol.
-
-Task 3.4: Create the Frame Sync Detector that continually scans the incoming bitstream for your specific sync word to mark the exact start of the payload data.
-
-
-Phase 4: Physical Layer FEC & Bit ScramblingProtecting the raw bitstream from common VHF/UHF channel impairments.
-
-Task 4.1: Integrate an open-source Forward Error Correction library (like Convolutional r=1/2, k=7 coding) to generate mathematical parity bits for error protection.
-
-Task 4.2: Implement a Matrix Interleaver/De-interleaver block to shuffle bit layouts over time, breaking up destructive noise bursts into manageable, isolated bit errors.
-
-Task 4.3: Add a pseudo-random Bit Scrambler/Whitener to eliminate long strings of identical bits (e.g., all 0s), ensuring continuous transitions for the receiver's clock recovery loop.
-
-
-Phase 5: The Decoupled Link Layer (OSI Layer 2)The logical brain of your protocol that handles error checking and connection tracking.
-
-Task 5.1: Design a fixed-size, structured link layer data frame containing fields for a 32-bit CRC, sequence tracking counters, and source/destination station callsigns.
-
-Task 5.2: Write the CRC-32 checksum calculator block to act as the ultimate validator of data frame payload integrity.
-
-Task 5.3: Build an ARQ (Automatic Repeat reQuest) state machine to monitor traffic and track packet acknowledgments using ACK and NACK frames.
-
-Task 5.4: Code a Dynamic Timeout Engine that automatically calculates the acknowledgment wait window based on the transmission's active PHY bit rate.
-
-
-Phase 6: Testing & OptimizationMoving from simulation to real-world over-the-air deployment.
-
-Task 6.1: Run a local software loopback test injecting simulated white noise and frequency offsets to measure your modem's bit error rate (BER) curves.
-
-Task 6.2: Test the hardware interface locally by running your software through two radios connected via RF attenuators or dummy loads.
-
-Task 6.3: Optimize execution loops to minimize CPU utilization, ensuring the DSP pipelines run cleanly on low-power single-board computers like a Raspberry Pi.
-
+  [x] 7.1 Unit-level regression tests for header/CRC32/ACK/retry/fragmentation
+          logic and .grc compilation.
+  [x] 7.2 openwave_cli.py: file-based command-line testing of the link layer
+          with zero GNU Radio dependency and no hardware. `send` builds a
+          frame (plain text or JSON payload) to a file, with options to
+          deliberately inject bad data for negative testing (--corrupt-header/
+          --corrupt-payload/--corrupt-crc for crc_fail, --bad-length for
+          bad_length rejection). `dump` hex-dumps and labels every field of
+          every frame in a file. `recv` decodes a file through the full
+          LinkReceiver pipeline (addressing, ACK, fragmentation, stats).
+          Pairs with rx_rtlsdr.grc's capture_file (4.6) for post-hoc analysis
+          of real captured traffic.
+  [ ] 7.3 Formal BER-vs-SNR curves per Waveform Mode, in simulation and
+          over the air.
+  [ ] 7.4 Two-radio range/link-margin test with attenuators or dummy loads.
+  [ ] 7.5 Profile and optimize the flow graphs for low-power SBCs
+          (e.g. Raspberry Pi) as a deployment target.

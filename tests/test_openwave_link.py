@@ -100,6 +100,48 @@ class FlagsTests(unittest.TestCase):
         self.assertEqual(link.format_flags(0xE0), '-')
 
 
+class ModeAndStationIdTests(unittest.TestCase):
+    def test_format_mode_known(self):
+        self.assertEqual(link.format_mode(0), 'Mode 0 (600 sym/s)')
+        self.assertEqual(link.format_mode(4), 'Mode 4 (9600 sym/s)')
+
+    def test_format_mode_unknown(self):
+        self.assertEqual(link.format_mode(99), 'Mode 99 (unknown)')
+
+    def test_decode_station_id_strips_padding(self):
+        header = link.build_header(0, src_id=b'K0MDT', dst_id=b'W1AW')
+        parsed = link.parse_header(header)
+        self.assertEqual(link.decode_station_id(parsed['src_id']), 'K0MDT')
+        self.assertEqual(link.decode_station_id(parsed['dst_id']), 'W1AW')
+
+    def test_decode_station_id_empty_placeholder(self):
+        header = link.build_header(0)  # default dst_id=b'' -> all-zero field
+        parsed = link.parse_header(header)
+        self.assertEqual(link.decode_station_id(parsed['dst_id']), '')
+
+    def test_is_for_station_unconfigured_accepts_everything(self):
+        header = link.build_header(0, dst_id=b'W1AW')
+        self.assertTrue(link.is_for_station(link.parse_header(header)['dst_id'], ''))
+
+    def test_is_for_station_matches_own_callsign(self):
+        header = link.build_header(0, dst_id=b'K0MDT')
+        dst = link.parse_header(header)['dst_id']
+        self.assertTrue(link.is_for_station(dst, 'K0MDT'))
+        self.assertFalse(link.is_for_station(dst, 'W1AW'))
+
+    def test_is_for_station_accepts_broadcast(self):
+        header = link.build_header(0, dst_id=b'ALL')
+        dst = link.parse_header(header)['dst_id']
+        self.assertTrue(link.is_for_station(dst, 'K0MDT'))
+
+    def test_is_for_station_accepts_placeholder_dst_even_when_configured(self):
+        # today's TX chains all send an all-zero dst_id - an addressed
+        # receiver must still hear them, not go silent because of it.
+        header = link.build_header(0)  # dst_id defaults to b''
+        dst = link.parse_header(header)['dst_id']
+        self.assertTrue(link.is_for_station(dst, 'K0MDT'))
+
+
 class FrameBuildAndParseTests(unittest.TestCase):
     def _header_start(self, frame):
         idx = frame.find(link.SYNC_WORD)
@@ -207,6 +249,43 @@ class FrameBuildAndParseTests(unittest.TestCase):
             status, result = self._feed_all(link.FrameParser(), frame[start:])
             self.assertEqual(status, 'ok', f"failed for lead_pad={lead} end_pad={end}")
             self.assertEqual(result, payload)
+
+
+class BuildFrameWithBadLengthTests(unittest.TestCase):
+    def _header_start(self, frame):
+        return frame.index(link.PREAMBLE + link.SYNC_WORD) + len(link.PREAMBLE) + len(link.SYNC_WORD)
+
+    def test_declared_length_over_max_rejected_by_parser(self):
+        frame = link.build_frame_with_bad_length(b'hi', declared_length=link.MAX_PAYLOAD_LEN + 500)
+        parser = link.FrameParser()
+        start = self._header_start(frame)
+        status = None
+        for b in frame[start:start + link.HEADER_LEN]:
+            status, _ = parser.feed(b)
+        self.assertEqual(status, 'bad_length')
+
+    def test_declared_length_visible_in_parsed_header_before_rejection(self):
+        frame = link.build_frame_with_bad_length(b'hi', declared_length=9999)
+        parser = link.FrameParser()
+        start = self._header_start(frame)
+        for b in frame[start:start + link.HEADER_LEN]:
+            status, _ = parser.feed(b)
+        self.assertEqual(status, 'bad_length')
+        self.assertEqual(parser.last_header['payload_len'], 9999)
+
+    def test_iter_frames_reports_bad_length(self):
+        frame = link.build_frame_with_bad_length(b'hi', declared_length=5000)
+        status, header, payload = next(link.iter_frames(frame))
+        self.assertEqual(status, 'bad_length')
+        self.assertIsNone(header)
+        self.assertIsNone(payload)
+
+    def test_describe_frames_reports_bad_length_with_header(self):
+        frame = link.build_frame_with_bad_length(b'hi', declared_length=5000, mode_id=1)
+        [result] = list(link.describe_frames(frame))
+        self.assertEqual(result['status'], 'bad_length')
+        self.assertEqual(result['header']['payload_len'], 5000)
+        self.assertIsNone(result['payload'])
 
 
 class AckFrameTests(unittest.TestCase):
@@ -558,6 +637,200 @@ class FragmentReassemblerTests(unittest.TestCase):
         status, result = reassembler.feed(header, chunk)
         self.assertEqual(status, 'complete')
         self.assertEqual(result, payload2)
+
+
+class IterFramesTests(unittest.TestCase):
+    def test_no_marker_yields_nothing(self):
+        self.assertEqual(list(link.iter_frames(b'no frame in here at all')), [])
+
+    def test_single_frame_found_and_parsed(self):
+        frame = link.build_frame(b'hello', seq=7, src_id=b'K0MDT', dst_id=b'W1AW')
+        results = list(link.iter_frames(frame))
+        self.assertEqual(len(results), 1)
+        status, header, payload = results[0]
+        self.assertEqual(status, 'ok')
+        self.assertEqual(payload, b'hello')
+        self.assertEqual(header['seq'], 7)
+
+    def test_multiple_frames_in_one_buffer(self):
+        data = link.build_frame(b'first', seq=1) + link.build_frame(b'second', seq=2)
+        results = list(link.iter_frames(data))
+        self.assertEqual([r[0] for r in results], ['ok', 'ok'])
+        self.assertEqual([r[2] for r in results], [b'first', b'second'])
+
+    def test_corrupted_payload_reported_as_crc_fail(self):
+        frame = bytearray(link.build_frame(b'hello', seq=1))
+        # flip a byte inside the payload, well past the header
+        payload_start = frame.index(b'hello')
+        frame[payload_start] ^= 0xFF
+        status, header, payload = next(link.iter_frames(bytes(frame)))
+        self.assertEqual(status, 'crc_fail')
+        self.assertIsNone(header)
+        self.assertIsNone(payload)
+
+    def test_truncated_trailing_frame_yields_nothing_for_it(self):
+        frame = link.build_frame(b'hello', seq=1)
+        marker = link.PREAMBLE + link.SYNC_WORD
+        cut = frame.index(marker) + len(marker) + 10  # stop partway through the header
+        results = list(link.iter_frames(frame[:cut]))
+        self.assertEqual(results, [])
+
+
+class FormatPacketTypeTests(unittest.TestCase):
+    def test_known_types(self):
+        self.assertEqual(link.format_packet_type(link.PACKET_TYPE_DATA), 'Data')
+        self.assertEqual(link.format_packet_type(link.PACKET_TYPE_ACK), 'ACK')
+        self.assertEqual(link.format_packet_type(link.PACKET_TYPE_BEACON), 'Beacon')
+        self.assertEqual(link.format_packet_type(link.PACKET_TYPE_CONTROL), 'Control')
+
+    def test_unknown_type(self):
+        self.assertEqual(link.format_packet_type(0x99), 'Unknown(0x99)')
+
+
+class DescribeFramesTests(unittest.TestCase):
+    def test_no_marker_yields_nothing(self):
+        self.assertEqual(list(link.describe_frames(b'nothing to see here')), [])
+
+    def test_ok_frame_has_all_fields(self):
+        frame = link.build_frame(b'hello', seq=7, mode_id=2, src_id=b'K0MDT', dst_id=b'W1AW')
+        [result] = list(link.describe_frames(frame))
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['offset'], frame.index(link.PREAMBLE))
+        self.assertEqual(result['preamble'], link.PREAMBLE)
+        self.assertEqual(result['sync_word'], link.SYNC_WORD)
+        self.assertEqual(len(result['header_bytes']), link.HEADER_LEN)
+        self.assertEqual(result['header']['seq'], 7)
+        self.assertEqual(result['header']['mode_id'], 2)
+        self.assertEqual(result['payload'], b'hello')
+        self.assertEqual(len(result['crc_bytes']), link.CRC_LEN)
+        self.assertEqual(result['total_len'],
+                          len(link.PREAMBLE) + len(link.SYNC_WORD) + link.HEADER_LEN + 5 + link.CRC_LEN)
+
+    def test_crc_fail_still_reports_header_and_payload(self):
+        frame = bytearray(link.build_frame(b'hello', seq=1))
+        payload_start = frame.index(b'hello')
+        frame[payload_start] ^= 0xFF
+        [result] = list(link.describe_frames(bytes(frame)))
+        self.assertEqual(result['status'], 'crc_fail')
+        self.assertIsNotNone(result['header'])
+        self.assertIsNotNone(result['payload'])
+
+    def test_truncated_header_reports_no_header(self):
+        frame = link.build_frame(b'hello', seq=1)
+        marker = link.PREAMBLE + link.SYNC_WORD
+        cut = frame.index(marker) + len(marker) + 10
+        [result] = list(link.describe_frames(frame[:cut]))
+        self.assertEqual(result['status'], 'truncated')
+        self.assertIsNone(result['header'])
+
+    def test_truncated_payload_reports_header_but_no_payload(self):
+        frame = link.build_frame(b'hello world this is longer', seq=1)
+        marker = link.PREAMBLE + link.SYNC_WORD
+        cut = frame.index(marker) + len(marker) + link.HEADER_LEN + 3  # header complete, payload cut short
+        [result] = list(link.describe_frames(frame[:cut]))
+        self.assertEqual(result['status'], 'truncated')
+        self.assertIsNotNone(result['header'])
+        self.assertIsNone(result['payload'])
+
+    def test_multiple_frames_each_described(self):
+        data = link.build_frame(b'first', seq=1) + link.build_frame(b'second', seq=2)
+        results = list(link.describe_frames(data))
+        self.assertEqual([r['status'] for r in results], ['ok', 'ok'])
+        self.assertEqual([r['payload'] for r in results], [b'first', b'second'])
+
+
+class LinkReceiverTests(unittest.TestCase):
+    def _feed(self, receiver, frame_bytes):
+        for status, header, payload in link.iter_frames(frame_bytes):
+            if status == 'ok':
+                receiver.feed_frame(header, payload)
+            else:
+                receiver.feed_crc_failure(status)
+
+    def test_plain_message_dispatches_on_message(self):
+        messages = []
+        receiver = link.LinkReceiver(on_message=messages.append)
+        self._feed(receiver, link.build_frame(b'hello', seq=1))
+        self.assertEqual(messages, ['hello'])
+        self.assertEqual(receiver.counts['ok'], 1)
+
+    def test_ack_requested_flag_triggers_on_ack_needed(self):
+        needed = []
+        receiver = link.LinkReceiver(on_ack_needed=needed.append)
+        frame = link.build_frame(b'hi', seq=3, flags=link.FLAG_ACK_REQUESTED)
+        self._feed(receiver, frame)
+        self.assertEqual(needed, [3])
+
+    def test_ack_frame_triggers_on_ack_received_not_message(self):
+        messages = []
+        received = []
+        receiver = link.LinkReceiver(on_message=messages.append, on_ack_received=received.append)
+        self._feed(receiver, link.build_ack_frame(acked_seq=5))
+        self.assertEqual(received, [5])
+        self.assertEqual(messages, [])
+        self.assertEqual(receiver.counts['acks_rx'], 1)
+
+    def test_unconfigured_station_id_accepts_everything(self):
+        messages = []
+        receiver = link.LinkReceiver(station_id='', on_message=messages.append)
+        self._feed(receiver, link.build_frame(b'hi', seq=1, dst_id=b'W1AW'))
+        self.assertEqual(messages, ['hi'])
+        self.assertEqual(receiver.counts['not_for_us'], 0)
+
+    def test_mismatched_destination_dropped(self):
+        messages = []
+        receiver = link.LinkReceiver(station_id='K0MDT', on_message=messages.append)
+        self._feed(receiver, link.build_frame(b'hi', seq=1, dst_id=b'W1AW'))
+        self.assertEqual(messages, [])
+        self.assertEqual(receiver.counts['not_for_us'], 1)
+
+    def test_broadcast_still_accepted_when_station_id_set(self):
+        messages = []
+        receiver = link.LinkReceiver(station_id='K0MDT', on_message=messages.append)
+        self._feed(receiver, link.build_frame(b'hi', seq=1, dst_id=b'ALL'))
+        self.assertEqual(messages, ['hi'])
+
+    def test_duplicate_seq_counted(self):
+        receiver = link.LinkReceiver()
+        self._feed(receiver, link.build_frame(b'a', seq=1))
+        self._feed(receiver, link.build_frame(b'a', seq=1))
+        self.assertEqual(receiver.counts['dup'], 1)
+
+    def test_lost_seq_gap_counted(self):
+        receiver = link.LinkReceiver()
+        self._feed(receiver, link.build_frame(b'a', seq=1))
+        self._feed(receiver, link.build_frame(b'b', seq=5))
+        self.assertEqual(receiver.counts['lost'], 3)
+
+    def test_fragmented_message_buffers_until_complete(self):
+        messages = []
+        receiver = link.LinkReceiver(on_message=messages.append)
+        frames, _ = link.build_fragmented_frames(b'x' * 10, seq_start=0, chunk_size=4)
+        for frame in frames[:-1]:
+            self._feed(receiver, frame)
+        self.assertEqual(messages, [])
+        self._feed(receiver, frames[-1])
+        self.assertEqual(messages, ['x' * 10])
+
+    def test_crc_failure_counted_not_dispatched(self):
+        messages = []
+        receiver = link.LinkReceiver(on_message=messages.append)
+        frame = bytearray(link.build_frame(b'hello', seq=1))
+        payload_start = frame.index(b'hello')
+        frame[payload_start] ^= 0xFF
+        self._feed(receiver, bytes(frame))
+        self.assertEqual(messages, [])
+        self.assertEqual(receiver.counts['crc_fail'], 1)
+
+    def test_stats_line_reflects_state(self):
+        receiver = link.LinkReceiver()
+        self._feed(receiver, link.build_frame(b'hi', seq=9, mode_id=2, src_id=b'K0MDT', dst_id=b'W1AW'))
+        line = receiver.stats_line()
+        self.assertIn('OK:1', line)
+        self.assertIn('Seq:9', line)
+        self.assertIn('Mode 2', line)
+        self.assertIn('K0MDT', line)
+        self.assertIn('W1AW', line)
 
 
 if __name__ == '__main__':
