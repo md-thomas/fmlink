@@ -20,13 +20,16 @@ openwave_link.py
 openwave_cli.py
     Command-line, file-based testing of the link layer - build and parse
     real frame bytes with no GNU Radio and no hardware. `send` writes a
-    frame to a file (plain text or JSON payload, with options to
-    deliberately corrupt it for negative testing); `dump` hex-dumps and
-    labels every field of every frame in a file; `recv` decodes a file
-    through the full LinkReceiver pipeline. Both dump/recv take an optional
+    frame to a file (plain text, --json, --file for raw binary payloads
+    like a PNG, or --attach for a text message plus a file attachment
+    together, with options to deliberately corrupt it for negative
+    testing); `dump` hex-dumps and labels every field of every frame in a
+    file; `recv` decodes a file through the full LinkReceiver pipeline
+    (--output-file / --save-attachment to write --file/--attach content
+    back out without lossy text decoding). Both dump/recv take an optional
     --correlate flag (see openwave_sync.py below) for data that came
-    through a noisy channel. Run `python3 openwave_cli.py help` for usage
-    and examples.
+    through a noisy channel. Run `python3 openwave_cli.py help` (or `send
+    -h` / `recv -h`) for full usage and examples.
 
 openwave_sync.py
     Tolerant frame synchronization: finds the preamble+sync-word via a
@@ -63,6 +66,42 @@ modulate.py / pulseshape.py / channel.py / matchedfilter.py / demodulate.py / pl
     and why matched filtering is required (not optional) for a clean
     constellation.
 
+openwave_fec.py
+    Forward error correction: convolutional encoding + hard-decision
+    Viterbi decoding (numpy-vectorized - see its module docstring), fully
+    parameterized by generator polynomials/constraint length K rather than
+    hardcoded to one scheme. PRESETS holds 13 named configurations
+    (r1_2_k3 through r1_6_k9 - rate 1/N at constraint length K), plus an
+    empirically-measured "which preset for which SNR" reference table
+    right after PRESETS. free_distance()/find_generators() are how the
+    presets were chosen (Dijkstra over the trellis, not hand-picked - see
+    the module docstring for why that replaced an earlier hand-picked
+    preset that had silently-truncated, out-of-range generator values).
+
+fec_encode.py / fec_decode.py
+    CLI wrappers around openwave_fec.py: encode a built frame (or a whole
+    build_fragmented_frames() run - every fragment is protected
+    independently) before modulate.py, and decode+correct a possibly-noisy
+    received frame after demodulate.py, using openwave_sync.py's tolerant
+    correlator to find each fragment's sync (falling back to an unbounded
+    search and reporting an explicit 'gap' status if a fragment's marker
+    didn't survive the channel at all - see openwave_sync.py's
+    FRAGMENT_GAP_SEARCH_BITS for why this matters: an unbounded-only
+    search would silently lock onto a LATER fragment instead, with no
+    indication the one in between was lost). See -h on either for full
+    usage; see "FEC + Full File Transfer Testing" below for how they fit
+    into the full pipeline.
+
+openwave_fec_generate_presets.py
+    Regenerates/extends openwave_fec.py's PRESETS table via
+    find_generators()'s free-distance search - prints ready-to-paste
+    Python source, doesn't edit the file for you. Run with -h for options
+    (which rates/K values to search, candidate count, RNG seed).
+
+pipeline_test.sh / file_xfer_test.sh
+    Turnkey end-to-end test scripts - see "FEC + Full File Transfer
+    Testing" below.
+
 phy_sim_loopback.grc (formerly test1.grc / test2.grc)
     Simulated loopback testbench: TX -> AWGN channel model -> RX, all in one
     GNU Radio process, no hardware involved. The GUI test bench for
@@ -78,10 +117,27 @@ tx_pluto.grc / rx_rtlsdr.grc (formerly test3_tx.grc / test3_rx.grc)
 
 tests/
     Regression suite - run everything with `./run_tests.sh`, or a single
-    module with `./run_tests.sh tests.test_openwave_link`.
-      test_openwave_link.py   - fast, pure-Python tests of the link layer
-      test_phy_loopback.py    - headless GNU Radio runs of phy_sim_loopback.grc
+    module with `./run_tests.sh tests.test_openwave_link`. All of these
+    except test_phy_loopback.py/test_flowgraphs_compile.py are fast,
+    pure-Python, and need no GNU Radio:
+      test_openwave_link.py    - link layer: header/CRC/ACK/fragmentation
+      test_openwave_modem.py   - bits<->BPSK symbols mapping
+      test_openwave_pulse.py   - RRC pulse shaping/matched filtering
+      test_openwave_channel.py - AWGN channel simulation
+      test_openwave_sync.py    - tolerant Hamming-distance sync correlator
+      test_openwave_fec.py     - convolutional encode/Viterbi decode, FEC
+                                  presets, multi-fragment FEC, sync-gap
+                                  handling
+      test_phy_loopback.py     - headless GNU Radio runs of phy_sim_loopback.grc
       test_flowgraphs_compile.py - grcc compile check for all three .grc files
+
+lorem.txt, colorbar_test.png, test_image.png
+    Generated test assets for file_xfer_test.sh's FILE argument/--attach -
+    lorem.txt is plain text, the two PNGs are synthetic (not personal
+    files) sized to safely clear the 64-fragment/~64KB ceiling even after
+    --attach's base64 inflation (~33%). Regenerate colorbar_test.png/
+    test_image.png with a short PIL/numpy script if they're ever needed
+    again at a different size.
 
 test.grc, test1.grc, test1_*.py, test2.py, test2_*.py
     Earlier prototypes, superseded by phy_sim_loopback.grc. test2.grc itself
@@ -397,11 +453,69 @@ Notes:
     correlator instead (matching what digital_correlate_access_code_tag_bb
     does in the real flowgraphs) - it finds frames the exact-match path
     misses entirely, informally down to roughly ~2dB SNR for BPSK at these
-    filter settings before header/payload bit errors (no FEC yet - see
-    tasklist.txt Phase 3) start causing CRC failures even once sync is
-    found. Example:
+    filter settings before header/payload bit errors start causing CRC
+    failures even once sync is found - see "FEC + Full File Transfer
+    Testing" below for how FEC pushes that floor much lower. Example:
         python3 channel.py -i shaped.cfile -o noisy.cfile --snr-db 1.5 --seed 4
         python3 matchedfilter.py -i noisy.cfile -o recovered_symbols.cfile
         python3 demodulate.py -t bpsk -i recovered_symbols.cfile -o out.bin
         python3 openwave_cli.py recv -i out.bin              # OK:0 - not found
         python3 openwave_cli.py recv -i out.bin --correlate  # OK:1 - decoded
+
+
+FEC + Full File Transfer Testing
+=================================================
+
+Everything above tests the modem chain one stage at a time by hand. FEC
+(openwave_fec.py) sits between send/fec_encode and demodulate/fec_decode
+in that same chain, and pipeline_test.sh / file_xfer_test.sh wrap the
+*whole* thing - frame build through FEC/modem/noise/FEC-decode back to a
+verified round trip - into single commands, so you don't have to chain
+seven scripts by hand every time.
+
+pipeline_test.sh - single synthetic frame ("hello world"), instrumented
+with a dump/byte-count/IDENTICAL check at every stage. Use this to see
+*how* the pipeline works or to debug a specific stage.
+
+    ./pipeline_test.sh                                  # clean, no FEC
+    ./pipeline_test.sh --snr -6                          # noisy, no FEC (expect failure)
+    ./pipeline_test.sh --snr -6 --fec r1_3_k7             # noisy, FEC-protected
+    ./pipeline_test.sh -h                                 # full flag reference
+
+file_xfer_test.sh - a real message and/or file (e.g. lorem.txt,
+colorbar_test.png) through send/--attach -> the same pipeline -> recv,
+with pass/fail verification (message text match, byte-identical
+attachment) and transmitted-size/timing reporting. Use this for realistic
+payloads and for sweeping SNR/FEC combinations.
+
+    ./file_xfer_test.sh lorem.txt --message "check this out"
+    ./file_xfer_test.sh colorbar_test.png --snr -6 --fec r1_3_k7
+    ./file_xfer_test.sh -h                                # full flag reference
+
+Both scripts write every intermediate file (frames, symbols, plots,
+recovered attachment) to a fresh `mktemp -d` directory under /tmp - never
+to the repo - named like
+/tmp/openwave_file_xfer_test.mode<M>_snr<SNR>_fec<PRESET>.<random>, so
+several runs (including different configs) can run at once without
+clobbering each other, and each run prints its own "Working dir:" line so
+you can go find the plots/files afterward.
+
+Choosing a preset: FEC is a bandwidth-for-resilience trade - stronger
+presets (higher constraint length K, lower rate 1/N) correct more errors
+but cost more transmitted bytes and more Viterbi decode time (state count
+scales as 2**(K-1)). Don't reach for a stronger preset than your SNR
+actually needs - see the empirically-measured SNR-to-preset table in
+openwave_fec.py right after PRESETS for concrete measured pass rates
+(e.g. r1_2_k3 is already 100% reliable at 3dB; -6dB needs at least
+r1_4_k9). Sweep your own SNR/preset combination with a shell loop over
+file_xfer_test.sh's exit code (0 = pass) - see openwave_fec_generate_presets.py
+if you need a preset that isn't in the table at all.
+
+Sync gaps: if a fragment's marker doesn't survive the noise, fec_decode.py
+(and openwave_cli.py recv --correlate, for the non-FEC path) reports an
+explicit 'gap' status for it rather than silently skipping straight to
+the next fragment - see openwave_sync.py's FRAGMENT_GAP_SEARCH_BITS. A
+lost fragment's data is still unrecoverable either way (that's real
+information loss, not a bookkeeping problem), but a gap is now always
+visible in fec_decode.py's per-fragment status output instead of an
+unexplained "attachment doesn't match" at the end.

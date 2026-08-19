@@ -78,6 +78,39 @@ PRESETS = {
     'r1_6_k9': ((0o735, 0o743, 0o513, 0o773, 0o725, 0o247), 9),
 }
 
+# Empirically observed minimum preset for a reliable link at a given SNR,
+# from file_xfer_test.sh sweeps of a ~4.7KB message (lorem.txt + a short
+# --message, 5 fragments at MAX_PAYLOAD_LEN chunking) over the full BPSK
+# modem chain (modulate -> pulseshape -> channel -> matchedfilter ->
+# demodulate -> fec_decode). Pass rate = fraction of N independent AWGN
+# draws that reproduced the message+attachment byte-for-byte:
+#
+#   SNR    preset    pass rate   notes
+#   3dB    r1_2_k3   100% (N=100)  cheapest preset already fully reliable -
+#                                  no reason to pay for anything stronger
+#   0dB    r1_2_k3    98% (N=50)   still solid; occasional genuine crc_fail
+#  -6dB    r1_4_k7    86% (N=50)   real Viterbi-capacity failures, not sync
+#                                  issues - r1_4_k7's free_distance=20 isn't
+#                                  quite enough at this SNR
+#  -6dB    r1_4_k9   100% (N=50)   same rate (same bandwidth cost) as
+#                                  r1_4_k7 above, but free_distance=24's
+#                                  extra correction margin clears -6dB
+#
+# Rule of thumb from these points: don't reach for a stronger code than
+# the SNR needs - at 3dB/0dB the weakest preset (r1_2_k3) already wins on
+# both reliability AND decode time (Viterbi cost scales with state count
+# 2**(K-1) and with rate, so k9/r1_6 configs cost meaningfully more time
+# per byte - see pipeline_test.sh/file_xfer_test.sh's Total time output).
+# Only step up in K or rate once measurement shows the current preset
+# actually failing at your target SNR, the way r1_4_k7 did at -6dB above.
+#
+# This table is a starting point, not a full characterization - only a
+# handful of (SNR, preset) points have been swept so far, all at this one
+# message/fragment size. Reproduce or extend it with:
+#   ./file_xfer_test.sh lorem.txt --message "..." --mode 1 --snr <dB> --fec <preset>
+# run N times (a shell loop; see this session's history for examples) and
+# counting pass/fail exit codes.
+
 
 def _parity(value, k):
     return bin(value & ((1 << k) - 1)).count('1') % 2
