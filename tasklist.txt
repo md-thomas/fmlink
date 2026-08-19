@@ -51,11 +51,20 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
           future full-duplex pairing.
   [x] 2.6 Fragmentation: build_fragmented_frames()/FragmentReassembler using
           the Fragmented/More Fragments Flags bits, each fragment sent as its
-          own independent burst. Known protocol gap: the header has no
-          fragment-index/reassembly-ID field, so a lost *first* fragment of a
-          run can't be distinguished from "no run in progress" - only
-          mid-run gaps are detected (via Sequence Number). Fragmented sends
-          are NOT ACK/retry-tracked in this phase regardless of ack_requested.
+          own independent burst. Fragmented sends are NOT ACK/retry-tracked
+          in this phase regardless of ack_requested.
+  [x] 2.6b Fragment Index header field (1 of the 8 Reserved bytes
+          repurposed, 7 remain reserved - see OpenWave_Description.txt) so
+          a receiver has an authoritative "is this really a new run" signal
+          instead of inferring it from "nothing else in progress." Fixes a
+          real bug found via large-message testing: a run abandoned mid-
+          stream (e.g. MAX_FRAGMENTS overflow) used to let the next leftover
+          continuation fragment be misread as a fresh start, silently
+          delivering a truncated TAIL of the original message as if it were
+          a complete, valid one (normal 'ok' status, no error indication).
+          FragmentReassembler now also tracks expected Source ID per run, so
+          two stations' fragmented messages with coincidentally-matching
+          sequence numbers can't merge either.
   [ ] 2.7 Dynamic ACK timeout based on active Waveform Mode's bit rate
           (RetryManager.timeout_s is currently a fixed default, not derived
           from mode/symbol rate).

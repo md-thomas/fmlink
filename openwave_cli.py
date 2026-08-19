@@ -24,16 +24,37 @@ Examples:
 See `send -h` / `recv -h` for all options.
 """
 import argparse
+import base64
 import json
+import os
 import sys
 
 import openwave_link as link
+import openwave_sync as sync
 
 
 def _encode_payload(args):
+    if args.attach is not None:
+        # Application-layer envelope, not a link-layer concept - the link
+        # layer only ever sees opaque payload bytes (see this module's
+        # docstring). Reuses the existing JSON payload path rather than
+        # inventing a new binary framing format.
+        with open(args.attach, 'rb') as f:
+            attachment = f.read()
+        envelope = {
+            'text': args.message or '',
+            'filename': os.path.basename(args.attach),
+            'attachment_b64': base64.b64encode(attachment).decode('ascii'),
+        }
+        return json.dumps(envelope).encode('utf-8')
     if args.json is not None:
         return json.dumps(json.loads(args.json)).encode('utf-8')
-    return args.message.encode('utf-8')
+    if args.file is not None:
+        with open(args.file, 'rb') as f:
+            return f.read()
+    if args.message is not None:
+        return args.message.encode('utf-8')
+    raise SystemExit('error: provide a message, --json, --file, or --attach')
 
 
 def _locate_regions(frame_bytes):
@@ -109,12 +130,20 @@ def cmd_dump(args):
     with open(args.input, 'rb') as f:
         data = f.read()
 
+    describe = (lambda d: sync.describe_frames_correlated(d, max_error_fraction=args.max_error_fraction)) \
+        if args.correlate else link.describe_frames
+
     frame_num = 0
-    for frame in link.describe_frames(data):
+    for frame in describe(data):
         frame_num += 1
-        print(f"=== Frame {frame_num}  (offset {frame['offset']}, status: {frame['status']}) ===")
-        print(f"  Preamble        ({len(frame['preamble'])}B): {frame['preamble'].hex(' ')}")
-        print(f"  Sync Word       ({len(frame['sync_word'])}B): {frame['sync_word'].hex(' ')}")
+        sync_note = f"  sync_errors: {frame['sync_errors']}/{sync.MARKER_LEN} bits" \
+            if args.correlate else ""
+        print(f"=== Frame {frame_num}  (offset {frame['offset']}, "
+              f"status: {frame['status']}){sync_note} ===")
+        preamble_hex = frame['preamble'].hex(' ') if frame['preamble'] is not None else '(unavailable)'
+        sync_word_hex = frame['sync_word'].hex(' ') if frame['sync_word'] is not None else '(unavailable)'
+        print(f"  Preamble        ({len(frame['preamble']) if frame['preamble'] else '?'}B): {preamble_hex}")
+        print(f"  Sync Word       ({len(frame['sync_word']) if frame['sync_word'] else '?'}B): {sync_word_hex}")
 
         header = frame['header']
         if header is None:
@@ -162,24 +191,62 @@ def cmd_recv(args):
         data = f.read()
 
     messages = []
+    raw_messages = []
     receiver = link.LinkReceiver(
         station_id=args.station_id,
         on_message=messages.append,
+        on_raw_message=raw_messages.append,
         on_ack_needed=lambda seq: print(f"[ack needed for seq {seq} - no TX wired up in file mode]", file=sys.stderr),
         on_ack_received=lambda seq: print(f"[ack received for seq {seq}]", file=sys.stderr),
     )
 
-    for status, header, payload in link.iter_frames(data):
+    iter_fn = (lambda d: sync.iter_frames_correlated(d, max_error_fraction=args.max_error_fraction)) \
+        if args.correlate else link.iter_frames
+
+    for status, header, payload in iter_fn(data):
         if status == 'ok':
             receiver.feed_frame(header, payload)
         else:
             receiver.feed_crc_failure(status)
 
-    for msg in messages:
-        try:
-            print(json.dumps(json.loads(msg), indent=2))
-        except json.JSONDecodeError:
-            print(msg)
+    if args.output_file:
+        # raw bytes, not the (lossy for binary) UTF-8-decoded text - see
+        # LinkReceiver.on_raw_message and `send --file`
+        if not raw_messages:
+            print("No message received - nothing written.", file=sys.stderr)
+        else:
+            with open(args.output_file, 'wb') as f:
+                f.write(raw_messages[0])
+            print(f"Wrote {len(raw_messages[0])} bytes to {args.output_file}", file=sys.stderr)
+            if len(raw_messages) > 1:
+                print(f"Note: {len(raw_messages) - 1} additional message(s) in this file "
+                      f"were not written (--output-file only saves the first)", file=sys.stderr)
+    else:
+        for msg in messages:
+            try:
+                parsed = json.loads(msg)
+            except json.JSONDecodeError:
+                print(f"Message: {msg}")
+                print()
+                continue
+
+            if isinstance(parsed, dict) and 'attachment_b64' in parsed:
+                # `send --attach`'s envelope - show the text and surface the
+                # attachment separately rather than dumping raw base64
+                text = parsed.get('text') or '(no text)'
+                filename = parsed.get('filename', '(unnamed)')
+                attachment = base64.b64decode(parsed['attachment_b64'])
+                print(f"Message: {text}")
+                print(f"Attachment: {filename} ({len(attachment)} bytes)")
+                if args.save_attachment:
+                    with open(args.save_attachment, 'wb') as f:
+                        f.write(attachment)
+                    print(f"Saved attachment -> {args.save_attachment}")
+                else:
+                    print("(use --save-attachment PATH to write it to disk)")
+            else:
+                print(f"Message: {json.dumps(parsed, indent=2)}")
+            print()
 
     print(receiver.stats_line(), file=sys.stderr)
 
@@ -195,9 +262,22 @@ def main():
     p_help.set_defaults(func=lambda args: parser.print_help())
 
     p_send = sub.add_parser('send', help='Build a frame (or fragments) and write it to a file')
-    payload_group = p_send.add_mutually_exclusive_group(required=True)
-    payload_group.add_argument('message', nargs='?', help='Plain text payload to send')
+    p_send.add_argument('message', nargs='?', default=None,
+                         help='Plain text payload to send. Optional if --json/--file are used, or if '
+                              '--attach is used alone (with no text); combine with --attach for a '
+                              'message-plus-attachment')
+    payload_group = p_send.add_mutually_exclusive_group()
     payload_group.add_argument('--json', help='JSON payload to send (validated and re-serialized)')
+    payload_group.add_argument('--file', help='Send a file\'s raw bytes as the payload (e.g. a PNG/JPG), '
+                                               'with no text message - use recv --output-file to write it '
+                                               'back out; plain recv would corrupt it via lossy UTF-8 '
+                                               'text decoding')
+    payload_group.add_argument('--attach',
+                                help='Attach a file alongside the text message: sends a JSON envelope '
+                                     '{text, filename, attachment_b64} over the existing --json payload '
+                                     'path (see this module\'s docstring on payload being application-'
+                                     'layer/opaque to the link layer) - use recv --save-attachment to '
+                                     'extract it back out')
     p_send.add_argument('-o', '--output', required=True, help='Output file path')
     p_send.add_argument('--append', action='store_true',
                          help='Append to output instead of overwriting (for building a multi-frame test file)')
@@ -226,13 +306,42 @@ def main():
 
     p_dump = sub.add_parser('dump', help='Hex-dump and label every field of each frame in a file')
     p_dump.add_argument('-i', '--input', required=True, help='Input file path')
+    p_dump.add_argument('--correlate', action='store_true',
+                         help='Find frames via tolerant Hamming-distance correlation against the '
+                              'preamble+sync-word instead of an exact byte match - use this for '
+                              'data that may have come through a noisy channel (e.g. channel.py). '
+                              'See openwave_sync.py for why the exact-match default gains nothing '
+                              'from the preamble being a PRN sequence.')
+    p_dump.add_argument('--max-error-fraction', type=float, default=sync.DEFAULT_MAX_ERROR_FRACTION,
+                         help='With --correlate, max fraction of the 288-bit marker allowed to be '
+                              f'wrong and still count as a sync match (default: '
+                              f'{sync.DEFAULT_MAX_ERROR_FRACTION})')
     p_dump.set_defaults(func=cmd_dump)
 
     p_recv = sub.add_parser('recv', help='Scan a file for frames and decode them')
     p_recv.add_argument('-i', '--input', required=True, help='Input file path')
+    p_recv.add_argument('--output-file', default=None,
+                         help='Write the received message\'s raw, undecoded bytes here instead of '
+                              'printing it as text - use this for a file sent with `send --file` '
+                              '(plain text printing would corrupt binary content via lossy UTF-8 '
+                              'decoding). Only the first message in the input is written.')
+    p_recv.add_argument('--save-attachment', default=None,
+                         help='Extract and write to this path the attachment from a `send --attach` '
+                              'envelope message (base64-decoded); the text portion still prints '
+                              'normally either way')
     p_recv.add_argument('--station-id', default='',
                          help="This receiver's callsign, for Destination ID filtering "
                               "(default: accept everything)")
+    p_recv.add_argument('--correlate', action='store_true',
+                         help='Find frames via tolerant Hamming-distance correlation against the '
+                              'preamble+sync-word instead of an exact byte match - use this for '
+                              'data that may have come through a noisy channel (e.g. channel.py). '
+                              'See openwave_sync.py for why the exact-match default gains nothing '
+                              'from the preamble being a PRN sequence.')
+    p_recv.add_argument('--max-error-fraction', type=float, default=sync.DEFAULT_MAX_ERROR_FRACTION,
+                         help='With --correlate, max fraction of the 288-bit marker allowed to be '
+                              f'wrong and still count as a sync match (default: '
+                              f'{sync.DEFAULT_MAX_ERROR_FRACTION})')
     p_recv.set_defaults(func=cmd_recv)
 
     args = parser.parse_args()

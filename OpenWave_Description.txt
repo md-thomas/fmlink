@@ -44,27 +44,32 @@ Physical Layer (PHY)
 Link layer
 
     Preamble:	32 bytes (LFSR pseudo-noise sequence, seed 1, 9-bit register,
-			taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE).
-			Chosen over a repeating pattern (e.g. 55 55...) because a PN
-			sequence's autocorrelation has a sharp, unambiguous peak
-			(worst sidelobe ~9% of peak) vs. a repeating pattern's ~99%
-			sidelobes at every symbol-period offset, which made exact
-			frame-start detection under noise unreliable.
+		taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE).
+		Chosen over a repeating pattern (e.g. 55 55...) because a PN
+		sequence's autocorrelation has a sharp, unambiguous peak
+		(worst sidelobe ~9% of peak) vs. a repeating pattern's ~99%
+		sidelobes at every symbol-period offset, which made exact
+		frame-start detection under noise unreliable.
+    
     Sync Word: 	4 bytes (CCDS sync word) 0x1ACFFC1D (for correlation)
-	Header:	    32 bytes
+	
+    Header:	    32 bytes
+    
     Payload: 	Variable (maximum 1024 bytes)
+    
     CRC32:	    4 bytes
 
     Header: 	Total 32 bytes
-        Version: 		1 byte
+        Version: 		    1 byte
         Packet Type:		1 byte
         Waveform Mode ID:	1 byte
-		Flags: 			1 byte
+		Flags: 			    1 byte
         Sequence Number:	2 bytes
-        Source ID:		8 bytes
+        Source ID:		    8 bytes
         Destination ID: 	8 bytes
-        Payload Length:	2 bytes
-        Reserved:		8 bytes
+        Payload Length:	    2 bytes
+        Fragment Index:	    1 byte
+        Reserved:		    7 bytes
 
         Packet Types:
             0x01 = Data
@@ -100,9 +105,27 @@ Link layer
                 0 = Normal priority 
                 1 = High priority 
 
-            Bit 5: Reserved 
-            Bit 6: Reserved 
-            Bit 7: Reserved 
+            Bit 5: Reserved
+            Bit 6: Reserved
+            Bit 7: Reserved
+
+        Fragment Index: 1 byte
+            Position of this frame within its fragmented-message run
+            (0-255). Only meaningful when the Fragmented flag (Bit 2) is
+            set - ignored otherwise.
+
+            0 = this frame authoritatively starts a NEW fragmented-message
+                run (a receiver may safely (re)start reassembly here,
+                abandoning any run already in progress).
+            1, 2, 3... = a continuation of an in-progress run; a receiver
+                must only accept it if it actually matches an in-progress
+                run's expected Fragment Index, Sequence Number, and Source
+                ID - otherwise the frame must be discarded, NOT treated as
+                the start of a new run. (Without this rule, a continuation
+                fragment left over from an abandoned/overflowed run could
+                be silently misread as the start of a new message, letting
+                a truncated tail reassemble into something that looks like
+                a complete, valid message.)
 
 
         Source ID / Destination ID Encoding:
@@ -114,9 +137,11 @@ Link layer
     "K0MDT"
         ASCII: 4B 30 4D 44 54
         Encoded 8-byte field: 4B 30 4D 44 54 00 00 00
+    
     "W1AW"
         ASCII:  57 31 41 57
         Encoded 8-byte field: 57 31 41 57 00 00 00 00
+    
     "BROADCAST"
         Not valid (exceeds 8 bytes)
 
@@ -126,17 +151,18 @@ Link layer
         1E 42 5E FB 93 7E 20 21 	   LFSR pseudo-noise
         D5 1A 78 FD B4 8C C8 B1 	   sequence, shown here
         B8 C3 2D 60 98 18 9F CB 	   across 4 lines)
-        1A CF FC 1D 			<- Sync Word
-        01 				<- Version 
-        02 				<- Waveform Mode ID (2400 bps) 
-        01 				<- Packet Type (Data) 
-        01 				<- Flags (ACK requested) 
-        00 01 				<- Sequence Number 
+        1A CF FC 1D 			    <- Sync Word
+        01 				            <- Version 
+        02 				            <- Waveform Mode ID (2400 bps) 
+        01 				            <- Packet Type (Data) 
+        01 				            <- Flags (ACK requested) 
+        00 01 				        <- Sequence Number 
         4B 30 4D 44 54 00 00 00 	<- Source ID "K0MDT" 
         41 4C 4C 00 00 00 00 00 	<- Destination ID "ALL" 
-        00 05 				<- Payload Length (5 bytes) 
-        00 00 00 00 00 00 00 00 	<- Reserved 
-        48 65 6C 6C 6F 		<- Payload "Hello" 
-        A7 39 82 F1 			<- CRC32 (Header + Payload) 
+        00 05 				        <- Payload Length (5 bytes)
+        00 				            <- Fragment Index (0 - not fragmented, N/A here)
+        00 00 00 00 00 00 00 		<- Reserved
+        48 65 6C 6C 6F 		        <- Payload "Hello"
+        A7 39 82 F1 			    <- CRC32 (Header + Payload) 
 
 

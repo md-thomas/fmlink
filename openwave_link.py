@@ -140,22 +140,36 @@ def format_flags(flags_byte):
     names = [name for bit, name in _FLAG_NAMES if flags_byte & bit]
     return ','.join(names) if names else '-'
 
-# version(B) type(B) mode(B) flags(B) seq(H) src(8s) dst(8s) payload_len(H) reserved(8s)
-# All multi-byte fields big-endian, matching OpenWave_Description.txt's byte-dump examples.
-_HEADER_STRUCT = struct.Struct('>BBBBH8s8sH8s')
+# version(B) type(B) mode(B) flags(B) seq(H) src(8s) dst(8s) payload_len(H)
+# fragment_index(B) reserved(7s). All multi-byte fields big-endian, matching
+# OpenWave_Description.txt's byte-dump examples.
+#
+# fragment_index repurposes 1 of the original 8 Reserved bytes (7 remain
+# truly reserved): the position of this frame within its fragmented-message
+# run (0 = this frame genuinely starts a new run). Added specifically so
+# FragmentReassembler has an authoritative signal for "is this really a new
+# run" instead of inferring it from "nothing else is in progress" - that
+# inference was silently wrong whenever a run got abandoned mid-stream (e.g.
+# MAX_FRAGMENTS overflow): the very next leftover continuation fragment used
+# to get misread as a fresh start, so a receiver could silently get delivered
+# a truncated tail of an oversized message with a normal 'ok' status and no
+# indication anything was wrong. See FragmentReassembler's docstring.
+_HEADER_STRUCT = struct.Struct('>BBBBH8s8sHB7s')
 assert _HEADER_STRUCT.size == HEADER_LEN
 
 
 def build_header(payload_len, version=VERSION, packet_type=PACKET_TYPE_DATA,
-                  mode_id=0, flags=0, seq=0, src_id=b'', dst_id=b''):
+                  mode_id=0, flags=0, seq=0, src_id=b'', dst_id=b'', fragment_index=0):
     """Build the 32-byte header. src_id/dst_id are truncated/zero-padded to 8 bytes.
-    seq wraps automatically at SEQ_MODULUS (16 bits) - callers don't need to."""
+    seq wraps automatically at SEQ_MODULUS (16 bits) - callers don't need to.
+    fragment_index only matters when the Fragmented flag is set - see this
+    module's header-struct comment and FragmentReassembler."""
     if not (0 <= payload_len <= MAX_PAYLOAD_LEN):
         raise ValueError(f'payload_len {payload_len} out of range 0..{MAX_PAYLOAD_LEN}')
     return _HEADER_STRUCT.pack(
         version, packet_type, mode_id, flags, seq % SEQ_MODULUS,
         src_id[:8].ljust(8, b'\x00'), dst_id[:8].ljust(8, b'\x00'),
-        payload_len, b'\x00' * 8,
+        payload_len, fragment_index % 0x100, b'\x00' * 7,
     )
 
 
@@ -163,12 +177,12 @@ def parse_header(header_bytes):
     """Parse a 32-byte header into a dict of fields."""
     if len(header_bytes) != HEADER_LEN:
         raise ValueError(f'header must be exactly {HEADER_LEN} bytes, got {len(header_bytes)}')
-    version, packet_type, mode_id, flags, seq, src_id, dst_id, payload_len, _reserved = \
+    version, packet_type, mode_id, flags, seq, src_id, dst_id, payload_len, fragment_index, _reserved = \
         _HEADER_STRUCT.unpack(header_bytes)
     return {
         'version': version, 'packet_type': packet_type, 'mode_id': mode_id,
         'flags': flags, 'seq': seq, 'src_id': src_id, 'dst_id': dst_id,
-        'payload_len': payload_len,
+        'payload_len': payload_len, 'fragment_index': fragment_index,
     }
 
 
@@ -203,7 +217,7 @@ def build_frame_with_bad_length(payload, declared_length, lead_pad=24, end_pad=2
     header = _HEADER_STRUCT.pack(
         version, packet_type, mode_id, flags, seq % SEQ_MODULUS,
         src_id[:8].ljust(8, b'\x00'), dst_id[:8].ljust(8, b'\x00'),
-        declared_length % 0x10000, b'\x00' * 8,
+        declared_length % 0x10000, 0, b'\x00' * 7,
     )
     crc = zlib.crc32(header + payload) & 0xFFFFFFFF
     packet = header + payload + struct.pack('>I', crc)
@@ -400,14 +414,22 @@ class LinkReceiver:
     the same way.
 
     on_message/on_ack_needed/on_ack_received are optional callbacks (default
-    no-ops), fired as described in feed_frame().
+    no-ops), fired as described in feed_frame(). on_raw_message is an
+    additional optional callback that fires alongside on_message with the
+    payload's original, undecoded bytes - on_message's text is produced via
+    payload_bytes.decode('utf-8', errors='replace'), which is lossy/
+    corrupting for arbitrary binary content (e.g. a file transfer), so
+    on_raw_message exists for callers that need the real bytes back (see
+    openwave_cli.py's `send --file`/`recv --output-file`).
     """
 
-    def __init__(self, station_id='', on_message=None, on_ack_needed=None, on_ack_received=None):
+    def __init__(self, station_id='', on_message=None, on_ack_needed=None,
+                 on_ack_received=None, on_raw_message=None):
         self.station_id = station_id
         self.reassembler = FragmentReassembler()
         self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'dup': 0, 'lost': 0,
-                        'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0, 'not_for_us': 0}
+                        'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0,
+                        'frag_discarded': 0, 'not_for_us': 0}
         self.last_seq = None
         self.last_flags = 0
         self.last_mode = 0
@@ -416,6 +438,7 @@ class LinkReceiver:
         self._on_message = on_message or (lambda text: None)
         self._on_ack_needed = on_ack_needed or (lambda seq: None)
         self._on_ack_received = on_ack_received or (lambda seq: None)
+        self._on_raw_message = on_raw_message or (lambda payload_bytes: None)
 
     def _update_seq(self, header):
         seq = header['seq']
@@ -438,6 +461,7 @@ class LinkReceiver:
 
     def _publish(self, header, payload_bytes):
         self.counts['ok'] += 1
+        self._on_raw_message(payload_bytes)
         text = payload_bytes.decode('utf-8', errors='replace')
         if text:
             self._on_message(text)
@@ -472,6 +496,7 @@ class LinkReceiver:
             frag_status, reassembled = self.reassembler.feed(header, payload)
             self.counts['frag_aborted'] = self.reassembler.abort_count
             self.counts['frag_overflow'] = self.reassembler.overflow_count
+            self.counts['frag_discarded'] = self.reassembler.discarded_count
             if frag_status == 'complete':
                 self._publish(header, reassembled)
             return
@@ -490,6 +515,7 @@ class LinkReceiver:
         return (f"OK:{c['ok']}  CRC fail:{c['crc_fail']}  Bad length:{c['bad_length']}  "
                 f"Dup:{c['dup']}  Lost:{c['lost']}  ACKs rx:{c['acks_rx']}  "
                 f"Frag abort:{c['frag_aborted']}  Frag overflow:{c['frag_overflow']}  "
+                f"Frag discarded:{c['frag_discarded']}  "
                 f"Not for us:{c['not_for_us']}  |  "
                 f"Seq:{seq_str}  Flags:{format_flags(self.last_flags)}  "
                 f"{format_mode(self.last_mode)}  "
@@ -638,7 +664,7 @@ def build_fragmented_frames(payload, seq_start, chunk_size=MAX_PAYLOAD_LEN,
             flags |= FLAG_MORE_FRAGMENTS
         seq = (seq_start + i) % SEQ_MODULUS
         frames.append(build_frame(chunk, lead_pad=lead_pad, end_pad=end_pad,
-                                   seq=seq, flags=flags, **header_kwargs))
+                                   seq=seq, flags=flags, fragment_index=i, **header_kwargs))
     return frames, (seq_start + len(chunks)) % SEQ_MODULUS
 
 
@@ -648,26 +674,35 @@ class FragmentReassembler:
     where parse_flags(header['flags'])['fragmented'] is True - non-fragmented
     frames are already complete on their own and shouldn't go through this.
 
-    Design gap worth knowing (see this module's docstring): there's no
-    dedicated "first fragment" flag or fragment-index/reassembly-ID field in
-    the OpenWave header. This class infers "start of a new run" as "a
-    fragmented frame arrived while no run was already in progress" and uses
-    the Sequence Number as a consecutive per-fragment counter. That correctly
-    detects a gap *within* an already-started run (aborts it, starts fresh
-    from whatever arrived), but can't tell a genuinely-first fragment apart
-    from a mid-run fragment if the real first one never arrived at all -
-    there's nothing in the header that says "I am fragment #1 of N."
+    Uses header['fragment_index'] as the authoritative "is this really the
+    start of a new run" signal (fragment_index == 0), rather than inferring
+    it from "nothing else is in progress" the way an earlier version of this
+    class did. That inference was silently wrong whenever a run got
+    abandoned mid-stream (e.g. a MAX_FRAGMENTS overflow): the very next
+    leftover continuation fragment (fragment_index != 0) would get
+    misread as a fresh start, and if the remaining leftover fragments
+    happened to run to completion on their own, a receiver could get
+    silently delivered a truncated TAIL of the oversized original message,
+    with a normal 'ok' status and no indication anything was ever wrong.
+
+    Also tracks the expected Source ID across a run (not just Sequence
+    Number/fragment_index), so two different stations' fragmented messages
+    can't accidentally interleave into one garbled reassembly just because
+    their sequence numbers happened to line up.
     """
 
     def __init__(self, max_fragments=MAX_FRAGMENTS):
         self.max_fragments = max_fragments
         self.abort_count = 0
         self.overflow_count = 0
+        self.discarded_count = 0
         self.reset()
 
     def reset(self):
         self._chunks = []
         self._expected_seq = None
+        self._expected_index = None
+        self._src_id = None
 
     @property
     def in_progress(self):
@@ -675,29 +710,47 @@ class FragmentReassembler:
 
     def feed(self, header, payload):
         """Returns (status, result):
-          ('waiting', None)   - buffered, still expecting more fragments
-          ('complete', bytes) - final fragment arrived; full reassembled payload
-          ('overflow', None)  - exceeded max_fragments without completing;
-                                 run abandoned defensively
+          ('waiting', None)    - buffered, still expecting more fragments
+          ('complete', bytes)  - final fragment arrived; full reassembled payload
+          ('overflow', None)   - exceeded max_fragments without completing;
+                                  run abandoned defensively
+          ('discarded', None)  - a continuation fragment (fragment_index != 0)
+                                  arrived that doesn't match any in-progress
+                                  run (wrong/no run, wrong seq, wrong index, or
+                                  wrong source) - ignored rather than
+                                  misinterpreted as a new run's start. If a run
+                                  WAS in progress when this happened, that run
+                                  is also aborted (see abort_count) since a
+                                  mismatch means data was already lost.
 
-        A sequence gap that aborts a stale in-progress run doesn't get its own
-        return status - the frame that caused it is simply treated as the
-        start of a new run (status 'waiting' or 'complete' as appropriate).
-        Check abort_count (a running total, not a per-call flag) if you need
-        to track how often that happens.
+        fragment_index == 0 is trusted unconditionally as a new run's start,
+        aborting any stale in-progress run first (counted under
+        abort_count - a running total, not a per-call flag).
         """
         seq = header['seq']
+        frag_index = header['fragment_index']
+        src_id = header['src_id']
         more = parse_flags(header['flags'])['more_fragments']
 
-        if self.in_progress and seq != self._expected_seq:
-            self.reset()
-            self.abort_count += 1
-
-        if not self.in_progress:
-            self._chunks = []
-
-        self._chunks.append(payload)
-        self._expected_seq = (seq + 1) % SEQ_MODULUS
+        if frag_index == 0:
+            if self.in_progress:
+                self.abort_count += 1
+            self._chunks = [payload]
+            self._expected_seq = (seq + 1) % SEQ_MODULUS
+            self._expected_index = 1
+            self._src_id = src_id
+        else:
+            matches = (self.in_progress and seq == self._expected_seq and
+                       frag_index == self._expected_index and src_id == self._src_id)
+            if not matches:
+                if self.in_progress:
+                    self.abort_count += 1
+                self.reset()
+                self.discarded_count += 1
+                return 'discarded', None
+            self._chunks.append(payload)
+            self._expected_seq = (seq + 1) % SEQ_MODULUS
+            self._expected_index += 1
 
         if len(self._chunks) > self.max_fragments:
             self.reset()

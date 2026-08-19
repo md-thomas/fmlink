@@ -587,23 +587,84 @@ class FragmentReassemblerTests(unittest.TestCase):
         self.assertFalse(reassembler.in_progress)
         self.assertEqual(reassembler.abort_count, 0)
 
-    def test_missing_middle_fragment_aborts_and_restarts(self):
+    def test_missing_middle_fragment_aborts_and_discards(self):
         payload = b'four fragments worth of test payload data here'
         pairs = self._fragments_as_header_payload_pairs(payload, chunk_size=10)
         self.assertGreaterEqual(len(pairs), 4)
 
         reassembler = link.FragmentReassembler()
         # feed fragment 0, then skip fragment 1 (simulate a CRC failure/loss),
-        # then feed the rest
+        # then feed fragment 2
         status0, _ = reassembler.feed(*pairs[0])
         self.assertEqual(status0, 'waiting')
         self.assertEqual(reassembler.abort_count, 0)
 
-        # fragment 2 arrives next (seq doesn't match expected) - should abort
-        # the fragment-0-only run and start fresh from fragment 2
-        status2, _ = reassembler.feed(*pairs[2])
-        self.assertIn(status2, ('waiting', 'complete'))
-        self.assertEqual(reassembler.abort_count, 1)
+        # fragment 2 arrives next (fragment_index doesn't match expected) -
+        # this is NOT a legitimate new-run start (fragment_index != 0), so it
+        # must be discarded, not misread as restarting a fresh run - the old
+        # "restart from whatever arrived" behavior was exactly the bug that
+        # let a receiver silently accept a truncated tail as a complete
+        # message (see FragmentReassembler's docstring)
+        status2, result2 = reassembler.feed(*pairs[2])
+        self.assertEqual(status2, 'discarded')
+        self.assertIsNone(result2)
+        self.assertEqual(reassembler.abort_count, 1)  # the fragment-0-only run was cut short
+        self.assertEqual(reassembler.discarded_count, 1)
+        self.assertFalse(reassembler.in_progress)
+
+        # a genuine fresh start (fragment_index == 0) afterward still works
+        status0b, _ = reassembler.feed(*pairs[0])
+        self.assertEqual(status0b, 'waiting')
+
+    def test_overflow_then_leftover_fragments_are_discarded_not_delivered(self):
+        """The actual bug this field was added to fix: after an overflow,
+        the leftover continuation fragments of the abandoned run must NOT
+        be allowed to quietly reassemble into a 'complete' truncated
+        message - see this module's PREAMBLE/fragment_index comment."""
+        payload = b'Z' * 500
+        pairs = self._fragments_as_header_payload_pairs(payload, chunk_size=10)
+        self.assertGreater(len(pairs), 6)
+
+        reassembler = link.FragmentReassembler(max_fragments=3)
+        statuses = [reassembler.feed(h, c)[0] for h, c in pairs[:4]]
+        self.assertEqual(statuses[:3], ['waiting', 'waiting', 'waiting'])
+        self.assertEqual(statuses[3], 'overflow')
+
+        # every leftover fragment of the abandoned run must be discarded,
+        # never delivered as 'complete'
+        for header, chunk in pairs[4:]:
+            status, result = reassembler.feed(header, chunk)
+            self.assertEqual(status, 'discarded', "leftover fragment must not silently reassemble")
+            self.assertIsNone(result)
+        self.assertGreater(reassembler.discarded_count, 0)
+
+    def test_interleaved_sources_do_not_merge(self):
+        """Two different stations' fragmented messages with coincidentally
+        matching sequence numbers must not merge into one garbled result -
+        fragment_index alone isn't enough if src_id isn't checked too."""
+        payload_a = b'message from station A, several fragments long here'
+        payload_b = b'a totally different message from station B goes here'
+        pairs_a = self._fragments_as_header_payload_pairs(payload_a, chunk_size=10)
+        pairs_b = self._fragments_as_header_payload_pairs(payload_b, chunk_size=10)
+        self.assertGreater(len(pairs_a), 1)
+        self.assertGreater(len(pairs_b), 1)
+
+        # force distinct, non-default source IDs so a same-bytes coincidence
+        # isn't hiding a bug
+        for header, _ in pairs_a:
+            header['src_id'] = b'STATIONA'
+        for header, _ in pairs_b:
+            header['src_id'] = b'STATIONB'
+
+        reassembler = link.FragmentReassembler()
+        status0, _ = reassembler.feed(*pairs_a[0])
+        self.assertEqual(status0, 'waiting')
+
+        # station B's fragment 1 arrives next (same fragment_index B would
+        # expect if this were A's stream) - must be discarded, not merged in
+        status1, result1 = reassembler.feed(*pairs_b[1])
+        self.assertEqual(status1, 'discarded')
+        self.assertIsNone(result1)
 
     def test_overflow_protection(self):
         payload = b'Y' * 500
@@ -753,6 +814,34 @@ class LinkReceiverTests(unittest.TestCase):
         self._feed(receiver, link.build_frame(b'hello', seq=1))
         self.assertEqual(messages, ['hello'])
         self.assertEqual(receiver.counts['ok'], 1)
+
+    def test_on_raw_message_fires_with_undecoded_bytes(self):
+        raw = []
+        receiver = link.LinkReceiver(on_raw_message=raw.append)
+        self._feed(receiver, link.build_frame(b'hello', seq=1))
+        self.assertEqual(raw, [b'hello'])
+
+    def test_on_raw_message_preserves_arbitrary_binary_content(self):
+        # bytes that are NOT valid UTF-8 - on_message's text would be
+        # corrupted (replacement characters) via errors='replace', but
+        # on_raw_message must return them completely unchanged
+        binary_payload = bytes(range(256)) * 4  # every possible byte value
+        raw = []
+        texts = []
+        receiver = link.LinkReceiver(on_raw_message=raw.append, on_message=texts.append)
+        self._feed(receiver, link.build_frame(binary_payload, seq=1))
+        self.assertEqual(raw, [binary_payload])
+        # confirm the premise: the text path really would have mangled this
+        self.assertNotEqual(texts[0].encode('utf-8', errors='replace'), binary_payload)
+
+    def test_on_raw_message_fires_once_per_reassembled_fragment_run(self):
+        raw = []
+        receiver = link.LinkReceiver(on_raw_message=raw.append)
+        payload = b'F' * 3000  # several fragments at the default chunk size
+        frames, _ = link.build_fragmented_frames(payload, seq_start=0, chunk_size=1000)
+        self.assertGreater(len(frames), 1)
+        self._feed(receiver, b''.join(frames))
+        self.assertEqual(raw, [payload])
 
     def test_ack_requested_flag_triggers_on_ack_needed(self):
         needed = []

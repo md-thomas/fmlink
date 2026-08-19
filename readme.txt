@@ -23,8 +23,18 @@ openwave_cli.py
     frame to a file (plain text or JSON payload, with options to
     deliberately corrupt it for negative testing); `dump` hex-dumps and
     labels every field of every frame in a file; `recv` decodes a file
-    through the full LinkReceiver pipeline. Run `python3 openwave_cli.py
-    help` for usage and examples.
+    through the full LinkReceiver pipeline. Both dump/recv take an optional
+    --correlate flag (see openwave_sync.py below) for data that came
+    through a noisy channel. Run `python3 openwave_cli.py help` for usage
+    and examples.
+
+openwave_sync.py
+    Tolerant frame synchronization: finds the preamble+sync-word via a
+    sliding Hamming-distance correlator (like the real flowgraphs'
+    digital_correlate_access_code_tag_bb) instead of requiring an exact
+    byte match. This is what actually lets the PRN preamble's noise
+    resilience do anything in this file-based pipeline - see its module
+    docstring. Used via openwave_cli.py's --correlate flag.
 
 openwave_modem.py
     PHY-layer bits <-> symbols mapping (currently BPSK only - see
@@ -38,12 +48,20 @@ openwave_pulse.py
     and an 11-symbol filter span match the convention already used in
     tx_pluto.grc/phy_sim_loopback.grc's firdes.root_raised_cosine() calls.
 
-modulate.py / pulseshape.py / matchedfilter.py / demodulate.py / plot_constellation.py
-    CLI stages built on the two modules above, chained together into a
-    full bits -> symbols -> RRC samples -> symbols -> bits pipeline with a
-    visualization step in the middle. See "PHY-Layer Pipeline" below for
-    the full command sequence, what each stage does, and why matched
-    filtering is required (not optional) for a clean constellation.
+openwave_channel.py
+    AWGN channel simulation - add noise to a sample file, either by direct
+    noise_voltage (matching channels_channel_model_0's parameter) or a
+    target SNR in dB measured against the file's own signal power. Sample-
+    level, same reasoning as openwave_pulse.py for why this only makes
+    sense after pulse shaping, not before.
+
+modulate.py / pulseshape.py / channel.py / matchedfilter.py / demodulate.py / plot_constellation.py
+    CLI stages built on the modules above, chained together into a full
+    bits -> symbols -> RRC samples -> (optionally noisy) -> symbols -> bits
+    pipeline with a visualization step in the middle. See "PHY-Layer
+    Pipeline" below for the full command sequence, what each stage does,
+    and why matched filtering is required (not optional) for a clean
+    constellation.
 
 phy_sim_loopback.grc (formerly test1.grc / test2.grc)
     Simulated loopback testbench: TX -> AWGN channel model -> RX, all in one
@@ -265,11 +283,31 @@ Quick reference:
         python3 openwave_cli.py send "x" -o bad.bin --corrupt-header
         python3 openwave_cli.py send "x" -o bad.bin --bad-length 9999
 
+        Send a whole binary file (e.g. a PNG/JPG) as the payload, no text -
+        exercises fragmentation on real, non-repeating binary content
+        instead of just text (a good stress test - a several-hundred-KB
+        image needs dozens of fragments):
+        python3 openwave_cli.py send --file photo.png -o img.bin
+
+        Send a text message WITH a file attached - a JSON envelope
+        ({text, filename, attachment_b64}) over the existing --json payload
+        path, since the link layer only ever sees opaque bytes either way:
+        python3 openwave_cli.py send "check this out" --attach photo.png -o msg.bin
+
     dump: hex-dump and label every field of every frame in a file
         python3 openwave_cli.py dump -i burst.bin
 
     recv: decode a file through the full LinkReceiver pipeline
         python3 openwave_cli.py recv -i burst.bin --station-id W1AW
+
+        Recover a `send --file` binary payload - plain recv would corrupt
+        it via lossy UTF-8 text decoding, so this writes the raw undecoded
+        bytes instead of printing them:
+        python3 openwave_cli.py recv -i img.bin --output-file recovered.png
+
+        Recover a `send --attach` message: text still prints normally, and
+        --save-attachment extracts+writes the attachment (base64-decoded):
+        python3 openwave_cli.py recv -i msg.bin --save-attachment recovered.png
 
 None of this touches GNU Radio or any hardware - it exercises
 openwave_link.py directly, which is useful both for quick sanity-checking
@@ -310,29 +348,38 @@ Full pipeline, one stage at a time:
     python3 plot_constellation.py -i shaped.cfile -o before_mf.html \
         --title "before matched filter"
 
-    # 6. Matched filter + decimate: back down to one sample/symbol
-    python3 matchedfilter.py -i shaped.cfile -o recovered_symbols.cfile
+    # 6. (Optional) simulate a noisy channel - insert here, between pulse
+    #    shaping and the matched filter (noise is a sample-level thing).
+    #    Skip this step entirely for a clean round trip.
+    python3 channel.py -i shaped.cfile -o noisy.cfile --snr-db 10
+    #    (or: --noise-voltage 0.05 for a direct value instead of target SNR)
 
-    # 7. Plot AFTER matched filtering - expect two clean dots at +/-1.0
+    # 7. Matched filter + decimate: back down to one sample/symbol.
+    #    Input is noisy.cfile if you did step 6, shaped.cfile if you skipped it.
+    python3 matchedfilter.py -i noisy.cfile -o recovered_symbols.cfile
+
+    # 8. Plot AFTER matched filtering - expect two clean dots at +/-1.0 with
+    #    no noise, or two fuzzy clusters around +/-1.0 with noise added
     #    (TX RRC + RX RRC in cascade = a full raised-cosine response,
     #    which IS zero-ISI at the correct symbol-spaced sampling instant)
     python3 plot_constellation.py -i recovered_symbols.cfile -o after_mf.html \
         --title "after matched filter"
 
-    # 8. Demodulate: symbols -> bits/bytes
+    # 9. Demodulate: symbols -> bits/bytes
     python3 demodulate.py -t bpsk -i recovered_symbols.cfile -o out.bin
 
-    # 9. Verify the round trip reproduced the original frame exactly
+    # 10. Verify the round trip reproduced the original frame exactly
+    #     (expect this to fail at low enough SNR - that's the point)
     cmp test.bin out.bin && echo "IDENTICAL"
 
-    # 10. Confirm it still decodes correctly through the link layer
+    # 11. Confirm it still decodes correctly through the link layer
     python3 openwave_cli.py recv -i out.bin
 
 Notes:
   - openwave_cli.py's dump/recv only understand byte-level frame files
     (test.bin/out.bin) - never point them at a .cfile (raw complex samples).
-  - Steps 3+8 alone (skip 4-7) also round-trip correctly, if you just want
-    to test the bits<->symbols mapping without pulse shaping.
+  - Steps 3+9 alone (skip the rest) also round-trip correctly, if you just
+    want to test the bits<->symbols mapping without pulse shaping.
   - --alpha/--sps/--span on pulseshape.py and matchedfilter.py must match
     between the two (matchedfilter.py can't know what the sender used - see
     each script's -h for defaults, currently alpha=0.35, sps=4, span=11).
@@ -341,7 +388,20 @@ Notes:
     display/X11 forwarding required on a remote box. It deliberately uses
     plain SVG rendering (Plotly's go.Scatter, not go.Scattergl) rather than
     WebGL, so it works even in browsers/VMs without WebGL support.
-  - Nothing in this pipeline adds noise yet - it's a clean round trip by
-    design, meant to validate the modulation math itself. Noise injection
-    on top of pulseshape.py's output is the natural next stage (see
-    tasklist.txt).
+  - By default, openwave_cli.py recv/dump use exact byte matching to find
+    a frame (openwave_link.iter_frames()/describe_frames()) - a single bit
+    error anywhere in the 36-byte preamble+sync-word breaks that match
+    completely, so at low SNR you'll see OK:0 with no CRC-fail count
+    either (frame not found at all), not a rising CRC-fail count. Pass
+    --correlate to use openwave_sync.py's tolerant Hamming-distance
+    correlator instead (matching what digital_correlate_access_code_tag_bb
+    does in the real flowgraphs) - it finds frames the exact-match path
+    misses entirely, informally down to roughly ~2dB SNR for BPSK at these
+    filter settings before header/payload bit errors (no FEC yet - see
+    tasklist.txt Phase 3) start causing CRC failures even once sync is
+    found. Example:
+        python3 channel.py -i shaped.cfile -o noisy.cfile --snr-db 1.5 --seed 4
+        python3 matchedfilter.py -i noisy.cfile -o recovered_symbols.cfile
+        python3 demodulate.py -t bpsk -i recovered_symbols.cfile -o out.bin
+        python3 openwave_cli.py recv -i out.bin              # OK:0 - not found
+        python3 openwave_cli.py recv -i out.bin --correlate  # OK:1 - decoded
