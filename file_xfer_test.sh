@@ -2,7 +2,7 @@
 
 usage() {
     cat <<'EOF'
-Usage: ./file_xfer_test.sh [FILE] [--message TEXT] [--mode MODE] [--snr SNR_DB] [--fec PRESET]
+Usage: ./file_xfer_test.sh [FILE] [--message TEXT] [--mode MODE] [--snr SNR_DB] [--fec PRESET] [--modtype TYPE]
 
 Sends a message and/or a file through openwave_cli.py's send/recv and
 verifies the round trip. Exactly one test runs, shaped by what you pass:
@@ -14,7 +14,9 @@ verifies the round trip. Exactly one test runs, shaped by what you pass:
   FILE            Path to a file to send as an attachment (positional).
   --message TEXT  Text message to send (combined with FILE if both given).
   --mode MODE     Waveform Mode ID, 0-4 (default: 0) - passed straight to
-                  openwave_cli.py send's --mode.
+                  openwave_cli.py send's --mode. Header metadata only -
+                  does NOT select the modulation actually used (see
+                  --modtype).
   --snr SNR_DB    Push the transfer through the full modem pipeline
                   (modulate -> pulseshape -> channel -> matchedfilter ->
                   demodulate) with AWGN at this SNR, instead of a clean
@@ -25,6 +27,10 @@ verifies the round trip. Exactly one test runs, shaped by what you pass:
                   PRESETS, or run openwave_fec_generate_presets.py -h to
                   search for/add more) - only meaningful combined with
                   --snr. Omit to run the raw (uncoded) pipeline.
+  --modtype TYPE  Modulation scheme to actually use: bpsk (default) or
+                  qpsk - passed straight to modulate.py/demodulate.py's -t.
+                  Only meaningful combined with --snr (no modem involved
+                  in the fast link-layer-only path).
   -h, --help      Show this help and exit.
 
 Examples:
@@ -32,6 +38,7 @@ Examples:
   ./file_xfer_test.sh colorbar_test.png
   ./file_xfer_test.sh --message "just a text message"
   ./file_xfer_test.sh colorbar_test.png --message "under noise" --snr -6 --fec r1_3_k7
+  ./file_xfer_test.sh colorbar_test.png --message "qpsk" --snr -6 --fec r1_3_k7 --modtype qpsk
 EOF
 }
 
@@ -40,6 +47,7 @@ MESSAGE=""
 MODE=0
 SNR_DB=""
 FEC_PRESET=""
+MOD_TYPE=bpsk
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -48,6 +56,7 @@ while [ $# -gt 0 ]; do
         --mode) MODE="$2"; shift 2 ;;
         --snr) SNR_DB="$2"; shift 2 ;;
         --fec) FEC_PRESET="$2"; shift 2 ;;
+        --modtype) MOD_TYPE="$2"; shift 2 ;;
         *) INPUT_FILE="$1"; shift ;;
     esac
 done
@@ -72,10 +81,10 @@ fi
 # uniqueness (so running the SAME config twice in parallel is still safe)
 # - the mode/snr/fec label in front of it is purely so several concurrent
 # runs are tellable apart by name in `ls /tmp` or a job list.
-LABEL="mode${MODE}_snr${SNR_DB:-none}_fec${FEC_PRESET:-none}"
+LABEL="mode${MODE}_snr${SNR_DB:-none}_fec${FEC_PRESET:-none}_mod${MOD_TYPE}"
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/openwave_file_xfer_test.${LABEL}.XXXXXX")
 
-echo "mode: $MODE  snr: ${SNR_DB:-none (link-layer only)}  fec: ${FEC_PRESET:-none}"
+echo "mode: $MODE  snr: ${SNR_DB:-none (link-layer only)}  fec: ${FEC_PRESET:-none}  modtype: $MOD_TYPE"
 echo "Working dir: $WORKDIR"
 if [ -n "$INPUT_FILE" ] && [ -n "$MESSAGE" ]; then
     echo "Sending message + file attachment: \"$MESSAGE\" + $INPUT_FILE"
@@ -146,12 +155,16 @@ run_transfer() {
         echo "Bytes transmitted: $(human_size "$orig_bytes")  (no --fec)"
     fi
 
-    python3 modulate.py -t bpsk -i "$mod_input" -o "$WORKDIR/xfer_symbols.cfile"
+    python3 modulate.py -t "$MOD_TYPE" -i "$mod_input" -o "$WORKDIR/xfer_symbols.cfile"
     python3 pulseshape.py -i "$WORKDIR/xfer_symbols.cfile" -o "$WORKDIR/xfer_shaped.cfile"
+    python3 plot_constellation.py -i "$WORKDIR/xfer_shaped.cfile" -o "$WORKDIR/xfer_before_mf.html" \
+        --title "before matched filter"
     echo "Injecting noise at ${SNR_DB}dB SNR"
     python3 channel.py -i "$WORKDIR/xfer_shaped.cfile" -o "$WORKDIR/xfer_noisy.cfile" --snr-db "$SNR_DB"
     python3 matchedfilter.py -i "$WORKDIR/xfer_noisy.cfile" -o "$WORKDIR/xfer_recsym.cfile"
-    python3 demodulate.py -t bpsk -i "$WORKDIR/xfer_recsym.cfile" -o "$WORKDIR/xfer_demod.bin"
+    python3 plot_constellation.py -i "$WORKDIR/xfer_recsym.cfile" -o "$WORKDIR/xfer_after_mf.html" \
+        --title "after matched filter"
+    python3 demodulate.py -t "$MOD_TYPE" -i "$WORKDIR/xfer_recsym.cfile" -o "$WORKDIR/xfer_demod.bin"
 
     if [ -n "$FEC_PRESET" ]; then
         echo "--- fec_decode.py (preset $FEC_PRESET) ---"

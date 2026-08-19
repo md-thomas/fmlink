@@ -18,6 +18,8 @@ import openwave_modem as modem
 
 MODULATORS = {
     'bpsk': modem.modulate_bpsk,
+    'qpsk': modem.modulate_qpsk,
+    '16qam': modem.modulate_qam16,
 }
 
 

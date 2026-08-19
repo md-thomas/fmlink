@@ -33,6 +33,16 @@ def main():
                          help='Fixed +/- axis limit for both I and Q (default: auto - '
                               '1.5x the largest magnitude in the file, matching the '
                               ".grc flowgraphs' QT GUI Constellation Sink convention)")
+    parser.add_argument('--max-points', type=int, default=5000,
+                         help='If more symbols than this are in the file, evenly '
+                              'subsample down to this many for the plot - a real file '
+                              'transfer can have hundreds of thousands of symbols '
+                              '(millions after pulse-shaping oversampling), and plotting '
+                              'every single one produces a multi-hundred-MB HTML file '
+                              'that browsers struggle to render. The constellation shape '
+                              '(what this plot is actually for) is already clear from a '
+                              'representative subsample. Default: 5000, 0 disables '
+                              'subsampling and plots every point.')
     args = parser.parse_args()
 
     with open(args.input, 'rb') as f:
@@ -43,10 +53,16 @@ def main():
         max_mag = max((abs(s) for s in symbols), default=1.0)
         limit = max(max_mag * 1.5, 0.1)
 
-    i_vals = [s.real for s in symbols]
-    q_vals = [s.imag for s in symbols]
-    hover_text = [f"#{n}: {s.real:+.4f} {s.imag:+.4f}j  |s|={abs(s):.4f}"
-                  for n, s in enumerate(symbols)]
+    total = len(symbols)
+    indices = range(total)
+    if args.max_points and total > args.max_points:
+        stride = -(-total // args.max_points)  # ceil division
+        indices = range(0, total, stride)
+
+    i_vals = [symbols[n].real for n in indices]
+    q_vals = [symbols[n].imag for n in indices]
+    hover_text = [f"#{n}: {symbols[n].real:+.4f} {symbols[n].imag:+.4f}j  |s|={abs(symbols[n]):.4f}"
+                  for n in indices]
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -67,7 +83,11 @@ def main():
 
     fig.write_html(args.output, include_plotlyjs=True)
 
-    print(f"Wrote {len(symbols)}-point interactive constellation plot to {args.output}")
+    if len(indices) < total:
+        print(f"Wrote {len(indices)}-point interactive constellation plot "
+              f"(subsampled from {total} symbols, --max-points {args.max_points}) to {args.output}")
+    else:
+        print(f"Wrote {total}-point interactive constellation plot to {args.output}")
 
 
 if __name__ == '__main__':

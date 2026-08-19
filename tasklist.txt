@@ -2,7 +2,10 @@ OpenWave Task List
 ===================
 (Reconciled 2026-08-17, updated same day after pulling openwave_link.py +
 tests/ from laptop. Matches OpenWave_Description.txt: GNU Radio + SDR
-hardware implementation, pi/4-QPSK PHY, shared link-layer framing module.)
+hardware implementation, pi/4-QPSK PHY, shared link-layer framing module.
+Re-reconciled 2026-08-19 after a session that built out FEC (Phase 3) and
+the full GNU-Radio-free CLI/file-transfer testing pipeline (Phase 7); also
+kicked off Phase 6 (multi-modulation) with QPSK as the starting point.)
 
 Phase 1: PHY Modem Chain (Simulation) - DONE
 ---------------------------------------------
@@ -68,6 +71,18 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
   [ ] 2.7 Dynamic ACK timeout based on active Waveform Mode's bit rate
           (RetryManager.timeout_s is currently a fixed default, not derived
           from mode/symbol rate).
+  [ ] 2.11 Wire RetryManager/ACK into the GNU-Radio-free CLI/file-transfer
+          pipeline (openwave_cli.py/file_xfer_test.sh) - a third venue for
+          closing the ACK loop, alongside phy_sim_loopback.grc (2.5, done)
+          and tx_pluto.grc/rx_rtlsdr.grc (2.9, blocked on full-duplex
+          hardware). Envisioned flow: send one packet, wait for an ACK,
+          then either send the next packet or resend the failed one -
+          stop-and-wait per fragment is the simplest fit but adds a full
+          round trip of latency per fragment; a windowed/selective-repeat
+          scheme (ack a batch, retry only the ones that failed) avoids
+          that cost while still catching the crc_fail/gap cases FEC alone
+          can't correct (see Phase 3's FEC sweep results below for how
+          often that actually happens at a given SNR/preset).
   [x] 2.8 Parse/act on Waveform Mode ID and Destination ID on RX, in
           rx_rtlsdr.grc only: openwave_link.format_mode()/decode_station_id()
           decode and display both; a new station_id parameter (blank by
@@ -91,13 +106,43 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
           not yet refactored to share LinkReceiver, a follow-up worth doing
           to remove the duplication.
 
-Phase 3: Forward Error Correction & Interleaving - TBD in spec
+Phase 3: Forward Error Correction & Interleaving - MOSTLY DONE (CLI pipeline)
 -----------------------------------------------------------------
-  [ ] 3.1 Pick and integrate a FEC scheme (spec currently lists this as TBD -
-          e.g. convolutional r=1/2 k=7, or a modern option like LDPC).
-  [ ] 3.2 Bit interleaver/de-interleaver to break up burst errors.
-  [ ] 3.3 Re-run Phase 1's loopback BER test with FEC+interleaving enabled
-          and compare against the uncoded baseline.
+Implemented in openwave_fec.py: convolutional encoding + hard-decision
+Viterbi decoding (numpy-vectorized), fully parameterized by generator
+polynomials/constraint length K rather than hardcoded to one scheme.
+Wired into the GNU-Radio-free CLI pipeline only (fec_encode.py/
+fec_decode.py, pipeline_test.sh/file_xfer_test.sh) - NOT yet wired into
+phy_sim_loopback.grc or tx_pluto.grc/rx_rtlsdr.grc, so the real pi/4-QPSK
+GNU Radio chain still runs uncoded.
+
+  [x] 3.1 FEC scheme picked and integrated (for the CLI pipeline): rate
+          1/N convolutional coding, PRESETS table of 13 named
+          configurations (r1_2_k3 through r1_6_k9), free_distance()/
+          find_generators() for principled (Dijkstra-based) preset
+          selection instead of hand-picked polynomials. Each fragment of a
+          multi-fragment message is FEC-protected independently.
+          openwave_fec_generate_presets.py regenerates/extends the table.
+          LDPC was considered (see this session's discussion) but not
+          pursued - would need a new codec built from scratch (parity-
+          check matrix design, encoder, iterative belief-propagation
+          decoder) for a coding-gain benefit, not a speed one; convolutional
+          + vectorized Viterbi already meets current needs.
+  [ ] 3.2 Bit interleaver/de-interleaver to break up burst errors - not
+          built. Current FEC handles scattered bit errors within a
+          fragment; a burst that takes out a large contiguous run within
+          one fragment's coded block is a different failure mode this
+          doesn't address (a lost/undecodable fragment's marker - see
+          openwave_sync.py's 'gap' status - is the closest analogue
+          currently handled, but that's sync-level, not interleaving).
+  [x] 3.3 Re-ran (via file_xfer_test.sh, not phy_sim_loopback.grc's BER
+          test specifically) FEC-vs-uncoded comparisons across SNR/preset
+          combinations - see openwave_fec.py's empirically-measured
+          SNR-to-preset table (right after PRESETS) for concrete pass-rate
+          numbers, e.g. r1_2_k3 fully reliable at 3dB, r1_4_k9 needed at
+          -6dB where r1_4_k7 only holds ~86%. Phase 1's actual GNU Radio
+          loopback graph itself has not been re-run with FEC enabled
+          (FEC isn't wired into it - see above).
 
 Phase 4: SDR Hardware Bring-Up (Testing Only) - IN PROGRESS
 ----------------------------------------------------------------
@@ -155,34 +200,71 @@ Radio is a permanent dependency.
   [ ] 5.4 Over-the-air test between two audio-interfaced radios running
           OpenWave, using the same framing validated in Phase 4.
 
-Phase 6: Multi-Modulation Support - DEFERRED
+Phase 6: Multi-Modulation Support - IN PROGRESS (CLI pipeline)
 -----------------------------------------------
 Long-term goal: make Waveform Mode ID select among multiple modulations
-(BPSK, QPSK, pi/4-QPSK, 8PSK, 16QAM, OFDM), not just today's pi/4-QPSK.
-Not being worked on yet - listed here so Phase 2/3 framing decisions don't
-accidentally assume pi/4-QPSK is the only mode.
+(BPSK, QPSK, pi/4-QPSK, 8PSK, 16QAM, OFDM). Started 2026-08-19 in the
+GNU-Radio-free CLI pipeline (openwave_modem.py/modulate.py/demodulate.py),
+which now implements BPSK, QPSK, and 16-QAM - the real pi/4-QPSK GNU Radio
+chain (Phase 1) is unaffected/unchanged by this work (deliberately - GNU
+Radio side is a later, separate effort).
 
-  [ ] 6.1 Generalize the modulator/demodulator blocks to be constellation-
-          pluggable per Waveform Mode ID rather than hardcoded.
-  [ ] 6.2 Add BPSK, QPSK, 8PSK, 16QAM modes (straightforward extensions of
-          the existing constellation-based chain).
+  [x] 6.1 Modulator/demodulator selection is pluggable via a dict lookup
+          (MODULATORS/DEMODULATORS in modulate.py/demodulate.py, keyed by
+          the -t flag) rather than hardcoded - not yet driven by Waveform
+          Mode ID specifically (that's the negotiation piece, 6.4).
+  [x] 6.2 QPSK and 16-QAM added: openwave_modem.py's QPSK_POINTS/QAM16_POINTS
+          + modulate/demodulate pairs - both Gray-coded (I and Q are
+          independent axes - 1 bit/axis for QPSK, 2 bits/axis as 4-level
+          PAM for 16-QAM - each with its own hard decision on demodulate,
+          so a small perturbation only ever flips one bit at a time), unit
+          average symbol energy (same convention as BPSK_POINTS) so
+          channel.py's SNR-vs-signal-power measurement treats all three
+          schemes comparably. Verified end to end through
+          pipeline_test.sh/file_xfer_test.sh's --modtype flag: each step
+          up costs ~3dB of SNR margin for the same link reliability (e.g.
+          with r1_3_k7: BPSK holds to ~-6dB, QPSK to ~0dB/-3dB, 16-QAM
+          needed 3dB where QPSK already worked at 0dB) - the expected,
+          correct real-world Eb/N0 tradeoff for packing more bits into the
+          same symbol energy, not a bug. 8PSK is the remaining natural
+          extension of this same constellation-dict approach; pi/4-QPSK
+          (Phase 1's differential ring variant) is a possible later
+          addition on top of plain QPSK, not required first.
   [ ] 6.3 Design an OFDM mode (bigger lift - new sync/framing needs, not a
           drop-in replacement for the single-carrier chain).
   [ ] 6.4 Define mode-selection/negotiation behavior at the link layer.
+          Concrete direction discussed this session, inspired by HF ALE
+          (Automatic Link Establishment): RX estimates SNR and reports
+          back a recommended mode/rate/FEC preset via a control message
+          (PACKET_TYPE_CONTROL already exists in the header for this);
+          TX then switches for subsequent payload frames. Needs (a) an
+          FEC-preset field in the header (currently --fec is CLI-only, not
+          signaled in-band) and (b) a bootstrapping rule - negotiation/
+          control frames themselves must always use the most robust fixed
+          scheme, since TX can't know a good scheme for a link it hasn't
+          heard back about yet. Depends on 2.11 (ACK/control feedback
+          channel in the CLI pipeline) for the RX-to-TX report path.
 
 Phase 7: Testing & Optimization - IN PROGRESS
 --------------------------------------------------
-Regression suite added under tests/ (run via ./run_tests.sh): unit tests for
-openwave_link.py's framing/CRC/ACK/fragmentation (test_openwave_link.py), the
-simulated loopback (test_phy_loopback.py), and a flow-graph compile check
-(test_flowgraphs_compile.py).
+Regression suite under tests/ (run via ./run_tests.sh, 217 tests): framing/
+CRC/ACK/fragmentation (test_openwave_link.py), BPSK bits<->symbols
+(test_openwave_modem.py), RRC pulse shaping (test_openwave_pulse.py), AWGN
+channel (test_openwave_channel.py), tolerant sync correlator including
+gap-detection (test_openwave_sync.py), convolutional/Viterbi FEC including
+multi-fragment and sync-gap handling (test_openwave_fec.py), the simulated
+GNU Radio loopback (test_phy_loopback.py), and a flow-graph compile check
+(test_flowgraphs_compile.py). pipeline_test.sh/file_xfer_test.sh are
+turnkey end-to-end scripts (not part of ./run_tests.sh) for exercising the
+full send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
 
   [x] 7.1 Unit-level regression tests for header/CRC32/ACK/retry/fragmentation
           logic and .grc compilation.
   [x] 7.2 openwave_cli.py: file-based command-line testing of the link layer
           with zero GNU Radio dependency and no hardware. `send` builds a
-          frame (plain text or JSON payload) to a file, with options to
-          deliberately inject bad data for negative testing (--corrupt-header/
+          frame (plain text, --json, --file for raw binary, or --attach
+          for text+file together) to a file, with options to deliberately
+          inject bad data for negative testing (--corrupt-header/
           --corrupt-payload/--corrupt-crc for crc_fail, --bad-length for
           bad_length rejection). `dump` hex-dumps and labels every field of
           every frame in a file. `recv` decodes a file through the full
@@ -194,3 +276,16 @@ simulated loopback (test_phy_loopback.py), and a flow-graph compile check
   [ ] 7.4 Two-radio range/link-margin test with attenuators or dummy loads.
   [ ] 7.5 Profile and optimize the flow graphs for low-power SBCs
           (e.g. Raspberry Pi) as a deployment target.
+  [x] 7.6 Full end-to-end file-transfer testing infrastructure: pipeline_test.sh
+          (single instrumented frame, stage-by-stage) and file_xfer_test.sh
+          (real message/file/both via --attach, pass/fail + byte-size +
+          timing reporting) - both write to a fresh /tmp working directory
+          per run (never the repo), named so concurrent runs are both
+          collision-safe and identifiable. Found and fixed two real bugs
+          this way: a fragment-index gap in FragmentReassembler (2.6b) and
+          a multi-fragment FEC bug (see 3.1). Also: viterbi_decode()
+          vectorized with numpy (~4x faster - was the dominant cost of any
+          FEC-enabled transfer) and openwave_sync.py's correlator bounded
+          to a nearby search window with an explicit 'gap' status instead
+          of silently locking onto a farther-away fragment when a marker
+          didn't survive noise.

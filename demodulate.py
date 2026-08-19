@@ -19,6 +19,8 @@ import openwave_modem as modem
 
 DEMODULATORS = {
     'bpsk': modem.demodulate_bpsk,
+    'qpsk': modem.demodulate_qpsk,
+    '16qam': modem.demodulate_qam16,
 }
 
 

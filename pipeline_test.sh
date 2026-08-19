@@ -2,7 +2,7 @@
 
 usage() {
     cat <<'EOF'
-Usage: ./pipeline_test.sh [--snr SNR_DB] [--mode WAVEFORM_MODE] [--fec PRESET]
+Usage: ./pipeline_test.sh [--snr SNR_DB] [--mode WAVEFORM_MODE] [--fec PRESET] [--modtype TYPE]
 
 Pushes a real OpenWave frame through the full modem pipeline: send -> (fec
 encode) -> modulate -> pulseshape -> (channel) -> matchedfilter ->
@@ -13,13 +13,17 @@ what each stage does.
                   the matched filter. Omit for a clean round trip (no
                   channel.py step at all).
   --mode MODE     Waveform Mode ID, 0-4 (default: 0) - passed straight to
-                  openwave_cli.py send's --mode.
+                  openwave_cli.py send's --mode. Header metadata only -
+                  does NOT select the modulation actually used (see
+                  --modtype).
   --fec PRESET    FEC configuration to use: r1_2_k3, r1_2_k7 (NASA/Voyager
                   standard), r1_2_k9, r1_3_k7, etc (see openwave_fec.py's
                   PRESETS, or run openwave_fec_generate_presets.py -h to
                   search for/add more). Only meaningful combined with
                   --snr. Omit to skip FEC entirely and run the raw
                   (uncoded) pipeline.
+  --modtype TYPE  Modulation scheme to actually use: bpsk (default) or
+                  qpsk - passed straight to modulate.py/demodulate.py's -t.
   -h, --help      Show this help and exit.
 
 Examples:
@@ -27,12 +31,14 @@ Examples:
   ./pipeline_test.sh --snr -6
   ./pipeline_test.sh --snr -6 --fec r1_3_k7
   ./pipeline_test.sh --snr 5 --mode 2 --fec r1_2_k7
+  ./pipeline_test.sh --snr -6 --fec r1_3_k7 --modtype qpsk
 EOF
 }
 
 SNR_DB=""
 MODE=0
 FEC_PRESET=""
+MOD_TYPE=bpsk
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -40,6 +46,7 @@ while [ $# -gt 0 ]; do
         --snr) SNR_DB="$2"; shift 2 ;;
         --mode) MODE="$2"; shift 2 ;;
         --fec) FEC_PRESET="$2"; shift 2 ;;
+        --modtype) MOD_TYPE="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; echo >&2; usage >&2; exit 1 ;;
     esac
 done
@@ -52,10 +59,10 @@ done
 # twice in parallel is still safe) - the mode/snr/fec label in front of it
 # is purely so several concurrent runs are tellable apart by name in `ls
 # /tmp` or a job list, not what makes this collision-safe.
-LABEL="mode${MODE}_snr${SNR_DB:-none}_fec${FEC_PRESET:-none}"
+LABEL="mode${MODE}_snr${SNR_DB:-none}_fec${FEC_PRESET:-none}_mod${MOD_TYPE}"
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/openwave_pipeline_test.${LABEL}.XXXXXX")
 
-echo "mode: $MODE  snr: ${SNR_DB:-none}  fec: ${FEC_PRESET:-none}"
+echo "mode: $MODE  snr: ${SNR_DB:-none}  fec: ${FEC_PRESET:-none}  modtype: $MOD_TYPE"
 echo "Working dir: $WORKDIR"
 echo ""
 
@@ -110,8 +117,8 @@ else
 fi
 echo ""
 
-# 3. Modulate: bits -> BPSK symbols (no sample rate involved yet)
-python3 modulate.py -t bpsk -i "$MODULATE_INPUT" -o "$WORKDIR/symbols.cfile"
+# 3. Modulate: bits -> symbols (no sample rate involved yet)
+python3 modulate.py -t "$MOD_TYPE" -i "$MODULATE_INPUT" -o "$WORKDIR/symbols.cfile"
 echo ""
 
 # 4. Pulse-shape: symbols -> oversampled RRC baseband samples
@@ -151,7 +158,7 @@ python3 plot_constellation.py -i "$WORKDIR/recovered_symbols.cfile" -o "$WORKDIR
 echo ""
 
 # 9. Demodulate: symbols -> bits/bytes
-python3 demodulate.py -t bpsk -i "$WORKDIR/recovered_symbols.cfile" -o "$WORKDIR/out.bin"
+python3 demodulate.py -t "$MOD_TYPE" -i "$WORKDIR/recovered_symbols.cfile" -o "$WORKDIR/out.bin"
 echo ""
 
 # 9b. (Optional) FEC-decode: finds sync via the tolerant correlator and
