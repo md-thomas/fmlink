@@ -4,3 +4,5 @@ __pycache__/
 *.bin
 *.cfile
 *.png
+*.egg-info/
+build/

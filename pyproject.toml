@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openwave"
+version = "0.1.0"
+description = "OpenWave digital modem/PHY library: framing, FEC, PSK/QAM modulation, sync"
+requires-python = ">=3.9"
+dependencies = ["numpy", "scipy"]
+
+[tool.setuptools]
+py-modules = [
+    "openwave_modem",
+    "openwave_link",
+    "openwave_pulse",
+    "openwave_channel",
+    "openwave_sync",
+    "openwave_fec",
+]
