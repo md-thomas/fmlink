@@ -1,16 +1,30 @@
 OpenWave Task List
 ===================
 (Reconciled 2026-08-17, updated same day after pulling openwave_link.py +
-tests/ from laptop. Matches OpenWave_Description.txt: GNU Radio + SDR
+tests/ from laptop. Matches OpenWave_Specification.txt: GNU Radio + SDR
 hardware implementation, pi/4-QPSK PHY, shared link-layer framing module.
 Re-reconciled 2026-08-19 after a session that built out FEC (Phase 3) and
 the full GNU-Radio-free CLI/file-transfer testing pipeline (Phase 7); also
-kicked off Phase 6 (multi-modulation) with QPSK as the starting point.)
+kicked off Phase 6 (multi-modulation) with QPSK as the starting point.
+Re-reconciled 2026-08-25: OpenWave repositioned as a link-layer/framing
+protocol over a pluggable PHY, not tied to pi/4-QPSK or to GNU Radio. The
+GNU Radio chain (Phase 1's phy_sim_loopback.grc, Phase 4's
+tx_pluto.grc/rx_rtlsdr.grc, and earlier prototypes) was the project's
+initial testbench and has been archived - kept, not deleted - under
+legacy/gnuradio/, along with its GNU-Radio-dependent tests
+(legacy/gnuradio/tests/). The pure-Python CLI pipeline (Phase 6/7) is now
+the sole actively developed PHY. openwave_link.py's Waveform Mode ID field
+is now a real PHY-selection contract (WAVEFORM_MODES: modulation + symbol
+rate + FEC preset per mode), currently a documentation/lookup table, not
+yet wired into the CLI flags - see Phase 6 follow-up below.)
 
-Phase 1: PHY Modem Chain (Simulation) - DONE
----------------------------------------------
+Phase 1: PHY Modem Chain (GNU Radio Simulation, Archived) - DONE
+------------------------------------------------------------------
 Validated in phy_sim_loopback.grc (formerly test1.grc/test2.grc) as a
-loopback testbench (see readme.txt).
+loopback testbench (see legacy/gnuradio/README.md). This was the project's
+initial GNU Radio pi/4-QPSK PHY prototype; archived 2026-08-25 in favor of
+the pluggable-PHY direction (see reconciliation note above and Phase 6).
+History kept below for the record.
 
   [x] 1.1 pi/4-QPSK modulator: differential encoding over an 8-point ring
           constellation (digital_diff_encoder_bb, modulus 8) + chunks-to-
@@ -35,7 +49,7 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
   [x] 2.2 Real 32-byte header (build_header/parse_header): Version, Packet
           Type, Waveform Mode ID, Flags, Sequence Number, Source ID,
           Destination ID, Payload Length, Reserved - matches
-          OpenWave_Description.txt's byte layout exactly (struct '>BBBBH8s8sH8s').
+          OpenWave_Specification.txt's byte layout exactly (struct '>BBBBH8s8sH8s').
           Mode ID and Source/Destination ID are written at the correct
           offsets but are placeholder values on TX and not yet parsed/acted
           on by RX.
@@ -57,7 +71,7 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
           own independent burst. Fragmented sends are NOT ACK/retry-tracked
           in this phase regardless of ack_requested.
   [x] 2.6b Fragment Index header field (1 of the 8 Reserved bytes
-          repurposed, 7 remain reserved - see OpenWave_Description.txt) so
+          repurposed, 7 remain reserved - see OpenWave_Specification.txt) so
           a receiver has an authoritative "is this really a new run" signal
           instead of inferring it from "nothing else in progress." Fixes a
           real bug found via large-message testing: a run abandoned mid-
@@ -111,10 +125,10 @@ Phase 3: Forward Error Correction & Interleaving - MOSTLY DONE (CLI pipeline)
 Implemented in openwave_fec.py: convolutional encoding + hard-decision
 Viterbi decoding (numpy-vectorized), fully parameterized by generator
 polynomials/constraint length K rather than hardcoded to one scheme.
-Wired into the GNU-Radio-free CLI pipeline only (fec_encode.py/
-fec_decode.py, pipeline_test.sh/file_xfer_test.sh) - NOT yet wired into
-phy_sim_loopback.grc or tx_pluto.grc/rx_rtlsdr.grc, so the real pi/4-QPSK
-GNU Radio chain still runs uncoded.
+Wired into the GNU-Radio-free CLI pipeline (fec_encode.py/fec_decode.py,
+pipeline_test.sh/file_xfer_test.sh), which is the sole actively developed
+PHY path. The archived GNU Radio chain (legacy/gnuradio/) was never wired
+up and still runs uncoded, but is no longer part of the active plan.
 
   [x] 3.1 FEC scheme picked and integrated (for the CLI pipeline): rate
           1/N convolutional coding, PRESETS table of 13 named
@@ -140,18 +154,22 @@ GNU Radio chain still runs uncoded.
           combinations - see openwave_fec.py's empirically-measured
           SNR-to-preset table (right after PRESETS) for concrete pass-rate
           numbers, e.g. r1_2_k3 fully reliable at 3dB, r1_4_k9 needed at
-          -6dB where r1_4_k7 only holds ~86%. Phase 1's actual GNU Radio
-          loopback graph itself has not been re-run with FEC enabled
-          (FEC isn't wired into it - see above).
+          -6dB where r1_4_k7 only holds ~86%. Phase 1's archived GNU Radio
+          loopback graph itself was never re-run with FEC enabled (FEC
+          isn't wired into it - see above; no longer applicable now that
+          Phase 1 is archived).
 
-Phase 4: SDR Hardware Bring-Up (Testing Only) - IN PROGRESS
+Phase 4: SDR Hardware Bring-Up (GNU Radio, Archived) - PAUSED
 ----------------------------------------------------------------
-Split from the single loopback graph into standalone TX/RX flow graphs,
-renamed to reflect their target hardware: tx_pluto.grc (was test3_tx.grc),
-rx_rtlsdr.grc (was test3_rx.grc). This is a validation step, not the
-deployment target - Pluto/RTL-SDR let the modem/framing be exercised over
-real RF before committing to real transceiver hardware. See Phase 5 for
-where this is actually headed.
+Superseded by the pluggable-PHY direction (see reconciliation note at top);
+no longer being actively pursued via GNU Radio. Split from the single
+loopback graph into standalone TX/RX flow graphs, renamed to reflect their
+target hardware: tx_pluto.grc (was test3_tx.grc), rx_rtlsdr.grc (was
+test3_rx.grc), now archived under legacy/gnuradio/ (see
+legacy/gnuradio/README.md). This was a validation step, not the deployment
+target - Pluto/RTL-SDR let the modem/framing be exercised over real RF
+before committing to real transceiver hardware. History kept below for the
+record; see Phase 5 for where hardware bring-up is actually headed now.
 
   [x] 4.1 tx_pluto.grc: TX chain on a real SDR sink (ADALM-Pluto via
           iio_pluto_sink) instead of a simulated channel, using the shared
@@ -174,23 +192,25 @@ where this is actually headed.
 Phase 5: Audio-Interfaced Radio Deployment (Eventual Target) - NOT STARTED
 ------------------------------------------------------------------------------
 The actual deployment target: driving real transceivers (VHF/UHF radios)
-through their audio ports instead of SDR hardware, once the modem/framing is
-validated per Phase 4. Distinct from the SDR work above - this is about the
-I/O interface (soundcard in/out + PTT), not the modulation (still pi/4-QPSK
-per the spec, not the old tasklist's GMSK direction).
+through their audio ports instead of SDR hardware. Distinct from the
+archived SDR work in Phase 4 - this is about the I/O interface (soundcard
+in/out + PTT), not any one modulation - the modem is now pluggable
+(BPSK/QPSK/16-QAM today, see openwave_link.py's WAVEFORM_MODES), not
+pi/4-QPSK-specific.
 
-No GNU Radio, eventually: GNU Radio itself is scaffolding for this whole
-project, not the permanent tech stack - the plan is to test TX/RX with a
-Pluto SDR directly outside GNU Radio at some point, and this audio-deployment
-phase is expected to be GNU-Radio-free too. Favor keeping core logic
-(openwave_link.py already has zero GNU Radio imports, including the
-LinkReceiver dispatch class - see 2.10) portable rather than assuming GNU
-Radio is a permanent dependency.
+No GNU Radio, eventually: this direction has effectively started - the
+pure-Python CLI pipeline (openwave_modem.py/openwave_pulse.py/etc.) already
+is the GNU-Radio-free path anticipated here, and is now the sole actively
+developed PHY (Phase 4's GNU Radio chain is archived, not a parallel
+track). What remains is real-time audio I/O and PTT (5.1/5.2 below), not a
+rewrite away from GNU Radio - there's nothing left to move away from.
+Favor keeping core logic (openwave_link.py already has zero GNU Radio
+imports, including the LinkReceiver dispatch class - see 2.10) portable.
 
-  [ ] 5.1 Real-time audio I/O: stream the pi/4-QPSK baseband through a
-          soundcard interface (TX: samples out to radio's mic/data input;
-          RX: samples in from radio's speaker/data output) without buffer
-          underruns.
+  [ ] 5.1 Real-time audio I/O: stream the pluggable-PHY baseband (see
+          WAVEFORM_MODES) through a soundcard interface (TX: samples out to
+          radio's mic/data input; RX: samples in from radio's speaker/data
+          output) without buffer underruns.
   [ ] 5.2 PTT control to key the transceiver for TX bursts (e.g. CAT control,
           serial RTS/DTR, or VOX tone), gated on frame transmission.
   [ ] 5.3 Handle the transceiver audio passband/deviation characteristics
@@ -203,11 +223,12 @@ Radio is a permanent dependency.
 Phase 6: Multi-Modulation Support - IN PROGRESS (CLI pipeline)
 -----------------------------------------------
 Long-term goal: make Waveform Mode ID select among multiple modulations
-(BPSK, QPSK, pi/4-QPSK, 8PSK, 16QAM, OFDM). Started 2026-08-19 in the
-GNU-Radio-free CLI pipeline (openwave_modem.py/modulate.py/demodulate.py),
-which now implements BPSK, QPSK, and 16-QAM - the real pi/4-QPSK GNU Radio
-chain (Phase 1) is unaffected/unchanged by this work (deliberately - GNU
-Radio side is a later, separate effort).
+(BPSK, QPSK, 8PSK, 16QAM, OFDM). Started 2026-08-19 in the GNU-Radio-free
+CLI pipeline (openwave_modem.py/modulate.py/demodulate.py), which now
+implements BPSK, QPSK, and 16-QAM. This is now the project's sole actively
+developed PHY - Phase 1's pi/4-QPSK GNU Radio chain has been archived
+(legacy/gnuradio/), not kept in parallel; pi/4-QPSK's differential ring
+variant is no longer a planned addition here.
 
   [x] 6.1 Modulator/demodulator selection is pluggable via a dict lookup
           (MODULATORS/DEMODULATORS in modulate.py/demodulate.py, keyed by
@@ -227,9 +248,9 @@ Radio side is a later, separate effort).
           needed 3dB where QPSK already worked at 0dB) - the expected,
           correct real-world Eb/N0 tradeoff for packing more bits into the
           same symbol energy, not a bug. 8PSK is the remaining natural
-          extension of this same constellation-dict approach; pi/4-QPSK
-          (Phase 1's differential ring variant) is a possible later
-          addition on top of plain QPSK, not required first.
+          extension of this same constellation-dict approach. pi/4-QPSK's
+          differential ring variant (Phase 1, archived) is not currently
+          planned as an addition here.
   [ ] 6.3 Design an OFDM mode (bigger lift - new sync/framing needs, not a
           drop-in replacement for the single-carrier chain).
   [ ] 6.4 Define mode-selection/negotiation behavior at the link layer.
@@ -244,22 +265,32 @@ Radio side is a later, separate effort).
           scheme, since TX can't know a good scheme for a link it hasn't
           heard back about yet. Depends on 2.11 (ACK/control feedback
           channel in the CLI pipeline) for the RX-to-TX report path.
+  [ ] 6.5 openwave_link.py's WAVEFORM_MODES table (added 2026-08-25) bundles
+          modulation + symbol_rate + fec_preset per mode - the PHY-plugin
+          contract - but is currently a documentation/lookup table only,
+          not wired into modulate.py/demodulate.py's -t flag or
+          fec_encode.py/fec_decode.py's --preset flag, which remain
+          independent CLI choices. Follow-up: either wire Waveform Mode ID
+          into those flags' defaults (with an explicit override still
+          allowed), or decide to keep them permanently independent.
 
 Phase 7: Testing & Optimization - IN PROGRESS
 --------------------------------------------------
-Regression suite under tests/ (run via ./run_tests.sh, 217 tests): framing/
-CRC/ACK/fragmentation (test_openwave_link.py), BPSK bits<->symbols
-(test_openwave_modem.py), RRC pulse shaping (test_openwave_pulse.py), AWGN
-channel (test_openwave_channel.py), tolerant sync correlator including
-gap-detection (test_openwave_sync.py), convolutional/Viterbi FEC including
-multi-fragment and sync-gap handling (test_openwave_fec.py), the simulated
-GNU Radio loopback (test_phy_loopback.py), and a flow-graph compile check
-(test_flowgraphs_compile.py). pipeline_test.sh/file_xfer_test.sh are
-turnkey end-to-end scripts (not part of ./run_tests.sh) for exercising the
-full send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
+Regression suite under tests/ (run via ./run_tests.sh, 224 tests, all
+GNU-Radio-free): framing/CRC/ACK/fragmentation (test_openwave_link.py),
+bits<->symbols for BPSK/QPSK/16-QAM (test_openwave_modem.py), RRC pulse
+shaping (test_openwave_pulse.py), AWGN channel (test_openwave_channel.py),
+tolerant sync correlator including gap-detection (test_openwave_sync.py),
+convolutional/Viterbi FEC including multi-fragment and sync-gap handling
+(test_openwave_fec.py). The archived GNU Radio loopback/compile-check tests
+(former test_phy_loopback.py/test_flowgraphs_compile.py) now live under
+legacy/gnuradio/tests/ - see legacy/gnuradio/README.md for how to run them
+separately. pipeline_test.sh/file_xfer_test.sh are turnkey end-to-end
+scripts (not part of ./run_tests.sh) for exercising the full
+send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
 
   [x] 7.1 Unit-level regression tests for header/CRC32/ACK/retry/fragmentation
-          logic and .grc compilation.
+          logic and (archived) .grc compilation.
   [x] 7.2 openwave_cli.py: file-based command-line testing of the link layer
           with zero GNU Radio dependency and no hardware. `send` builds a
           frame (plain text, --json, --file for raw binary, or --attach

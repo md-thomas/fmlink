@@ -1,11 +1,18 @@
 """
-Compile-check every .grc flowgraph in the project with grcc. Catches YAML
-typos, bad block parameter names/expressions, missing connections, and wrong
-GNU Radio API usage - the class of bug that otherwise only shows up the next
-time someone opens GNU Radio Companion. Doesn't require any SDR hardware,
-just the gnuradio + gr-iio + gr-osmosdr install.
+Compile-check every archived .grc flowgraph (see legacy/gnuradio/README.md)
+with grcc. Catches YAML typos, bad block parameter names/expressions,
+missing connections, and wrong GNU Radio API usage - the class of bug that
+otherwise only shows up the next time someone opens GNU Radio Companion.
+Doesn't require any SDR hardware, just the gnuradio + gr-iio + gr-osmosdr
+install.
 
-    python3 -m unittest tests.test_flowgraphs_compile -v
+IMPORTANT: must be run with the actual repository root as the current
+working directory - NOT legacy/gnuradio/. The generated epy_blocks resolve
+`import openwave_link` via os.getcwd(), and openwave_link.py lives at the
+repo root, not alongside these archived flowgraphs.
+
+    cd <repo-root>
+    python3 -m unittest discover -s legacy/gnuradio/tests -v
 """
 import os
 import shutil
@@ -16,11 +23,15 @@ import unittest
 
 import yaml
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)
+# Directory the archived .grc files actually live in.
+FLOWGRAPH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Real repo root, where openwave_link.py lives - this test process's own
+# import AND the compiled epy_block's os.getcwd()-based import both need it.
+REPO_ROOT = os.path.dirname(os.path.dirname(FLOWGRAPH_DIR))
+sys.path.insert(0, REPO_ROOT)
 import openwave_link as link
 
-# Explicit list, not a glob over *.grc - the project root also has older,
+# Explicit list, not a glob over *.grc - legacy/gnuradio/ also has older,
 # unrelated prototype flowgraphs (test.grc, test1.grc, predating the current
 # PHY/link-layer design) that aren't part of what we're maintaining here.
 GRC_FILES = ['phy_sim_loopback.grc', 'tx_pluto.grc', 'rx_rtlsdr.grc']
@@ -30,9 +41,10 @@ GRC_FILES = ['phy_sim_loopback.grc', 'tx_pluto.grc', 'rx_rtlsdr.grc']
 class FlowgraphCompileTests(unittest.TestCase):
     def _compile(self, grc_filename):
         with tempfile.TemporaryDirectory() as out_dir:
+            src_path = os.path.join(FLOWGRAPH_DIR, grc_filename)
             result = subprocess.run(
-                ['grcc', grc_filename, '-o', out_dir],
-                cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60,
+                ['grcc', src_path, '-o', out_dir],
+                cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
             )
             return result
 
@@ -66,7 +78,7 @@ class AccessCodeConsistencyTests(unittest.TestCase):
     EXPECTED = ''.join(format(b, '08b') for b in (link.PREAMBLE[-4:] + link.SYNC_WORD))
 
     def _access_code_in(self, grc_filename):
-        path = os.path.join(PROJECT_ROOT, grc_filename)
+        path = os.path.join(FLOWGRAPH_DIR, grc_filename)
         with open(path) as f:
             fg = yaml.safe_load(f)
         for b in fg['blocks']:

@@ -9,9 +9,9 @@ pulseshape.py and matchedfilter.py in the pipeline, not before modulate.py.
 See openwave_pulse.py's module docstring for the equivalent reasoning about
 why symbol_rate has no meaning before pulse shaping.
 
-AWGN only for now, matching phy_sim_loopback.grc's channels_channel_model_0
-block, which also only simulates noise today (frequency/timing offset left
-at none - see readme.txt).
+AWGN only for now, matching the archived phy_sim_loopback.grc's
+channels_channel_model_0 block, which also only simulated noise (frequency/
+timing offset left at none - see legacy/gnuradio/README.md).
 """
 import numpy as np
 

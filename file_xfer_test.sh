@@ -34,11 +34,11 @@ verifies the round trip. Exactly one test runs, shaped by what you pass:
   -h, --help      Show this help and exit.
 
 Examples:
-  ./file_xfer_test.sh colorbar_test.png --message "check this out"
-  ./file_xfer_test.sh colorbar_test.png
+  ./file_xfer_test.sh ../web_siggen/images/colorbar_test.png --message "check this out"
+  ./file_xfer_test.sh ../web_siggen/images/colorbar_test.png
   ./file_xfer_test.sh --message "just a text message"
-  ./file_xfer_test.sh colorbar_test.png --message "under noise" --snr -6 --fec r1_3_k7
-  ./file_xfer_test.sh colorbar_test.png --message "qpsk" --snr -6 --fec r1_3_k7 --modtype qpsk
+  ./file_xfer_test.sh ../web_siggen/images/colorbar_test.png --message "under noise" --snr -6 --fec r1_3_k7
+  ./file_xfer_test.sh ../web_siggen/images/colorbar_test.png --message "qpsk" --snr -6 --fec r1_3_k7 --modtype qpsk
 EOF
 }
 

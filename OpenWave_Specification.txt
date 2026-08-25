@@ -1,10 +1,17 @@
 OpenWave - An Open Digital Radio Stack
 
-OpenWave is an open, modern digital radio framework designed for 
-high-performance wireless communications. It provides a flexible, 
-modular stack for building interoperable digital radio systems, 
-with a focus on maximizing data throughput while minimizing occupied 
+OpenWave is an open, modern digital radio framework designed for
+high-performance wireless communications. It provides a flexible,
+modular stack for building interoperable digital radio systems,
+with a focus on maximizing data throughput while minimizing occupied
 spectral bandwidth.
+
+At its core, OpenWave is a link-layer/framing protocol (header, CRC,
+sequencing, ACK/retry, fragmentation, FEC) designed to run over a
+pluggable PHY rather than being tied to one modulation. Waveform Mode ID
+in the header selects a modulation/symbol-rate/FEC combination (see
+openwave_link.py's WAVEFORM_MODES); BPSK, QPSK, and 16-QAM are supported
+today.
 
 Built for experimentation, research, and real-world deployment, 
 OpenWave aims to provide an open foundation for next-generation 
@@ -23,16 +30,20 @@ Modem Chain:
     		|
     Interleaver
     		|
-    π/4-QPSK Modulator
+    PHY Modulator (pluggable)
     		|
     RRC Filter
     		|
             RF
 
 Physical Layer (PHY)
-    Modulation: 		    π/4-QPSK (2 bits/symbol)
+    Modulation: 		    Pluggable per Waveform Mode ID - BPSK, QPSK, and
+    				    16-QAM supported today (see openwave_link.py's
+    				    WAVEFORM_MODES and modulate.py/demodulate.py)
     Symbol Rates: 	        600, 1200, 2400, 4800, 9600 symbols/sec
-    Raw Bit Rates: 	        1.2 kbps - 19.2 kbps
+    Raw Bit Rates: 	        Depends on the mode's modulation - see
+    				    Waveform Modes table below (600 bps - 38.4 kbps
+    				    across the modes defined today)
     Filtering:  		    Root Raised Cosine
     Roll-off: 		        0.35
     Synchronization:
@@ -77,12 +88,14 @@ Link layer
             0x03 = Beacon
             0x04 = Control
 
-        Waveform Modes:
-            Mode 0: 	600 symbols/sec  1200 bps raw
-            Mode 1: 	1200 symbols/sec 2400 bps raw
-            Mode 2: 	2400 symbols/sec 4800 bps raw
-            Mode 3: 	4800 symbols/sec 9600 bps raw
-            Mode 4: 	9600 symbols/sec 19200 bps raw
+        Waveform Modes: (modulation/rate/FEC bundle - see openwave_link.py's
+        WAVEFORM_MODES, the authoritative table; currently a documentation/
+        lookup contract, not yet wired into the CLI modulation/FEC flags)
+            Mode 0: 	600 symbols/sec, bpsk,  600 bps raw
+            Mode 1: 	1200 symbols/sec, bpsk,  1200 bps raw
+            Mode 2: 	2400 symbols/sec, qpsk,  4800 bps raw
+            Mode 3: 	4800 symbols/sec, qpsk,  9600 bps raw
+            Mode 4: 	9600 symbols/sec, 16qam, 38400 bps raw
 
 	    Flags: 1 byte 
             Bit 0: 	ACK Requested 
@@ -153,7 +166,7 @@ Link layer
         B8 C3 2D 60 98 18 9F CB 	   across 4 lines)
         1A CF FC 1D 			    <- Sync Word
         01 				            <- Version 
-        02 				            <- Waveform Mode ID (2400 bps) 
+        02 				            <- Waveform Mode ID (Mode 2: 2400 sym/s, qpsk)
         01 				            <- Packet Type (Data) 
         01 				            <- Flags (ACK requested) 
         00 01 				        <- Sequence Number 

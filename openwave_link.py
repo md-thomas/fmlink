@@ -2,7 +2,7 @@
 OpenWave link-layer framing: header build/parse and CRC32 packet integrity.
 Shared between phy_sim_loopback.grc, tx_pluto.grc, and rx_rtlsdr.grc's epy_blocks
 so the flowgraphs can't drift out of sync on the framing format - see
-OpenWave_Description.txt for the full spec this implements a subset of.
+OpenWave_Specification.txt for the full spec this implements a subset of.
 
 Minimal (phase-1) scope: Payload Length, CRC32, Sequence Number, the
 ack_requested/ack_response Flags bits (build_ack_frame()/RetryManager for
@@ -20,7 +20,7 @@ build_ack_frame() are implemented and tested independent of any of this, so
 they're ready for a future full-duplex pairing.
 
 Fragmentation has a real protocol-design gap worth knowing about: the header
-has no fragment-index or reassembly-ID field (see OpenWave_Description.txt) -
+has no fragment-index or reassembly-ID field (see OpenWave_Specification.txt) -
 just Fragmented and More Fragments bits. FragmentReassembler infers "start of
 a new run" as "a fragmented frame arrived while no run was already in
 progress", using the existing Sequence Number as a consecutive per-fragment
@@ -142,7 +142,7 @@ def format_flags(flags_byte):
 
 # version(B) type(B) mode(B) flags(B) seq(H) src(8s) dst(8s) payload_len(H)
 # fragment_index(B) reserved(7s). All multi-byte fields big-endian, matching
-# OpenWave_Description.txt's byte-dump examples.
+# OpenWave_Specification.txt's byte-dump examples.
 #
 # fragment_index repurposes 1 of the original 8 Reserved bytes (7 remain
 # truly reserved): the position of this frame within its fragmented-message
@@ -522,17 +522,37 @@ class LinkReceiver:
                 f"Src:{self.last_src or '-'}  Dst:{self.last_dst or '-'}")
 
 
-WAVEFORM_MODE_SYMBOL_RATES = {0: 600, 1: 1200, 2: 2400, 3: 4800, 4: 9600}
+# WAVEFORM_MODES is the PHY-plugin contract: what each Waveform Mode ID
+# *should* imply (modulation, symbol rate, FEC preset), so OpenWave stays a
+# link-layer/framing protocol over a pluggable PHY rather than being tied to
+# any one modulation. Modulation names match modulate.py's MODULATORS /
+# demodulate.py's DEMODULATORS dict keys ('bpsk'/'qpsk'/'16qam'); fec_preset
+# values match openwave_fec.py's PRESETS keys.
+#
+# This is a reference table for callers to consult, not force-wired into
+# modulate.py/demodulate.py's -t flag or fec_encode.py/fec_decode.py's
+# --preset flag, which remain independent CLI choices today - see
+# tasklist.txt Phase 6 for the follow-up to unify these.
+WAVEFORM_MODES = {
+    0: {'modulation': 'bpsk',  'symbol_rate': 600,  'fec_preset': 'r1_2_k7'},
+    1: {'modulation': 'bpsk',  'symbol_rate': 1200, 'fec_preset': 'r1_2_k7'},
+    2: {'modulation': 'qpsk',  'symbol_rate': 2400, 'fec_preset': 'r1_2_k7'},
+    3: {'modulation': 'qpsk',  'symbol_rate': 4800, 'fec_preset': 'r1_2_k7'},
+    4: {'modulation': '16qam', 'symbol_rate': 9600, 'fec_preset': 'r1_2_k7'},
+}
+
+# Derived for back-compat with any existing symbol-rate-only lookup.
+WAVEFORM_MODE_SYMBOL_RATES = {m: info['symbol_rate'] for m, info in WAVEFORM_MODES.items()}
 
 BROADCAST_ID = 'ALL'
 
 
 def format_mode(mode_id):
-    """Waveform Mode ID -> short display string, e.g. 'Mode 2 (2400 sym/s)'."""
-    rate = WAVEFORM_MODE_SYMBOL_RATES.get(mode_id)
-    if rate is None:
+    """Waveform Mode ID -> short display string, e.g. 'Mode 2 (2400 sym/s, qpsk)'."""
+    info = WAVEFORM_MODES.get(mode_id)
+    if info is None:
         return f'Mode {mode_id} (unknown)'
-    return f'Mode {mode_id} ({rate} sym/s)'
+    return f'Mode {mode_id} ({info["symbol_rate"]} sym/s, {info["modulation"]})'
 
 
 def decode_station_id(id_bytes):
@@ -554,7 +574,7 @@ def is_for_station(dst_id_bytes, station_id):
     same all-zero placeholder, which decodes to ''.
 
     When station_id IS set, accepts an exact match or either spelling of
-    broadcast: the literal 'ALL' callsign from OpenWave_Description.txt's
+    broadcast: the literal 'ALL' callsign from OpenWave_Specification.txt's
     example, or an empty/placeholder dst_id (so today's TX chains keep being
     heard by an addressed receiver instead of silently going unheard just
     because they don't populate a real destination yet)."""

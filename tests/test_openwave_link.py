@@ -102,11 +102,31 @@ class FlagsTests(unittest.TestCase):
 
 class ModeAndStationIdTests(unittest.TestCase):
     def test_format_mode_known(self):
-        self.assertEqual(link.format_mode(0), 'Mode 0 (600 sym/s)')
-        self.assertEqual(link.format_mode(4), 'Mode 4 (9600 sym/s)')
+        self.assertEqual(link.format_mode(0), 'Mode 0 (600 sym/s, bpsk)')
+        self.assertEqual(link.format_mode(4), 'Mode 4 (9600 sym/s, 16qam)')
 
     def test_format_mode_unknown(self):
         self.assertEqual(link.format_mode(99), 'Mode 99 (unknown)')
+
+    def test_waveform_modes_keys_match_symbol_rates(self):
+        self.assertEqual(set(link.WAVEFORM_MODES), set(link.WAVEFORM_MODE_SYMBOL_RATES))
+        for mode_id, info in link.WAVEFORM_MODES.items():
+            self.assertEqual(link.WAVEFORM_MODE_SYMBOL_RATES[mode_id], info['symbol_rate'])
+
+    def test_waveform_modes_modulation_names_valid(self):
+        # Hardcoded rather than importing modulate.py, so openwave_link.py's
+        # tests stay independent of the CLI-pipeline modules (matching its
+        # existing zero-GNU-Radio-dependency posture).
+        known_modulations = {'bpsk', 'qpsk', '16qam'}
+        for mode_id, info in link.WAVEFORM_MODES.items():
+            self.assertIn(info['modulation'], known_modulations,
+                           f"mode {mode_id} has unknown modulation {info['modulation']!r}")
+
+    def test_waveform_modes_fec_preset_names_valid(self):
+        import openwave_fec as fec
+        for mode_id, info in link.WAVEFORM_MODES.items():
+            self.assertIn(info['fec_preset'], fec.PRESETS,
+                           f"mode {mode_id} has unknown fec_preset {info['fec_preset']!r}")
 
     def test_decode_station_id_strips_padding(self):
         header = link.build_header(0, src_id=b'K0MDT', dst_id=b'W1AW')

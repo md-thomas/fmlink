@@ -2,7 +2,7 @@
 OpenWave forward error correction: convolutional encoding + hard-decision
 Viterbi decoding.
 
-Per OpenWave_Description.txt's modem chain (Packet Builder -> FEC Encoder ->
+Per OpenWave_Specification.txt's modem chain (Packet Builder -> FEC Encoder ->
 Interleaver -> Modulator), FEC protects the Header+Payload+CRC32 - NOT the
 preamble/sync-word, which must stay raw/uncoded so openwave_sync.py's
 correlator has a known, fixed reference pattern to find sync against in the

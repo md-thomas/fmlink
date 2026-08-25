@@ -7,13 +7,15 @@ tests) - they're slower and use wall-clock sleeps to let data flow through the
 scheduler, so some timing slop is inherent. If a test is ever flaky, prefer
 increasing its sleep margins over just re-running.
 
-IMPORTANT: must be run with the project root as the current working directory.
-The generated epy_blocks resolve `import openwave_link` via os.getcwd() (GRC's
-block-introspection step doesn't define __file__, see openwave_link import
-lines in the .grc epy_block sources), so this only works if cwd is the project
-root - exactly how `python3 -m unittest` is normally invoked here.
+IMPORTANT: must be run with the actual repository root as the current
+working directory - NOT legacy/gnuradio/. The generated epy_blocks resolve
+`import openwave_link` via os.getcwd() (GRC's block-introspection step
+doesn't define __file__, see openwave_link import lines in the .grc
+epy_block sources), and openwave_link.py lives at the repo root, not
+alongside this archived flowgraph.
 
-    python3 -m unittest tests.test_phy_loopback -v
+    cd <repo-root>
+    python3 -m unittest discover -s legacy/gnuradio/tests -v
 """
 import json
 import os
@@ -28,8 +30,12 @@ import tempfile
 import time
 import unittest
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT_ROOT)
+# Directory the archived .grc file actually lives in.
+FLOWGRAPH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Real repo root, where openwave_link.py lives - this test process's own
+# import AND the compiled epy_block's os.getcwd()-based import both need it.
+REPO_ROOT = os.path.dirname(os.path.dirname(FLOWGRAPH_DIR))
+sys.path.insert(0, REPO_ROOT)
 import openwave_link as link
 GRC_FILE = 'phy_sim_loopback.grc'
 MODULE_NAME = 'phy_sim_loopback'
@@ -61,7 +67,7 @@ def _compile_flowgraph(overrides, out_dir):
     (GRC drops it and its connections from the compiled flowgraph) instead of
     patching its parameters - useful for genuinely removing a signal path
     rather than just changing a value."""
-    src_path = os.path.join(PROJECT_ROOT, GRC_FILE)
+    src_path = os.path.join(FLOWGRAPH_DIR, GRC_FILE)
     if overrides:
         with open(src_path) as f:
             fg = yaml.safe_load(f)
@@ -81,7 +87,7 @@ def _compile_flowgraph(overrides, out_dir):
 
     result = subprocess.run(
         ['grcc', src_path, '-o', out_dir],
-        cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60,
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(f"grcc failed:\n{result.stdout}\n{result.stderr}")
