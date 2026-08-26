@@ -492,12 +492,15 @@ table of the Waveform Modes and FEC presets available. Key flags:
 per `openwave_link.py`'s `WAVEFORM_MODES`. `--fec` FEC-encodes/decodes
 using `--fec-preset` (default: `r1_4_k7`, independent of the mode's own
 documented default preset - see `openwave_fec.py`'s `PRESETS` for the
-full list). `--ack` requests ACKs on sends and retries on timeout
-(single-fragment messages only, matching `build_fragmented_frames()`'s
-existing fragmentation/ACK rule) - the sender prints `[ack] delivered`
-once the peer's ACK actually resolves the pending send, so you know a
-message got through without `--ack`'s only other feedback being silence
-or `[ack] gave up`. Without `--ack`, there's no delivery confirmation at
+full list). `--ack` requests ACKs on sends and retries on timeout,
+whether a message fit in one burst or fragmented into several - the
+sender prints `[ack] delivered` once the peer's ACK actually resolves the
+pending send, so you know a message got through without `--ack`'s only
+other feedback being silence or `[ack] gave up`. A multi-fragment
+message's ACK only ever confirms the *whole* message reassembled
+correctly, and a timeout retries *all* its fragments (there's no way to
+know which one was lost) - not selective-repeat of just the missing
+piece. Without `--ack`, there's no delivery confirmation at
 all - that's inherent to the protocol (no ACK requested, none sent back),
 not a missing feature. If a peer's own ACK gets lost on the way back (a
 real, expected channel event, not a bug), the sender retries the same
@@ -540,6 +543,17 @@ This is an interactive-messaging tool, not a bulk-file-transfer one -
 UDP's ~65KB single-datagram ceiling bounds worst-case on-air sample counts
 (low-order modulation + strong FEC + a near-`MAX_PAYLOAD_LEN` fragment can
 exceed it). Use `file_xfer_test.sh` for bulk transfers. There's also no
-mode negotiation (see above) and no retry across fragmented multi-frame
-messages (matching the rest of the project's current ACK/fragmentation
-behavior).
+mode negotiation (see above).
+
+**More fragments means a real reliability cost.** A lost fragment has no
+per-fragment retry - `--ack`'s retry resends the *whole* message, not just
+the missing piece (see above) - so a message needing many fragments is
+meaningfully less reliable than one that fits in a single burst, since
+losing *any one* fragment loses the whole message. `--mode 0`/`1` (BPSK)
+paired with `--fec-preset r1_4_k7` is the extreme case (as low as 5
+chars/burst - a full sentence can need 20+ fragments); `--mode 2` or `4`
+(QPSK/16-QAM) needs far fewer fragments for the same message and is
+correspondingly more reliable. A lost fragment's data is genuinely
+unrecoverable either way, but it's no longer silent: the receiving station
+now logs a clear reason when a fragmented message gets abandoned
+mid-reassembly instead of just never showing up.

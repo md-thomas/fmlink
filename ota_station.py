@@ -105,7 +105,7 @@ class Station(asyncio.DatagramProtocol):
         self.transport = None
         self._sim_addr = None
         self._seq = 0
-        self._last_sent_frame = None  # for --ack retransmission
+        self._last_sent_frames = None  # for --ack retransmission (whole message, all fragments)
         self._retry_task = None
 
         self.receiver = link.LinkReceiver(
@@ -125,12 +125,15 @@ class Station(asyncio.DatagramProtocol):
         # like mode 0 + r1_4_k7 it can be far smaller than MAX_PAYLOAD_LEN).
         self.max_fragment_chars = max(1, self.max_single_fragment_chars())
         self._suppress_next_message = False
+        self._pending_message_seq = None
+        self._last_delivered_seq = None
 
     def _handle_message(self, text):
         if self._suppress_next_message:
             self._log(f"[rx] duplicate of the last message (already delivered) - "
                       f"the peer's ACK likely didn't make it back last time, so it retried")
             return
+        self._last_delivered_seq = self._pending_message_seq
         self._log(f"{self.dst_id}: {text}")
         if self._on_message:
             self._on_message(text)
@@ -176,15 +179,49 @@ class Station(asyncio.DatagramProtocol):
                 # offline analysis of a capture file, where you may want to
                 # see every frame including retransmits) - a live station
                 # should only ever show the user each message once, so
-                # suppress on_message for this one frame without touching
-                # LinkReceiver's own counts/behavior. This mirrors exactly
-                # LinkReceiver._update_seq()'s own duplicate definition.
-                self._suppress_next_message = (header['seq'] == self.receiver.last_seq)
+                # suppress on_message without touching LinkReceiver's own
+                # counts/behavior. Compared against our OWN last-delivered
+                # seq (not receiver.last_seq, which is overwritten by every
+                # individual fragment fed, including ones that never
+                # publish) - a retried multi-fragment message's LAST
+                # fragment carries the same seq as the original run's last
+                # fragment, which is exactly what LinkReceiver._publish()
+                # uses to identify the whole reassembled message either
+                # way, single-fragment or not.
+                self._pending_message_seq = header['seq']
+                self._suppress_next_message = (header['seq'] == self._last_delivered_seq)
+                counts_before = dict(self.receiver.counts)
                 self.receiver.feed_frame(header, payload_bytes)
+                self._log_fragment_events(counts_before)
             else:
                 self._log(f"[rx] {status} - burst not recovered "
                           f"(try --fec, a shorter --distance-km, or a higher --base-snr-db)")
                 self.receiver.feed_crc_failure(status)
+
+    def _log_fragment_events(self, counts_before):
+        """FragmentReassembler (via LinkReceiver) tracks aborted/overflowed/
+        discarded fragment runs as plain counters, with no callback of its
+        own - a missing fragment just leaves it waiting forever, silently,
+        until a later mismatched fragment (or a fresh run starting) trips
+        one of these counts. Without this, a multi-fragment message that
+        loses even one fragment along the way vanishes with zero
+        indication why - the single biggest reason a longer message
+        'just doesn't arrive' while individual bursts look fine. Fragments
+        themselves are NOT ACK/retry-tracked (see build_fragmented_frames'
+        docstring), so a lost fragment's data is unrecoverable either way -
+        this only makes that loss visible instead of silent."""
+        c = self.receiver.counts
+        if c['frag_aborted'] > counts_before['frag_aborted']:
+            self._log("[rx] a fragmented message was abandoned mid-run - a fragment never "
+                      "arrived (lost/corrupted) before a later one broke the sequence. "
+                      "Fragments aren't retried, so this message is unrecoverable - try "
+                      "a shorter message, a stronger --fec, or a better link.")
+        if c['frag_overflow'] > counts_before['frag_overflow']:
+            self._log("[rx] a fragmented message exceeded the fragment-count safety limit "
+                      "without completing - abandoned.")
+        if c['frag_discarded'] > counts_before['frag_discarded']:
+            self._log("[rx] ignored a stray fragment that didn't match any message in progress "
+                      "(wrong sequence/index/source - likely a symptom of an earlier lost fragment).")
 
     def register(self):
         """Send a zero-length 'hello' datagram to the simulator so it
@@ -256,8 +293,19 @@ class Station(asyncio.DatagramProtocol):
         for frame in frames:
             self._transmit_frame(frame)
 
-        if self.use_ack and len(frames) == 1:
-            self._last_sent_frame = frames[0]
+        if self.use_ack:
+            # The ACK_REQUESTED flag is set on every fragment (see
+            # build_fragmented_frames), but the receiver only actually
+            # fires on_ack_needed once, after the LAST fragment completes
+            # reassembly (LinkReceiver._publish uses that fragment's own
+            # header) - so that final fragment's seq is what a real ACK
+            # will reference, whether this was 1 fragment or many. Track
+            # the whole burst list so a timeout retries the complete
+            # message, not just its last piece - there's no way to know
+            # which specific fragment was lost, so a retry has to resend
+            # all of them (a real per-fragment selective-repeat scheme is
+            # tasklist.txt 8.5, not implemented here).
+            self._last_sent_frames = frames
             self.retry_mgr.note_sent((self._seq - 1) % link.SEQ_MODULUS)
             self._ensure_retry_task()
 
@@ -281,9 +329,11 @@ class Station(asyncio.DatagramProtocol):
         while self.retry_mgr.is_pending:
             await asyncio.sleep(RETRY_POLL_INTERVAL_S)
             state = self.retry_mgr.poll()
-            if state == 'retry' and self._last_sent_frame is not None:
-                self._log("[ack] timed out, retrying")
-                self._transmit_frame(self._last_sent_frame)
+            if state == 'retry' and self._last_sent_frames is not None:
+                frag_note = f" ({len(self._last_sent_frames)} fragments)" if len(self._last_sent_frames) > 1 else ""
+                self._log(f"[ack] timed out, retrying{frag_note}")
+                for frame in self._last_sent_frames:
+                    self._transmit_frame(frame)
                 self.retry_mgr.note_sent(self.retry_mgr.pending_seq)
             elif state == 'give_up':
                 self._log("[ack] gave up - delivery failed")

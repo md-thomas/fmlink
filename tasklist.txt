@@ -427,7 +427,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           instead of success being silent (only [ack] timed out/gave up
           were visible before).
   [x] 8.12 Duplicate-message suppression: --ack retries (seq unchanged,
-          same frame retransmitted) were being decoded and delivered a
+          same frame(s) retransmitted) were being decoded and delivered a
           second time on the receiving station, printing the same message
           twice - found via a real run where an ACK got lost on its way
           back (a legitimate, expected channel event) but the underlying
@@ -438,7 +438,44 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           use - offline analysis of a capture file, where seeing every
           retransmit can matter) - so the fix lives in ota_station.py's
           Station instead: suppress on_message for a frame whose seq
-          matches receiver.last_seq (mirroring LinkReceiver's own
-          duplicate definition exactly), logging a clear [rx] duplicate
-          note rather than silently dropping or double-printing it.
-          LinkReceiver's own counts/behavior are untouched.
+          matches the station's OWN last-delivered seq (tracked
+          separately, not receiver.last_seq - that gets overwritten by
+          every individual fragment fed, including ones that never
+          publish, so it can't correctly identify a repeated MULTI-
+          fragment message by its final fragment's seq - see 8.14),
+          logging a clear [rx] duplicate note rather than silently
+          dropping or double-printing it. LinkReceiver's own counts/
+          behavior are untouched.
+  [x] 8.13 Fragment-loss visibility: a multi-fragment message that lost
+          even one fragment along the way used to vanish with ZERO
+          indication why - individual fragments could all decode 'ok' at
+          the sync/FEC level with no crc_fail/no-sync error, yet the
+          reassembled message never completed, because
+          FragmentReassembler just waits forever for a missing piece
+          until a later mismatched fragment silently trips its
+          abort/discarded counters (LinkReceiver tracks these as plain
+          counts with no callback). This was the single biggest reason
+          "larger messages don't get through" looked like nothing was
+          happening at all - found via a 56-char message needing 12
+          fragments at mode 0 + r1_4_k7's 5-char budget. Fixed:
+          ota_station.py now diffs receiver.counts'
+          frag_aborted/frag_overflow/frag_discarded before/after each
+          feed_frame() call and logs a clear reason
+          (openwave_link.py itself untouched, same posture as 8.12).
+  [x] 8.14 --ack now actually covers multi-fragment sends, not just
+          single-fragment ones: build_fragmented_frames() already applies
+          ACK_REQUESTED to every fragment including the last, so the
+          receiver was already sending a real ACK back after successfully
+          reassembling a multi-fragment message - but the sender never
+          called RetryManager.note_sent() for len(frames) > 1, so that
+          valid ACK arrived and was silently discarded as
+          stale/unrecognized (found via user report: "message got
+          through, but I'm not getting an ack"). Fixed: send_text() now
+          tracks ANY --ack send via the last fragment's seq (which is
+          what LinkReceiver._publish() uses to identify the whole
+          reassembled message either way), and a timeout retries the
+          WHOLE fragment list - not selective-repeat of just the missing
+          piece (still tasklist 8.5 if that's ever wanted), but real
+          coverage where there was none. Verified live: 9/10 multi-
+          fragment ack-requested sends confirmed delivered, zero
+          duplicate deliveries.
