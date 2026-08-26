@@ -870,6 +870,47 @@ class LinkReceiverTests(unittest.TestCase):
         self._feed(receiver, frame)
         self.assertEqual(needed, [3])
 
+    def test_ack_requested_fires_per_fragment_not_just_on_completion(self):
+        # Stop-and-wait per-fragment retry (ota_station.py) needs an ACK for
+        # EACH fragment as it lands, not just once when the whole run
+        # completes - otherwise a sender has no way to tell which
+        # individual fragment needs retrying.
+        needed = []
+        messages = []
+        receiver = link.LinkReceiver(on_ack_needed=needed.append, on_message=messages.append)
+        frames, _ = link.build_fragmented_frames(
+            b'x' * 10, seq_start=0, chunk_size=4, flags=link.FLAG_ACK_REQUESTED)
+        self.assertEqual(len(frames), 3)
+        for i, frame in enumerate(frames):
+            self._feed(receiver, frame)
+            self.assertEqual(needed, list(range(i + 1)),
+                              f"expected ack for fragment {i} immediately, not deferred to completion")
+        self.assertEqual(messages, ['x' * 10])
+
+    def test_retried_fragment_reacks_without_aborting_or_duplicating(self):
+        # Simulates the ACK for fragment 0 getting lost on the way back to
+        # the sender: fragment 0 arrives, then arrives AGAIN (a retry) before
+        # fragment 1 shows up. The repeat must be re-acked (so the sender's
+        # retry eventually resolves) but NOT re-fed to the reassembler,
+        # which would otherwise see an out-of-order fragment_index and
+        # wrongly abort the run.
+        needed = []
+        messages = []
+        receiver = link.LinkReceiver(on_ack_needed=needed.append, on_message=messages.append)
+        frames, _ = link.build_fragmented_frames(
+            b'x' * 10, seq_start=0, chunk_size=4, flags=link.FLAG_ACK_REQUESTED)
+        self.assertEqual(len(frames), 3)
+
+        self._feed(receiver, frames[0])
+        self._feed(receiver, frames[0])  # retried - original's ACK was "lost"
+        self._feed(receiver, frames[1])
+        self._feed(receiver, frames[2])
+
+        self.assertEqual(needed, [0, 0, 1, 2], "the repeat should still re-ack")
+        self.assertEqual(messages, ['x' * 10], "reassembly must still complete exactly once")
+        self.assertEqual(receiver.counts['frag_aborted'], 0)
+        self.assertEqual(receiver.counts['frag_discarded'], 0)
+
     def test_ack_frame_triggers_on_ack_received_not_message(self):
         messages = []
         received = []

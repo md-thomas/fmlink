@@ -75,7 +75,7 @@ class OTAStationIntegrationTests(unittest.TestCase):
             b.register()
             await asyncio.sleep(0.05)  # let both registrations land before sending
 
-            a.send_text("integration test message")
+            await a.send_text("integration test message")
 
             ok = await _wait_for(lambda: len(received) > 0)
 
@@ -107,7 +107,7 @@ class OTAStationIntegrationTests(unittest.TestCase):
             b.register()
             await asyncio.sleep(0.05)  # let both registrations land before sending
 
-            a.send_text("ack test")
+            await a.send_text("ack test")
 
             ok = await _wait_for(lambda: not a.retry_mgr.is_pending)
 

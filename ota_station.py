@@ -25,9 +25,13 @@ Known v1 limitations:
     UDP's ~65KB single-datagram ceiling bounds worst-case on-air sample
     counts (low-order modulation + strong FEC + a near-MAX_PAYLOAD_LEN
     fragment can exceed it). Use file_xfer_test.sh for bulk transfers.
-  - Fragmented sends are not ACK/retry-tracked, matching openwave_link.py's
-    existing fragmentation/ACK interaction rule (see build_fragmented_frames'
-    docstring) - --ack only closes the loop for single-fragment messages.
+  - --ack retries per fragment (stop-and-wait: send one, await its own
+    ACK, then the next), so a lost fragment only costs that fragment a
+    retry, not the whole message - but fragments are still sent strictly
+    one at a time, so more fragments means more round-trip latency, not
+    more risk. True windowed/parallel selective-repeat (multiple
+    fragments in flight at once) isn't implemented - would also need
+    FragmentReassembler reworked to tolerate out-of-order arrival.
 
     # station K0MDT, talking to W1AW, via a simulator on this same machine
     python3 ota_station.py --station-id K0MDT --dst W1AW --sim-host 127.0.0.1
@@ -41,6 +45,7 @@ Known v1 limitations:
 import argparse
 import asyncio
 import sys
+import time
 
 import numpy as np
 
@@ -67,6 +72,18 @@ DEFAULT_FEC_PRESET = 'r1_4_k7'
 MAX_UDP_PAYLOAD_BYTES = 65507
 
 
+def _human_size(num_bytes):
+    """num_bytes -> auto-scaled 'N.NN KB (N bytes)' label, matching
+    pipeline_test.sh's human_size() convention elsewhere in this project."""
+    if num_bytes < 1024:
+        label = f"{num_bytes} B"
+    elif num_bytes < 1024 * 1024:
+        label = f"{num_bytes / 1024:.2f} KB"
+    else:
+        label = f"{num_bytes / (1024 * 1024):.2f} MB"
+    return f"{label} ({num_bytes} bytes)"
+
+
 def _waveform_modes_table():
     lines = ["Waveform Modes (openwave_link.py's WAVEFORM_MODES):"]
     for mode_id, info in sorted(link.WAVEFORM_MODES.items()):
@@ -84,13 +101,20 @@ class Station(asyncio.DatagramProtocol):
     directly to the peer's address."""
 
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
-                 fec_preset=None, use_ack=False, on_message=None):
+                 fec_preset=None, use_ack=False, on_message=None, verbose=False):
         self.station_id = station_id
         self.dst_id = dst_id
         self.mode_id = mode_id
         self.use_fec = use_fec
         self.use_ack = use_ack
+        self.verbose = verbose
         self._on_message = on_message
+
+        self.session_start = time.monotonic()
+        self.stats = {
+            'sent_messages': 0, 'sent_text_bytes': 0, 'sent_air_bytes': 0, 'sent_fragments': 0,
+            'received_messages': 0, 'received_text_bytes': 0, 'received_air_bytes': 0,
+        }
 
         mode_info = link.WAVEFORM_MODES[mode_id]
         self.modulation = mode_info['modulation']
@@ -105,8 +129,6 @@ class Station(asyncio.DatagramProtocol):
         self.transport = None
         self._sim_addr = None
         self._seq = 0
-        self._last_sent_frames = None  # for --ack retransmission (whole message, all fragments)
-        self._retry_task = None
 
         self.receiver = link.LinkReceiver(
             station_id=station_id,
@@ -134,7 +156,11 @@ class Station(asyncio.DatagramProtocol):
                       f"the peer's ACK likely didn't make it back last time, so it retried")
             return
         self._last_delivered_seq = self._pending_message_seq
+        self.stats['received_messages'] += 1
+        self.stats['received_text_bytes'] += len(text.encode('utf-8'))
         self._log(f"{self.dst_id}: {text}")
+        if self.verbose:
+            self._log(f"[stats] {self.receiver.stats_line()}")
         if self._on_message:
             self._on_message(text)
 
@@ -156,6 +182,7 @@ class Station(asyncio.DatagramProtocol):
 
     # -- RX pipeline: samples -> demod -> sync/FEC -> LinkReceiver -----
     def _handle_received_samples(self, payload):
+        self.stats['received_air_bytes'] += len(payload)
         samples = np.frombuffer(payload, dtype=np.complex64)
         num_symbols = pulse.expected_symbol_count(len(samples))
         filtered = pulse.matched_filter(samples)
@@ -240,13 +267,14 @@ class Station(asyncio.DatagramProtocol):
         out = encode_peer_id(self.station_id) + samples.astype(np.complex64).tobytes()
         if len(out) > MAX_UDP_PAYLOAD_BYTES:
             fec_note = f"--fec-preset {self.fec_preset}" if self.use_fec else "no FEC"
-            self._log(f"[tx error] burst is {len(out)} bytes, over UDP's "
-                      f"{MAX_UDP_PAYLOAD_BYTES}-byte datagram limit - NOT sent. "
+            self._log(f"[tx error] burst is {_human_size(len(out))}, over UDP's "
+                      f"{_human_size(MAX_UDP_PAYLOAD_BYTES)} datagram limit - NOT sent. "
                       f"({fec_note} + {self.modulation} at mode {self.mode_id} is too expensive "
                       f"for this message length; try a higher --mode/fewer bits of FEC redundancy, "
                       f"or a shorter message)")
             return
         self.transport.sendto(out, self._sim_addr)
+        self.stats['sent_air_bytes'] += len(out)
 
     def max_single_fragment_chars(self):
         """Binary-search the largest single-fragment ASCII message that
@@ -277,37 +305,64 @@ class Station(asyncio.DatagramProtocol):
                 hi = mid - 1
         return lo
 
-    def send_text(self, text):
+    async def send_text(self, text):
         """Build, FEC-encode (if enabled), modulate, pulse-shape, and
         transmit one message. Longer-than-max_fragment_chars messages
         auto-split into independent bursts (build_fragmented_frames()'s
         existing semantics - each fragment is its own frame/burst),
         chunked to what actually fits in one UDP datagram at this
-        station's --mode/--fec settings, not link.MAX_PAYLOAD_LEN."""
+        station's --mode/--fec settings, not link.MAX_PAYLOAD_LEN.
+
+        With --ack, fragments are sent stop-and-wait: each one is
+        transmitted and its OWN ACK awaited (with retry) before the next
+        is sent, so a lost fragment only costs that fragment a retry, not
+        the whole message - see openwave_link.py's LinkReceiver, which
+        acks every fragment individually as it arrives, not just the last
+        one. If any single fragment exhausts its retries, the remaining
+        fragments aren't sent - a still-incomplete message isn't worth
+        the extra channel traffic once one piece has already failed."""
+        text_bytes = text.encode('utf-8')
         flags = link.FLAG_ACK_REQUESTED if self.use_ack else 0
         frames, self._seq = link.build_fragmented_frames(
-            text.encode('utf-8'), seq_start=self._seq, mode_id=self.mode_id,
+            text_bytes, seq_start=self._seq, mode_id=self.mode_id,
             chunk_size=self.max_fragment_chars,
             flags=flags, src_id=self.station_id.encode(), dst_id=self.dst_id.encode(),
         )
-        for frame in frames:
-            self._transmit_frame(frame)
+        first_seq = (self._seq - len(frames)) % link.SEQ_MODULUS
 
-        if self.use_ack:
-            # The ACK_REQUESTED flag is set on every fragment (see
-            # build_fragmented_frames), but the receiver only actually
-            # fires on_ack_needed once, after the LAST fragment completes
-            # reassembly (LinkReceiver._publish uses that fragment's own
-            # header) - so that final fragment's seq is what a real ACK
-            # will reference, whether this was 1 fragment or many. Track
-            # the whole burst list so a timeout retries the complete
-            # message, not just its last piece - there's no way to know
-            # which specific fragment was lost, so a retry has to resend
-            # all of them (a real per-fragment selective-repeat scheme is
-            # tasklist.txt 8.5, not implemented here).
-            self._last_sent_frames = frames
-            self.retry_mgr.note_sent((self._seq - 1) % link.SEQ_MODULUS)
-            self._ensure_retry_task()
+        self.stats['sent_messages'] += 1
+        self.stats['sent_text_bytes'] += len(text_bytes)
+        self.stats['sent_fragments'] += len(frames)
+        air_bytes_before = self.stats['sent_air_bytes']
+
+        if not self.use_ack:
+            for frame in frames:
+                self._transmit_frame(frame)
+            if self.verbose:
+                air_bytes = self.stats['sent_air_bytes'] - air_bytes_before
+                self._log(f"[stats] sent {_human_size(len(text_bytes))} text -> "
+                          f"{len(frames)} fragment(s), {_human_size(air_bytes)} on-air "
+                          f"(no --ack: no delivery confirmation)")
+            return
+
+        started_at = time.monotonic()
+        for i, frame in enumerate(frames):
+            seq = (first_seq + i) % link.SEQ_MODULUS
+            if not await self._send_with_retry(seq, frame):
+                self._log(f"[ack] gave up on fragment {i + 1}/{len(frames)} (seq {seq}) - "
+                          f"message incomplete, aborting remaining fragments")
+                return
+            if self.verbose and len(frames) > 1:
+                self._log(f"[ack] fragment {i + 1}/{len(frames)} delivered")
+
+        elapsed = time.monotonic() - started_at
+        note = ""
+        if self.verbose:
+            air_bytes = self.stats['sent_air_bytes'] - air_bytes_before
+            bps = (len(text_bytes) * 8 / elapsed) if elapsed > 0 else 0
+            note = (f" ({_human_size(len(text_bytes))} text / {_human_size(air_bytes)} on-air "
+                    f"in {elapsed:.2f}s, {bps:.0f} bps text-level)")
+        self._log(f"[ack] delivered - {len(frames)} fragment(s) acknowledged by {self.dst_id}{note}")
 
     # -- ACK/retry ------------------------------------------------------
     def _on_ack_needed(self, seq):
@@ -318,25 +373,60 @@ class Station(asyncio.DatagramProtocol):
         self._transmit_frame(ack_frame)
 
     def _on_ack_received(self, seq):
-        if self.retry_mgr and self.retry_mgr.note_ack(seq):
-            self._log(f"[ack] delivered - seq {seq} acknowledged by {self.dst_id}")
+        if self.retry_mgr:
+            self.retry_mgr.note_ack(seq)
 
-    def _ensure_retry_task(self):
-        if self._retry_task is None or self._retry_task.done():
-            self._retry_task = asyncio.ensure_future(self._retry_loop())
-
-    async def _retry_loop(self):
-        while self.retry_mgr.is_pending:
+    async def _send_with_retry(self, seq, frame_bytes):
+        """Transmit frame_bytes (seq already baked into its header) and
+        wait for its ACK, retrying per RetryManager's policy - reused
+        as-is, just reset and driven fresh per fragment here instead of
+        once per whole message. Returns True if acked, False if retries
+        were exhausted."""
+        self.retry_mgr.reset()
+        # note_sent() before the actual transmit: an incoming ACK is only
+        # ever processed by the event loop on a later iteration (never
+        # synchronously inside our own sendto() call), so this ordering
+        # doesn't matter for real UDP - but marking "pending" first, before
+        # anything could possibly race it, costs nothing and removes the
+        # assumption entirely.
+        self.retry_mgr.note_sent(seq)
+        self._transmit_frame(frame_bytes)
+        while True:
             await asyncio.sleep(RETRY_POLL_INTERVAL_S)
             state = self.retry_mgr.poll()
-            if state == 'retry' and self._last_sent_frames is not None:
-                frag_note = f" ({len(self._last_sent_frames)} fragments)" if len(self._last_sent_frames) > 1 else ""
-                self._log(f"[ack] timed out, retrying{frag_note}")
-                for frame in self._last_sent_frames:
-                    self._transmit_frame(frame)
-                self.retry_mgr.note_sent(self.retry_mgr.pending_seq)
+            if state == 'idle':
+                return True
+            if state == 'retry':
+                if self.verbose:
+                    self._log(f"[ack] seq {seq} timed out, retrying")
+                self.retry_mgr.note_sent(seq)
+                self._transmit_frame(frame_bytes)
             elif state == 'give_up':
-                self._log("[ack] gave up - delivery failed")
+                return False
+
+    def stats_summary(self):
+        """Session totals: messages/bytes sent and received, at both the
+        text level (what you typed) and the on-air level (actual bytes
+        transmitted as complex samples - inflated by FEC and, at low-order
+        modulation, by bits/symbol), plus average throughput over the
+        whole session (includes idle time between messages, so this is a
+        session-average, not an instantaneous rate) and the underlying
+        LinkReceiver's own counters (OK/CRC fail/Dup/Lost/etc)."""
+        elapsed = time.monotonic() - self.session_start
+        s = self.stats
+        sent_bps = (s['sent_text_bytes'] * 8 / elapsed) if elapsed > 0 else 0
+        recv_bps = (s['received_text_bytes'] * 8 / elapsed) if elapsed > 0 else 0
+        lines = [
+            f"[{self.station_id}] session stats after {elapsed:.1f}s:",
+            f"  sent:     {s['sent_messages']} message(s), {_human_size(s['sent_text_bytes'])} text "
+            f"-> {_human_size(s['sent_air_bytes'])} on-air ({s['sent_fragments']} fragment(s) total, "
+            f"~{sent_bps:.0f} bps text-level session average)",
+            f"  received: {s['received_messages']} message(s), {_human_size(s['received_text_bytes'])} text "
+            f"<- {_human_size(s['received_air_bytes'])} on-air "
+            f"(~{recv_bps:.0f} bps text-level session average)",
+            f"  link:     {self.receiver.stats_line()}",
+        ]
+        return "\n".join(lines)
 
 
 async def _stdin_lines():
@@ -355,6 +445,7 @@ async def run(args):
     station = Station(
         station_id=args.station_id, dst_id=args.dst, mode_id=args.mode,
         use_fec=args.fec, fec_preset=args.fec_preset, use_ack=args.ack,
+        verbose=args.verbose,
     )
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
@@ -374,9 +465,10 @@ async def run(args):
 
     try:
         async for line in _stdin_lines():
-            station.send_text(line)
+            await station.send_text(line)
     finally:
         transport.close()
+        print(station.stats_summary(), file=sys.stderr)
 
 
 def main():
@@ -399,7 +491,13 @@ def main():
                          help=f'FEC preset to use when --fec is set - overrides the --mode\'s own '
                               f'default preset (default: {DEFAULT_FEC_PRESET}; see FEC presets below)')
     parser.add_argument('--ack', action='store_true',
-                         help='Request ACKs and retry on timeout (single-fragment sends only)')
+                         help='Request ACKs and retry on timeout (a timeout resends the whole '
+                              'message, all fragments, not just the missing piece)')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                         help='Print per-message stats as they happen (size, fragment count, '
+                              'timing/throughput, LinkReceiver counters). A session summary '
+                              '(bytes/messages sent+received, elapsed time) always prints on exit '
+                              'regardless of this flag.')
     args = parser.parse_args()
 
     try:

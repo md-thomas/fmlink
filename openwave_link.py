@@ -465,8 +465,6 @@ class LinkReceiver:
         text = payload_bytes.decode('utf-8', errors='replace')
         if text:
             self._on_message(text)
-        if needs_ack(header):
-            self._on_ack_needed(header['seq'])
 
     def feed_frame(self, header, payload):
         """Feed one CRC-verified (header, payload) pair - e.g. the 'ok'
@@ -478,8 +476,23 @@ class LinkReceiver:
           - a fragment -> buffered until the run completes, then on_message
             fires with the full reassembled text
           - a plain Data frame -> on_message fires immediately
-        A Data frame (fragmented or not) with the ack_requested flag also
-        fires on_ack_needed(seq), in addition to the above."""
+        A Data frame (fragmented or not) with the ack_requested flag fires
+        on_ack_needed(seq) immediately on arrival - per FRAME, not just once
+        when a fragmented run completes - so a caller doing per-fragment
+        retry (stop-and-wait) can tell exactly which fragments landed.
+
+        A fragmented frame whose seq repeats the immediately-preceding
+        frame's (the caller retried it, most likely because its ACK got
+        lost on the way back, not because the fragment itself was bad) is
+        re-acked here but NOT re-fed to the reassembler: it expects strictly
+        incrementing fragment_index per call and would otherwise treat the
+        repeat as an out-of-order mismatch and wrongly abort an
+        in-progress or just-completed run. Non-fragmented duplicates are
+        unaffected - they still reach _publish() and get delivered, same as
+        always (see _update_seq()'s 'dup' counting; callers that want to
+        suppress duplicate delivery to a user do so themselves, e.g.
+        ota_station.py)."""
+        is_repeat = self.last_seq is not None and header['seq'] == self.last_seq
         self._update_seq(header)
         self._update_addressing(header)
 
@@ -492,7 +505,12 @@ class LinkReceiver:
             self._on_ack_received(header['seq'])
             return
 
+        if needs_ack(header):
+            self._on_ack_needed(header['seq'])
+
         if parse_flags(header['flags'])['fragmented']:
+            if is_repeat:
+                return
             frag_status, reassembled = self.reassembler.feed(header, payload)
             self.counts['frag_aborted'] = self.reassembler.abort_count
             self.counts['frag_overflow'] = self.reassembler.overflow_count

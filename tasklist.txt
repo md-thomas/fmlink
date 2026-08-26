@@ -359,9 +359,18 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           one side to learn what the other is using. Depends on Phase 6.4
           (ALE-inspired negotiation design) and would make this a much
           more realistic testbed for it.
-  [ ] 8.5 Windowed/selective-repeat ACK for fragmented multi-frame sends
-          (currently untracked, matching build_fragmented_frames()'s
-          existing single-fragment-only ACK rule - see 2.11).
+  [x] 8.5 Per-fragment ACK/retry (stop-and-wait) for fragmented sends -
+          see 8.16. Not full windowed/parallel selective-repeat (multiple
+          fragments in flight, retry only actual gaps) - that would also
+          need FragmentReassembler reworked to tolerate out-of-order
+          arrival (today any out-of-sequence fragment aborts the run), a
+          materially bigger change. Stop-and-wait fully fixes the
+          reliability problem this item was originally about (a lost
+          fragment used to cost the WHOLE message, not just itself) at
+          the cost of one round trip of latency per fragment instead of
+          one round trip per message - a real but acceptable tradeoff for
+          interactive messaging at this scale. True selective-repeat
+          remains a possible future *latency* optimization only.
   [x] 8.6 UDP single-datagram size ceiling (~65KB) bounds worst-case
           on-air sample counts - discovered to bite much earlier than
           expected: --mode 0 (BPSK) + --fec-preset r1_4_k7 (the default
@@ -463,19 +472,66 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           feed_frame() call and logs a clear reason
           (openwave_link.py itself untouched, same posture as 8.12).
   [x] 8.14 --ack now actually covers multi-fragment sends, not just
-          single-fragment ones: build_fragmented_frames() already applies
-          ACK_REQUESTED to every fragment including the last, so the
-          receiver was already sending a real ACK back after successfully
-          reassembling a multi-fragment message - but the sender never
-          called RetryManager.note_sent() for len(frames) > 1, so that
-          valid ACK arrived and was silently discarded as
-          stale/unrecognized (found via user report: "message got
-          through, but I'm not getting an ack"). Fixed: send_text() now
-          tracks ANY --ack send via the last fragment's seq (which is
-          what LinkReceiver._publish() uses to identify the whole
-          reassembled message either way), and a timeout retries the
-          WHOLE fragment list - not selective-repeat of just the missing
-          piece (still tasklist 8.5 if that's ever wanted), but real
-          coverage where there was none. Verified live: 9/10 multi-
-          fragment ack-requested sends confirmed delivered, zero
-          duplicate deliveries.
+          single-fragment ones (superseded by 8.16 below, which replaced
+          the whole-message retry this introduced with true per-fragment
+          retry): build_fragmented_frames() already applies ACK_REQUESTED
+          to every fragment including the last, so the receiver was
+          already sending a real ACK back after successfully reassembling
+          a multi-fragment message - but the sender never called
+          RetryManager.note_sent() for len(frames) > 1, so that valid ACK
+          arrived and was silently discarded as stale/unrecognized (found
+          via user report: "message got through, but I'm not getting an
+          ack"). First fix (this item): send_text() tracked ANY --ack
+          send via the last fragment's seq, and a timeout retried the
+          WHOLE fragment list.
+  [x] 8.16 Per-fragment ACK/retry (stop-and-wait), replacing 8.14's
+          whole-message retry - found via a real failure: a 923-char/14-
+          fragment message at --mode 2 --fec-preset r1_4_k7 needing ALL
+          14 fragments to survive together on one attempt only succeeds
+          ~17% of the time at a realistic ~88%/fragment rate (~52% across
+          4 whole-message attempts) - a full "gave up" was a real,
+          expected outcome, not a bug, and got worse the more fragments a
+          message needed.
+            - openwave_link.py: LinkReceiver.feed_frame() now fires
+              on_ack_needed() for EVERY fragment as it individually
+              arrives (moved out of _publish(), which only fired once on
+              full reassembly). Guard added: a fragmented frame whose seq
+              repeats the immediately-preceding one (the sender retried
+              it because ITS ack was lost, not because the fragment was
+              bad) is re-acked but not re-fed to the reassembler, which
+              would otherwise treat the repeat as an out-of-order
+              mismatch and wrongly abort an in-progress/just-completed
+              run. Non-fragmented duplicates are unaffected (still
+              delivered via _publish(), unchanged). New tests confirm
+              per-fragment acking and the duplicate-fragment guard.
+            - ota_station.py: send_text() sends fragments one at a time
+              with --ack, awaiting (with RetryManager-driven retry,
+              reused as-is) each fragment's own ACK before sending the
+              next; aborts remaining fragments if any one exhausts its
+              retries. Replaces the old whole-message _retry_loop/
+              _last_sent_frames machinery.
+          At ~88%/fragment, P(a fragment eventually lands within 4
+          attempts) ~99.98%, so P(all 14 land) ~99.7% - verified live:
+          the exact originally-failing 923-char/14-fragment message now
+          delivers completely (fragment 12 needed 2 retries, the rest
+          landed first try). Also verified with a deterministic test
+          harness (not random chance): (a) a fragment that's dropped once
+          gets retried and the message still arrives correctly, (b) a
+          fragment's ACK getting dropped once (fragment itself fine)
+          re-acks correctly without aborting the reassembly or double-
+          delivering the message.
+  [x] 8.15 --verbose/-v added: per-message stats on send (text size,
+          fragment count, on-air bytes), on --ack delivery (round-trip
+          time, text-level throughput), and on receive
+          (LinkReceiver.stats_line() - the same OK/CRC-fail/Dup/Lost/
+          ACKs-rx/Frag/Seq/Mode/Src/Dst line the archived GNU Radio
+          flowgraphs' stats port used, reused as-is rather than
+          reinventing a second counters format). A session summary
+          (messages/bytes sent+received at both text and on-air level,
+          elapsed time, session-average throughput, final stats_line())
+          always prints on exit regardless of --verbose. All byte counts
+          (per-message and the session summary) show as an auto-scaled
+          "N.NN KB (N bytes)" label via a new _human_size() helper,
+          matching pipeline_test.sh's existing human_size() convention -
+          on-air totals are commonly tens/hundreds of KB, awkward as bare
+          byte counts.
