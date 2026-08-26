@@ -85,18 +85,16 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
   [ ] 2.7 Dynamic ACK timeout based on active Waveform Mode's bit rate
           (RetryManager.timeout_s is currently a fixed default, not derived
           from mode/symbol rate).
-  [ ] 2.11 Wire RetryManager/ACK into the GNU-Radio-free CLI/file-transfer
-          pipeline (openwave_cli.py/file_xfer_test.sh) - a third venue for
-          closing the ACK loop, alongside phy_sim_loopback.grc (2.5, done)
-          and tx_pluto.grc/rx_rtlsdr.grc (2.9, blocked on full-duplex
-          hardware). Envisioned flow: send one packet, wait for an ACK,
-          then either send the next packet or resend the failed one -
-          stop-and-wait per fragment is the simplest fit but adds a full
-          round trip of latency per fragment; a windowed/selective-repeat
-          scheme (ack a batch, retry only the ones that failed) avoids
-          that cost while still catching the crc_fail/gap cases FEC alone
-          can't correct (see Phase 3's FEC sweep results below for how
-          often that actually happens at a given SNR/preset).
+  [x] 2.11 Wire RetryManager/ACK into the GNU-Radio-free pipeline - done in
+          ota_station.py (Phase 8): --ack requests an ACK and retries on
+          RetryManager timeout, closing a real loop over the live OTA
+          simulator link. This is stop-and-wait per single-fragment
+          message, not a windowed/selective-repeat scheme, and (matching
+          build_fragmented_frames()'s existing rule) does NOT track
+          fragmented multi-frame sends - a windowed scheme for those is
+          still a real follow-up if it turns out to matter in practice.
+          openwave_cli.py/file_xfer_test.sh themselves remain unwired
+          (still one-shot, no live RX to ACK against).
   [x] 2.8 Parse/act on Waveform Mode ID and Destination ID on RX, in
           rx_rtlsdr.grc only: openwave_link.format_mode()/decode_station_id()
           decode and display both; a new station_id parameter (blank by
@@ -320,3 +318,127 @@ send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
           to a nearby search window with an explicit 'gap' status instead
           of silently locking onto a farther-away fragment when a marker
           didn't survive noise.
+
+Phase 8: Over-the-Air Network Simulation - IN PROGRESS
+-----------------------------------------------------------
+Live, two-process (or more) testing: two ota_station.py stations exchange
+real OpenWave frames through the actual modem chain (modulate/pulse-shape
+on TX, matched-filter/demodulate/sync/FEC on RX), relayed over the network
+through a simulated RF channel (path loss, fading, AWGN, latency) instead
+of a one-shot file-based pipeline. Started 2026-08-25.
+
+  [x] 8.1 ota_sim - a new, separate sibling project (/data/Projects/ota_sim,
+          own pyproject.toml, zero OpenWave imports) providing the reusable
+          channel physics (OTALink: Friis free-space path loss, flat
+          Rayleigh fading, AWGN sized to the resulting SNR, configurable
+          drop probability, propagation delay + latency + jitter - see its
+          README for the full model) and a network relay service
+          (ota_sim.simulator, asyncio UDP) that two arbitrary peers talk
+          through, anywhere reachable over the network. Deliberately
+          protocol-agnostic (only relays tagged IQ-sample datagrams, never
+          parses OpenWave frames) so it's reusable by other projects.
+          Peers' real addresses are learned dynamically from a "hello"
+          datagram (see ota_station.py's register()), not statically
+          configured - works whether stations are on the same machine or
+          split across up to three.
+  [x] 8.2 ota_station.py - the OpenWave-specific live station: builds/
+          FEC-encodes/modulates/pulse-shapes real frames on send, and
+          matched-filters/demodulates/(FEC-decodes or correlator-syncs)/
+          dispatches into LinkReceiver on receive. Interactive (stdin ->
+          send, LinkReceiver's on_message -> stdout). --mode selects a
+          Waveform Mode ID (see WAVEFORM_MODES); --fec/--ack are opt-in.
+          Verified end to end both as an in-process asyncio integration
+          test (tests/test_ota_station.py) and as three genuinely separate
+          OS processes talking over real loopback UDP sockets.
+  [x] 8.3 ACK/retry closed over a live link (see 2.11) - --ack wires
+          RetryManager's poll-driven retry loop to real transmit/receive,
+          the first venue where this closes over something other than
+          phy_sim_loopback.grc's single-process loopback.
+  [ ] 8.4 In-band mode negotiation - both stations must currently be
+          launched with the same --mode/--fec by hand; there's no way for
+          one side to learn what the other is using. Depends on Phase 6.4
+          (ALE-inspired negotiation design) and would make this a much
+          more realistic testbed for it.
+  [ ] 8.5 Windowed/selective-repeat ACK for fragmented multi-frame sends
+          (currently untracked, matching build_fragmented_frames()'s
+          existing single-fragment-only ACK rule - see 2.11).
+  [x] 8.6 UDP single-datagram size ceiling (~65KB) bounds worst-case
+          on-air sample counts - discovered to bite much earlier than
+          expected: --mode 0 (BPSK) + --fec-preset r1_4_k7 (the default
+          FEC preset as of 8.7) already can't fit more than a handful of
+          characters, not just a near-MAX_PAYLOAD_LEN fragment. Handled
+          for now with an explicit pre-flight size check in
+          ota_station.py's _transmit_frame() that logs a clear [tx error]
+          and refuses to send, instead of asyncio's transport silently
+          swallowing the OSError and killing itself (which is what
+          happens if sendto() is just called on an oversized payload -
+          found by hitting it directly). Lifting the ceiling itself (a
+          chunked-datagram scheme, or switching to TCP) is still open, and
+          would be needed for bulk transfer over the OTA simulator
+          (file_xfer_test.sh already covers bulk transfer over the
+          file-based pipeline).
+  [x] 8.7 --fec-preset added as an independent override of the mode's own
+          WAVEFORM_MODES-documented preset, default r1_4_k7 - and
+          ota_station.py -h now prints the actual WAVEFORM_MODES table and
+          full PRESETS list so both are discoverable without reading
+          source. See 8.6 for the size tradeoff this interacts with -
+          r1_4_k7 pairs poorly with BPSK (--mode 0/1) for anything but
+          very short messages; QPSK/16-QAM (--mode 2-4) has more headroom.
+  [x] 8.8 send_text() now chunks by Station.max_fragment_chars (computed
+          once from the real modem chain at construction) instead of
+          link.MAX_PAYLOAD_LEN, so build_fragmented_frames() actually
+          splits a message into bursts that fit in one UDP datagram at the
+          station's current --mode/--fec settings - previously a message
+          well under MAX_PAYLOAD_LEN (1024 bytes) but over the real
+          per-burst budget (as low as 5 chars at mode 0 + r1_4_k7) was
+          treated as "one fragment" and rejected whole by the 8.6 size
+          guard instead of being split further.
+  [x] 8.9 ota_sim.simulator's own --distance-km default (was 5.0) didn't
+          match --reference-distance-km's default (1.0), so running the
+          simulator with NO flags at all silently gave ~6dB instead of the
+          --base-snr-db default's 20dB - discovered via a user report of
+          "the bare command doesn't work". Fixed by defaulting
+          --distance-km to 1.0 too, so the bare defaults give a clean link.
+  [x] 8.10 ota_sim.channel.OTALink's fading was applying a uniform random
+          carrier phase rotation per burst, in addition to Rayleigh
+          amplitude fading. Discovered via a real ~80% QPSK failure rate
+          at a clean 20dB link (25-message test: only 3 delivered, 20
+          "no frame found", vs. 22/25 clean + 3 legitimate drops after the
+          fix). Root cause, confirmed by direct test: openwave_modem.py's
+          BPSK/QPSK/16-QAM demodulators do plain per-axis hard-decision
+          slicing with NO carrier phase recovery (no Costas loop, no
+          differential encoding - unlike the archived pi/4-QPSK GNU Radio
+          chain, whose differential ring encoding existed specifically to
+          resolve this). Measured directly: QPSK survives only +-45
+          degrees of phase rotation before every byte in a burst corrupts
+          (100% BER), BPSK only +-90 - so a uniform random phase was
+          mostly testing "does this modem have phase recovery" (no, by
+          design today) rather than "how much SNR margin does this link
+          have". Fixed by dropping the phase term from OTALink's fading
+          (amplitude-only Rayleigh fade now) - this is the real, predicted
+          consequence of Phase 6's plain-QPSK-needs-its-own-ambiguity-fix
+          note finally showing up empirically. A real fix (differential
+          encoding or a pilot/training sequence for the non-pi/4 modes) is
+          still open - the OTA simulator would be the natural place to
+          verify it once built.
+  [x] 8.11 [ack] delivered confirmation added: --ack's sender now prints
+          "[ack] delivered - seq N acknowledged by <peer>" when
+          RetryManager.note_ack() actually resolves the pending send,
+          instead of success being silent (only [ack] timed out/gave up
+          were visible before).
+  [x] 8.12 Duplicate-message suppression: --ack retries (seq unchanged,
+          same frame retransmitted) were being decoded and delivered a
+          second time on the receiving station, printing the same message
+          twice - found via a real run where an ACK got lost on its way
+          back (a legitimate, expected channel event) but the underlying
+          data had already arrived fine, so the sender's retry was
+          redundant from the receiver's perspective. openwave_link.py's
+          LinkReceiver already tracks a repeated seq as a 'dup' stat, by
+          design does NOT suppress delivery (the right call for its other
+          use - offline analysis of a capture file, where seeing every
+          retransmit can matter) - so the fix lives in ota_station.py's
+          Station instead: suppress on_message for a frame whose seq
+          matches receiver.last_seq (mirroring LinkReceiver's own
+          duplicate definition exactly), logging a clear [rx] duplicate
+          note rather than silently dropping or double-printing it.
+          LinkReceiver's own counts/behavior are untouched.
