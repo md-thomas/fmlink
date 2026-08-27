@@ -354,11 +354,10 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           RetryManager's poll-driven retry loop to real transmit/receive,
           the first venue where this closes over something other than
           phy_sim_loopback.grc's single-process loopback.
-  [ ] 8.4 In-band mode negotiation - both stations must currently be
-          launched with the same --mode/--fec by hand; there's no way for
-          one side to learn what the other is using. Depends on Phase 6.4
-          (ALE-inspired negotiation design) and would make this a much
-          more realistic testbed for it.
+  [x] 8.4 In-band mode negotiation - see 8.16. --auto probes the link at a
+          fixed control mode, estimates its SNR, and each side grants the
+          other the best mode/FEC it measures - no more hand-matching
+          --mode/--fec across both stations.
   [x] 8.5 Per-fragment ACK/retry (stop-and-wait) for fragmented sends -
           see 8.16. Not full windowed/parallel selective-repeat (multiple
           fragments in flight, retry only actual gaps) - that would also
@@ -535,3 +534,183 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           matching pipeline_test.sh's existing human_size() convention -
           on-air totals are commonly tens/hundreds of KB, awkward as bare
           byte counts.
+  [x] 8.16 --auto: automatic mode/FEC negotiation (closes 8.4). A receiver
+          can't demodulate a burst without already knowing its modulation,
+          so negotiation itself has to run over a fixed, always-known
+          "control" mode (CONTROL_MODE_ID=0/BPSK) distinct from whatever
+          data mode ends up negotiated:
+            - openwave_modem.py: estimate_snr_db(symbols, modulation) - a
+              blind (no pilot symbols) EVM-style estimator: normalizes
+              received symbol energy to the constellation's unit-energy
+              convention, then measures each symbol's distance to its OWN
+              nearest ideal point as a noise-power estimate. Measured
+              directly (see its tests): optimistically biased once real
+              noise crosses decision boundaries, worse at higher-order
+              modulations (16-QAM's estimate barely moves across a 13dB
+              true-SNR range) - fine for BPSK (used for the control-channel
+              probe specifically), not attempted for anything else.
+            - openwave_link.py: MODE_SNR_TABLE/select_mode_for_snr() - an
+              ordered (min_snr_db, mode_id, fec_preset) threshold table.
+              CONTROL_OP_MODE_REQUEST/CONTROL_OP_MODE_GRANT + build/parse
+              helpers for PACKET_TYPE_CONTROL frame payloads (that packet
+              type existed unused since early on).
+            - ota_station.py: negotiate() sends a MODE_REQUEST at the fixed
+              control mode/FEC (retried like an ACK), the peer measures
+              that probe's SNR and replies MODE_GRANT naming the mode/FEC
+              it selected. TX and RX mode are DELIBERATELY separate state
+              (_apply_tx_mode/_apply_rx_mode) - negotiation is asymmetric
+              (each side grants the other whatever ITS OWN measurement
+              supports), so what a station sends with and what it should
+              expect FROM its peer can legitimately differ; conflating them
+              into one mode_id was an actual live bug during development
+              (a station received its peer's real data burst using its own
+              SEND mode as the primary demod candidate instead of the mode
+              it had itself granted the peer, and either mis-decoded
+              nothing at all or crashed - see 8.17). The RX pipeline tries
+              its current RX-mode candidate first, falling back to the
+              control mode, so a MODE_REQUEST/MODE_GRANT can always be
+              heard regardless of the active data mode.
+          --auto implies FEC is available (the whole table is denominated
+          in FEC-preset choices). Setup-only, matching what was scoped:
+          one negotiation before the first send, not continuous re-
+          adaptation mid-session (would need to handle frames already in
+          flight under the old mode - a bigger, separate feature).
+
+          CONTROL_FEC_PRESET real finding: originally picked r1_4_k9 (the
+          data channel's own strongest/most-robust floor preset) for the
+          control channel too, reasoning "most robust available". Wrong -
+          measured directly: a Control frame's fixed ~120-byte overhead
+          (preamble+header+CRC+padding) alone costs ~81KB at BPSK+r1_4_k9
+          after pulse-shaping, over MAX_UDP_PAYLOAD_BYTES before any real
+          payload is even counted, so a MODE_GRANT could never be sent at
+          all (grants attempted and silently dropped by the [tx error]
+          check, negotiate() spinning through all retries and giving up).
+          r1_2_k9 is the strongest preset that actually fits (~52KB) - same
+          rate as r1_2_k3 (the OTHER empirical FEC anchor) with the best
+          available K, NOT an equivalent substitute for r1_4_k9's much
+          stronger low-SNR margin (K buys free-distance at a fixed rate;
+          the big low-SNR gains come from a lower rate, which doesn't fit
+          in a UDP datagram here). Real, accepted consequence: the control
+          channel's own low-SNR ceiling is higher (needs a better link)
+          than the data channel's r1_4_k9 floor.
+
+          MODE_SNR_TABLE calibration real finding: the mode 1 (r1_2_k3)
+          threshold was initially set to 3.0 by mapping openwave_fec.py's
+          empirical anchors (0dB true -> r1_2_k3 good; -6dB true -> only
+          r1_4_k9 good) through estimate_snr_db()'s bias as measured on
+          synthetic AWGN alone. Live-tested against the real ota_sim
+          channel at declared --base-snr-db -6 and the negotiated mode
+          picked r1_2_k3 (not the floor) - directly wrong, and confirmed
+          wrong by the resulting messages then failing crc_fail repeatedly.
+          Recalibrated by directly measuring estimate_snr_db() on the real
+          channel at the two anchor points (8 trials each, tight spread):
+          declared -6dB -> ~2.8-3.1dB estimate (r1_2_k3 known BAD here);
+          declared 0dB -> ~6.6-7.0dB (r1_2_k3 known GOOD); declared 3dB ->
+          ~9.2-9.6dB. New thresholds (5.0/9.0/13.0 for modes 1/3/4) sit
+          with real margin in that gap - re-verified live at -6/0/3dB
+          declared SNR, 8 seeds each, 100% correct selection every time.
+          QPSK (mode 3, 9.0) reuses the measured 3dB-anchor reading
+          directly; 16-QAM (mode 4, 13.0) is still a pure extrapolation off
+          the measured 0->3dB slope, unverified - the QPSK/16-QAM rows are
+          the obvious next thing to live-test and tighten further.
+  [x] 8.17 Two real bugs found only by running --auto live bidirectionally
+          (a single-direction test didn't surface either):
+            - Wrong-mode demod attempts can outright RAISE, not just fail
+              CRC cleanly (e.g. demodulate_qam16 on a burst actually sent
+              in a different mode can leave a bit count that isn't a
+              multiple of 8, raising ValueError). The dual-path RX loop
+              wasn't catching per-attempt exceptions, so a crash on the
+              first (wrong) candidate meant the second (correct) one never
+              even got tried. Fixed: each candidate attempt is now wrapped
+              individually - an exception there is exactly as informative
+              as a clean crc_fail would have been, not a reason to abandon
+              the whole burst.
+            - LinkReceiver.feed_crc_failure(status) did self.counts[status]
+              += 1 against a counts dict that never had a 'truncated' key,
+              even though openwave_fec.py's decode_frames() (unlike the
+              uncoded sync path, which swallows 'truncated' internally)
+              can legitimately yield it - a real KeyError crash on a real,
+              reachable status, pre-existing but only actually reached via
+              ota_station.py's FEC+low-SNR path. Fixed by adding 'truncated'
+              to LinkReceiver.counts/stats_line() as a first-class counter.
+  [x] 8.18 --auto made listen-first instead of eager: negotiate() no longer
+          runs proactively at startup (which had both stations racing to
+          probe each other immediately, before either was necessarily
+          ready). A station with --auto now transmits nothing on its own
+          until it actually has something to send - negotiation is
+          triggered lazily, at most once per session, by THIS station's
+          own first send_text() call (Station._auto_negotiate_done).
+          A station that never sends anything of its own therefore never
+          calls negotiate() itself either - it only ever responds to a
+          peer's incoming MODE_REQUEST when one arrives
+          (_handle_control_frame, already unconditional regardless of
+          --auto), which is how a purely-listening station still ends up
+          participating in negotiation without ever initiating it.
+          Verified live: station A silent until its operator's first typed
+          message, at which point it probes and negotiates; station B,
+          with nothing of its own to send, never negotiates its own TX
+          mode but still measures A's probe and grants it one correctly -
+          confirmed by the delivered/acknowledged message and B's mode=
+          banner staying at its un-negotiated default the whole session.
+          New test: test_auto_negotiate_triggers_lazily_on_first_send_only.
+  [x] 8.19 MODE_SNR_TABLE's mode-4 (16-QAM) threshold was still wrong -
+          a user hit it live: --auto picked Mode 4, the message actually
+          arrived at the peer (twice, correctly deduplicated), but the ACK
+          coming back kept failing (crc_fail/no-sync on the sender's own
+          receive side) until the sender gave up and reported the send as
+          failed despite delivery having succeeded. Root-caused by
+          measuring REAL round-trip reliability (send_text()+--ack, not
+          just what the estimator reads) at mode 4/r1_2_k3 with fading
+          enabled (fading defaults ON - the prior calibration pass for
+          8.16 had it off, which wasn't representative): 12/15 and 11/15
+          successful round trips at declared 12dB/15dB true SNR, fully
+          reliable (15/15) only from 18dB true SNR up. Mode 3 (QPSK) was
+          checked the same way across the same range and found reliable
+          throughout (15/15 at every point 6-18dB) - no change needed
+          there.
+          Mapping the reliable/unreliable boundary through
+          estimate_snr_db() WITH fading on (unlike 8.16's calibration)
+          surfaced a harder problem: the control probe's own single
+          reading is noisy enough under fading that "unreliable at 15dB"
+          and "reliable at 18dB" estimate ranges overlap substantially
+          (measured 14.7-23.8 vs 17.6-26.8, 10 trials each) - fading hits
+          the BPSK probe and the eventual 16-QAM data burst independently,
+          so one probe can't precisely predict the other. No single
+          threshold is both safe and commonly reachable; asked the user,
+          who chose conservative: raised the mode-4 threshold from 13.0 to
+          24.0, favoring avoiding another false "reliable" pick over
+          recovering mode 4's throughput often. Verified live post-fix:
+          10/10 trials at declared 12dB/15dB now correctly fall back to
+          mode 3 (never picking mode 4 in the range it's unreliable);
+          mode 4 starts appearing at declared 18dB (3/10) and is
+          consistent by 25dB. Real follow-up noted but not done: fix the
+          root cause by having negotiate() average multiple probes instead
+          of trusting one, which would shrink this overlap directly.
+  [x] 8.20 RX/TX output made more readable, and the [ack] delivered line
+          now shows what mode it actually used:
+            - LinkReceiver.stats_line()'s single dense "OK:5  CRC fail:2
+              Bad length:0  Truncated:0  ..." line (every counter, always,
+              even at zero) replaced for ota_station.py's own logging by
+              new module-level helpers - _link_stats_lines() (a scannable
+              multi-line block for --verbose per-message [stats]) and
+              _link_counts_compact() (a terse one-line version for the
+              session summary) - both omit zero-value counters instead of
+              always listing all of them. LinkReceiver.stats_line() itself
+              is untouched (openwave_cli.py still uses it directly).
+            - Per-burst --verbose SNR line dropped its repeated
+              boilerplate ("(blind, off the X decode - see
+              openwave_modem.py's estimate_snr_db)", identical on every
+              single burst) down to "[rx] SNR ~XdB (modulation)" - the
+              full explanation still lives once in estimate_snr_db()'s
+              own docstring.
+            - stats_summary()'s sent/received/link lines reformatted with
+              aligned labels and short byte-size labels (no repeated
+              "(N bytes)" suffix - see _human_size()'s new short= param)
+              via a new _traffic_line() helper.
+            - send_text()'s "[ack] delivered" line now always includes
+              which mode/FEC preset was actually used
+              ("mode 4/16qam, r1_2_k3") - directly useful given
+              negotiation is asymmetric (8.16) and which mode a given
+              send used isn't otherwise obvious from that line alone.
+          User picked this exact structured-block style from a few
+          preview options rather than guessing at one.

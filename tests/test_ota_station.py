@@ -120,6 +120,92 @@ class OTAStationIntegrationTests(unittest.TestCase):
 
         self._run(scenario())
 
+    def test_negotiate_selects_mode_from_channel_snr(self):
+        # Regression coverage for the exact miscalibration this feature hit
+        # live: a channel at openwave_fec.py's proven-good 0dB anchor must
+        # select r1_2_k3, and one at its proven-bad -6dB anchor must fall
+        # back to r1_4_k9 - see openwave_link.py's MODE_SNR_TABLE comment
+        # for the real measurements behind these thresholds.
+        async def negotiate_at(base_snr_db, seed):
+            channel = OTALink(distance_m=1000, reference_distance_m=1000,
+                               base_snr_db=base_snr_db, fading=False, drop_prob=0.0,
+                               latency_s=0.005, jitter_s=0.0, seed=seed)
+            sim, sim_transport = await _create_simulator(channel)
+            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                                     use_fec=True, use_ack=True)
+            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                                     use_fec=True, use_ack=True)
+            sim_addr = sim_transport.get_extra_info('sockname')
+            a._sim_addr = sim_addr
+            b._sim_addr = sim_addr
+            a.register()
+            b.register()
+            await asyncio.sleep(0.02)
+            await a.negotiate()
+            result = (a.mode_id, a.fec_preset)
+            a_transport.close()
+            b_transport.close()
+            sim_transport.close()
+            return result
+
+        async def scenario():
+            self.assertEqual(await negotiate_at(0, seed=1), (1, 'r1_2_k3'))
+            self.assertEqual(await negotiate_at(-6, seed=1), (0, 'r1_4_k9'))
+
+        self._run(scenario())
+
+    def test_auto_negotiate_triggers_lazily_on_first_send_only(self):
+        # --auto must NOT probe the link until this station actually has
+        # something to send (a station with nothing to send yet just
+        # listens), and must only ever do so ONCE per session, not on
+        # every send_text() call.
+        async def scenario():
+            channel = OTALink(distance_m=500, reference_distance_m=500,
+                               base_snr_db=60, fading=False, drop_prob=0.0,
+                               latency_s=0.01, jitter_s=0.0, seed=3)
+            sim, sim_transport = await _create_simulator(channel)
+
+            received = []
+            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                                     use_fec=True, use_ack=True, auto=True)
+            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                                     use_fec=True, use_ack=True,
+                                                     on_message=received.append)
+
+            sim_addr = sim_transport.get_extra_info('sockname')
+            a._sim_addr = sim_addr
+            b._sim_addr = sim_addr
+            a.register()
+            b.register()
+            await asyncio.sleep(0.05)
+
+            self.assertFalse(a._auto_negotiate_done, "must not negotiate before there's anything to send")
+            self.assertEqual(a.mode_id, 0, "mode must be untouched before the first send")
+
+            negotiate_calls = []
+            original_negotiate = a.negotiate
+
+            async def counting_negotiate():
+                negotiate_calls.append(1)
+                await original_negotiate()
+            a.negotiate = counting_negotiate
+
+            await a.send_text("first message")
+            self.assertTrue(a._auto_negotiate_done)
+            self.assertEqual(len(negotiate_calls), 1)
+            negotiated_mode = a.mode_id
+
+            await a.send_text("second message")
+            self.assertEqual(len(negotiate_calls), 1,
+                              "negotiate() must not run again on a later send")
+            self.assertEqual(a.mode_id, negotiated_mode)
+
+            a_transport.close()
+            b_transport.close()
+            sim_transport.close()
+
+        self._run(scenario())
+
 
 if __name__ == '__main__':
     unittest.main()

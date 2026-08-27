@@ -461,6 +461,11 @@ Type a message in either station's terminal and press Enter - it should
 appear, decoded, in the other station's terminal shortly after (delayed by
 the simulator's configured latency).
 
+Add `--auto --ack` to both stations instead of matching `--mode`/`--fec` by
+hand - each negotiates its own mode/FEC the first time *it* has a message
+to send (not eagerly at startup - see `--auto` below), from the other's
+measured link quality.
+
 `--base-snr-db` is the SNR at `--reference-distance-km` (default 1.0, so
 the command above gives a clean ~15dB link). **`--distance-km` further
 than that costs real path-loss dB** - e.g. 5km against a 1km reference
@@ -498,8 +503,10 @@ its own ACK (retrying just that fragment on timeout), then sends the
 next - so a single lost fragment only costs *that fragment* a retry, not
 the whole message. `--verbose` prints each fragment's outcome as it
 happens; either way, a final line reports the whole message
-(`[ack] delivered - N fragment(s) acknowledged by <peer>`, or
-`[ack] gave up on fragment i/N - message incomplete` if one fragment
+(`[ack] delivered - N fragment(s) acknowledged by <peer> (mode M/modulation,
+fec-preset)` - the mode/FEC actually used for that send, useful since
+negotiation is asymmetric and otherwise not obvious from this line alone -
+or `[ack] gave up on fragment i/N - message incomplete` if one fragment
 truly never gets through). This costs one round trip of latency per
 fragment (more fragments = slower, not less reliable) rather than the
 old whole-message-retry behavior, where a single lost fragment doomed the
@@ -509,20 +516,68 @@ none sent back), not a missing feature. If a fragment's own ACK gets lost
 on the way back (a real, expected channel event, not a bug - the
 fragment itself was fine), the sender retries just that fragment - the
 receiver recognizes the retransmit, re-acks it, and does not re-deliver
-or corrupt the in-progress reassembly. **Both stations in a session must be
-launched with the same `--mode`/`--fec`/`--fec-preset`** - there's no
-in-band mode negotiation yet (that's tasklist.txt Phase 6.4), so the
-receiver has to already know which modulation to demodulate with.
+or corrupt the in-progress reassembly. **Without `--auto`, both stations in
+a session must be launched with the same `--mode`/`--fec`/`--fec-preset`** -
+the receiver has to already know which modulation to demodulate with.
+
+`--auto` negotiates mode/FEC automatically instead of requiring matching
+flags on both ends, over a fixed, always-robust control channel (BPSK +
+`r1_2_k9`) distinct from whatever data mode ends up negotiated. It's
+**listen-first, not eager**: a station with `--auto` transmits nothing on
+its own at startup and just listens - negotiation only happens once THIS
+station actually has a message to send, triggered lazily by its own first
+`send_text()` call (typing a line and pressing Enter). A station that never
+sends anything of its own never negotiates its own sending mode either -
+it only ever responds when it hears a peer's probe (which it does
+regardless of whether it was itself started with `--auto`). Concretely:
+whichever station's operator types first sends a probe, the other station
+(purely listening until then) measures that probe's SNR (a blind EVM-style
+estimate - no pilot symbols, computed straight off the received symbols)
+and grants back the best mode/FEC its own `MODE_SNR_TABLE`
+(`openwave_link.py`) supports at that estimate. Because each side measures
+its OWN reception of the other's probe, the two directions can legitimately
+end up using *different* modes (a station's `-v` banner shows
+`(expecting <mode> from <peer>)` whenever that happens). Implies FEC is in
+play even without `--fec`. Negotiated **once** per station for the whole
+session (attempted on that station's first send regardless of outcome) -
+not continuous mid-session adaptation (a bad turn partway through a
+session won't trigger a re-probe).
+`MODE_SNR_TABLE`'s BPSK (mode 0/1) and QPSK (mode 3) thresholds are
+grounded in real round-trip reliability measurements (see its comment in
+`openwave_link.py`). The 16-QAM (mode 4) threshold is deliberately
+conservative for the same reason: under real fading, the control probe's
+own SNR reading is noisy enough that it can't reliably distinguish a link
+where 16-QAM will actually hold up from one where it won't - so 16-QAM
+now only gets picked on genuinely excellent links (~21dB+), trading away
+some throughput for not repeating a real failure mode this table used to
+have (`--auto` picking 16-QAM, the message actually arriving but its ACK
+failing to get back, so the sender reports failure despite delivery
+succeeding).
 
 `--verbose`/`-v` prints per-message stats as they happen: on send, text
 size/fragment count/on-air byte count; on `--ack` delivery, round-trip
-time and text-level throughput; on receive, `LinkReceiver.stats_line()`
-(the same OK/CRC-fail/Dup/Lost/ACKs-rx/Frag/Seq/Mode/Src/Dst line the
-archived GNU Radio flowgraphs' stats port used). A session summary -
-messages/bytes sent and received (both text-level and actual on-air
-bytes), elapsed time, session-average throughput, and the final
-`stats_line()` - always prints on exit (Ctrl+C or EOF) regardless of
-`--verbose`, so you get the totals even from a quiet run.
+time and text-level throughput; on receive, a short `[stats]` block -
+```
+[stats]
+  frames:  1 ok
+  session: seq 1, mode 3 (qpsk), K0MDT -> W1AW
+```
+(zero-value counters omitted, unlike the single dense line
+`LinkReceiver.stats_line()` itself prints - that's still what
+`openwave_cli.py` uses, unchanged). Per-burst `[rx] SNR ~XdB (modulation)`
+lines (a blind EVM-style estimate off whatever actually decoded the
+burst) also print under `--verbose` for every received burst, not just
+during negotiation. A session summary - messages/bytes sent and received
+(both text-level and actual on-air bytes), elapsed time, session-average
+throughput, and a compact link-total line - always prints on exit (Ctrl+C
+or EOF) regardless of `--verbose`, so you get the totals even from a
+quiet run:
+```
+[K0MDT] session summary (4.8s):
+  sent      1 message, 65 B text -> 77.22 KB on-air (108 bps)
+  received  0 messages
+  link      0 ok, 1 acks rx
+```
 
 **FEC preset vs. modulation is a real size tradeoff, not just a dial**:
 a stronger preset (lower rate, e.g. `r1_4_k7`) multiplies the coded
@@ -555,8 +610,8 @@ text (CRC-verified frames only), just gaps or delivery failures - the same
 This is an interactive-messaging tool, not a bulk-file-transfer one -
 UDP's ~65KB single-datagram ceiling bounds worst-case on-air sample counts
 (low-order modulation + strong FEC + a near-`MAX_PAYLOAD_LEN` fragment can
-exceed it). Use `file_xfer_test.sh` for bulk transfers. There's also no
-mode negotiation (see above).
+exceed it). Use `file_xfer_test.sh` for bulk transfers. `--auto`'s
+negotiation (see above) is one-time at startup, not continuous.
 
 **More fragments means a real cost either way - latency with `--ack`,
 reliability without it.** With `--ack`, each fragment is individually

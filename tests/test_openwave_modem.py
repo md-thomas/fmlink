@@ -6,6 +6,7 @@ Pure Python, no GNU Radio dependency - fast, run first.
     python3 -m unittest tests.test_openwave_modem -v
 """
 import os
+import random
 import sys
 import unittest
 
@@ -238,6 +239,66 @@ class FullPipelineTests(unittest.TestCase):
         recovered_symbols = modem.iq_bytes_to_symbols(iq_bytes)
         recovered = modem.demodulate_qam16(recovered_symbols)
         self.assertEqual(recovered, frame)
+
+
+class SnrEstimationTests(unittest.TestCase):
+    """estimate_snr_db() is a blind heuristic (see its docstring): it has no
+    known reference symbols, so "distance to nearest own point" is provably
+    optimistically biased once real noise crosses decision boundaries (a
+    symbol that drifted past a boundary reads as close to the WRONG point,
+    which looks like LESS noise than actually happened) - confirmed by
+    direct measurement while writing this: at higher-order modulations
+    (16-QAM especially, whose 16 tightly-packed points saturate the "nearest
+    point" search quickly) the bias can be many dB at exactly the low-SNR
+    range mode-selection cares about. These tests pin down what's actually
+    verifiable given that: the estimate moves the right DIRECTION as noise
+    increases (monotonicity), and it never reads meaningfully BELOW the true
+    SNR (the bias only ever goes one way) - not tight absolute accuracy."""
+
+    POINTS_BY_MODULATION = {
+        'bpsk': modem.BPSK_POINTS,
+        'qpsk': tuple(modem.QPSK_POINTS.values()),
+        '16qam': tuple(modem.QAM16_POINTS.values()),
+    }
+
+    def test_clean_symbols_read_as_high_snr(self):
+        for modulation, points in self.POINTS_BY_MODULATION.items():
+            with self.subTest(modulation=modulation):
+                symbols = list(points) * 50
+                self.assertGreaterEqual(modem.estimate_snr_db(symbols, modulation), 20.0)
+
+    def test_empty_symbols_returns_floor(self):
+        self.assertEqual(modem.estimate_snr_db([], 'bpsk', floor_db=-12.0), -12.0)
+
+    def _noisy_symbols(self, points, noise_power, count, seed):
+        rng = random.Random(seed)
+        sigma = (noise_power / 2) ** 0.5
+        symbols = []
+        for _ in range(count):
+            ideal = rng.choice(points)
+            symbols.append(ideal + complex(rng.gauss(0, sigma), rng.gauss(0, sigma)))
+        return symbols
+
+    def test_estimate_decreases_as_noise_increases(self):
+        # Signal energy is 1 by convention (see BPSK_POINTS/QPSK_POINTS/
+        # QAM16_POINTS), so noise_power alone sets the true SNR.
+        for modulation, points in self.POINTS_BY_MODULATION.items():
+            with self.subTest(modulation=modulation):
+                estimates = [
+                    modem.estimate_snr_db(self._noisy_symbols(points, noise_power, count=4000, seed=1),
+                                           modulation)
+                    for noise_power in (0.1, 0.25, 0.5, 1.0, 2.0)
+                ]
+                self.assertEqual(estimates, sorted(estimates, reverse=True),
+                                  "estimate should fall monotonically as injected noise rises")
+
+    def test_estimate_does_not_read_meaningfully_below_true_snr(self):
+        for modulation, points in self.POINTS_BY_MODULATION.items():
+            with self.subTest(modulation=modulation):
+                for noise_power, true_snr_db in ((0.5, 3.0), (1.0, 0.0)):
+                    symbols = self._noisy_symbols(points, noise_power, count=4000, seed=1)
+                    estimate = modem.estimate_snr_db(symbols, modulation)
+                    self.assertGreaterEqual(estimate, true_snr_db - 1.0)
 
 
 if __name__ == '__main__':

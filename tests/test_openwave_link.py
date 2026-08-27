@@ -361,6 +361,82 @@ class AckFrameTests(unittest.TestCase):
         self.assertTrue(link.is_ack(header))
 
 
+class ControlFrameTests(unittest.TestCase):
+    def _header_start(self, frame):
+        idx = frame.find(link.SYNC_WORD)
+        self.assertNotEqual(idx, -1)
+        return idx + len(link.SYNC_WORD)
+
+    def _feed_all(self, parser, data):
+        status, payload = 'incomplete', None
+        for b in data:
+            status, payload = parser.feed(b)
+            if status != 'incomplete':
+                break
+        return status, payload
+
+    def test_mode_request_frame_round_trips(self):
+        frame = link.build_mode_request_frame(seq=5)
+        start = self._header_start(frame)
+        parser = link.FrameParser()
+        status, payload = self._feed_all(parser, frame[start:])
+        self.assertEqual(status, 'ok')
+        self.assertEqual(parser.last_header['packet_type'], link.PACKET_TYPE_CONTROL)
+        self.assertEqual(parser.last_header['seq'], 5)
+        parsed = link.parse_control_payload(payload)
+        self.assertEqual(parsed, {'op': link.CONTROL_OP_MODE_REQUEST})
+
+    def test_mode_grant_frame_round_trips(self):
+        frame = link.build_mode_grant_frame(seq=5, granted_mode_id=3, fec_preset='r1_2_k3', snr_db=4.5)
+        start = self._header_start(frame)
+        parser = link.FrameParser()
+        status, payload = self._feed_all(parser, frame[start:])
+        self.assertEqual(status, 'ok')
+        self.assertEqual(parser.last_header['packet_type'], link.PACKET_TYPE_CONTROL)
+        self.assertEqual(parser.last_header['seq'], 5)
+        parsed = link.parse_control_payload(payload)
+        self.assertEqual(parsed['op'], link.CONTROL_OP_MODE_GRANT)
+        self.assertEqual(parsed['mode_id'], 3)
+        self.assertEqual(parsed['fec_preset'], 'r1_2_k3')
+        self.assertAlmostEqual(parsed['snr_db'], 4.5, places=3)
+
+    def test_parse_control_payload_rejects_empty(self):
+        with self.assertRaises(ValueError):
+            link.parse_control_payload(b'')
+
+    def test_parse_control_payload_rejects_unknown_op(self):
+        with self.assertRaises(ValueError):
+            link.parse_control_payload(bytes([99]))
+
+
+class ModeSnrTableTests(unittest.TestCase):
+    def test_very_low_snr_falls_back_to_most_robust_row(self):
+        mode_id, fec_preset = link.select_mode_for_snr(-999.0)
+        self.assertEqual((mode_id, fec_preset), (0, 'r1_4_k9'))
+
+    def test_very_high_snr_selects_top_row(self):
+        mode_id, fec_preset = link.select_mode_for_snr(999.0)
+        self.assertEqual((mode_id, fec_preset), (4, 'r1_2_k3'))
+
+    def test_selection_is_monotonic_in_snr(self):
+        results = [link.select_mode_for_snr(snr) for snr in range(-20, 21)]
+        # "monotonic" here means never stepping DOWN to a lower row as SNR
+        # rises - table order itself defines what "higher" means, so just
+        # confirm the row index picked never decreases as snr increases.
+        picked_rows = []
+        for mode_id, fec_preset in results:
+            for i, row in enumerate(link.MODE_SNR_TABLE):
+                if row[1] == mode_id and row[2] == fec_preset:
+                    picked_rows.append(i)
+                    break
+        self.assertEqual(picked_rows, sorted(picked_rows))
+
+    def test_thresholds_match_table_exactly_at_boundary(self):
+        for min_snr_db, mode_id, fec_preset in link.MODE_SNR_TABLE:
+            with self.subTest(min_snr_db=min_snr_db):
+                self.assertEqual(link.select_mode_for_snr(min_snr_db), (mode_id, fec_preset))
+
+
 class _FakeClock:
     """Manually-advanceable clock for RetryManager tests, so timeout behavior
     is tested without any real wall-clock sleeps."""
@@ -971,6 +1047,15 @@ class LinkReceiverTests(unittest.TestCase):
         self._feed(receiver, bytes(frame))
         self.assertEqual(messages, [])
         self.assertEqual(receiver.counts['crc_fail'], 1)
+
+    def test_feed_crc_failure_accepts_truncated(self):
+        # 'truncated' is a real status openwave_fec.py's decode_frames()
+        # can yield (unlike the uncoded sync path, which swallows it) -
+        # counts must have a slot for it or this raises KeyError, which is
+        # exactly what happened live before 'truncated' was added here.
+        receiver = link.LinkReceiver()
+        receiver.feed_crc_failure('truncated')
+        self.assertEqual(receiver.counts['truncated'], 1)
 
     def test_stats_line_reflects_state(self):
         receiver = link.LinkReceiver()

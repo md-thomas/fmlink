@@ -291,6 +291,72 @@ def build_ack_frame(acked_seq, lead_pad=24, end_pad=24, **header_kwargs):
     return build_frame(b'', lead_pad=lead_pad, end_pad=end_pad, seq=acked_seq, **header_kwargs)
 
 
+# Payload format for PACKET_TYPE_CONTROL frames - ota_station.py's --auto
+# mode-negotiation handshake (see its negotiate()/_handle_control_frame()).
+# Not part of OpenWave_Specification.txt's spec yet - this is a v1 protocol
+# extension living entirely in the payload, so it doesn't need a header
+# format change. op byte first so parse_control_payload() can dispatch
+# before knowing which build_* function produced it.
+CONTROL_OP_MODE_REQUEST = 1
+CONTROL_OP_MODE_GRANT = 2
+
+_CONTROL_GRANT_STRUCT = struct.Struct('>BfB')  # op, snr_db (float32), mode_id
+
+
+def build_mode_request_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
+    """A station probing for a mode grant: Packet Type Control, empty
+    content beyond the op byte. Sent at a fixed, always-robust mode/FEC
+    (ota_station.py's CONTROL_MODE_ID/CONTROL_FEC_PRESET) so it has the
+    best chance of surviving even a link too weak for any negotiated data
+    mode. seq lets the requester match a later grant back to this specific
+    request (echoed, like build_ack_frame's acked_seq)."""
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
+    return build_frame(bytes([CONTROL_OP_MODE_REQUEST]), lead_pad=lead_pad,
+                        end_pad=end_pad, seq=seq, **header_kwargs)
+
+
+def build_mode_grant_frame(seq, granted_mode_id, fec_preset, snr_db, lead_pad=24, end_pad=24,
+                            **header_kwargs):
+    """A station's reply to a mode request: the mode_id/fec_preset it
+    selected for the requester to use (see select_mode_for_snr()), plus the
+    snr_db estimate that selection was based on (purely informational - the
+    requester adopts granted_mode_id/fec_preset, not snr_db). fec_preset is
+    written as trailing ASCII bytes (its length comes from the header's own
+    Payload Length field, so no separate length byte is needed).
+
+    granted_mode_id is deliberately a distinct name from the header's own
+    mode_id field (in header_kwargs, if the caller passes one) - they're
+    unrelated: header mode_id describes what mode THIS frame itself was
+    sent with (always the fixed control mode), while granted_mode_id is
+    payload content naming a DIFFERENT mode for the requester's future
+    sends."""
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
+    payload = _CONTROL_GRANT_STRUCT.pack(CONTROL_OP_MODE_GRANT, snr_db, granted_mode_id) \
+        + fec_preset.encode('ascii')
+    return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
+
+
+def parse_control_payload(payload):
+    """A Control frame's payload -> {'op': int} for a request, or
+    {'op': int, 'mode_id': int, 'fec_preset': str, 'snr_db': float} for a
+    grant. Raises ValueError for an unrecognized/malformed op - a CRC-
+    verified frame guarantees the bytes are what the sender put there, but
+    not that the sender speaks this same control-payload version."""
+    if not payload:
+        raise ValueError('empty Control frame payload')
+    op = payload[0]
+    if op == CONTROL_OP_MODE_REQUEST:
+        return {'op': op}
+    if op == CONTROL_OP_MODE_GRANT:
+        prefix_len = _CONTROL_GRANT_STRUCT.size
+        if len(payload) < prefix_len:
+            raise ValueError(f'mode grant payload too short ({len(payload)} bytes)')
+        _, snr_db, mode_id = _CONTROL_GRANT_STRUCT.unpack(payload[:prefix_len])
+        fec_preset = payload[prefix_len:].decode('ascii', errors='replace')
+        return {'op': op, 'mode_id': mode_id, 'fec_preset': fec_preset, 'snr_db': snr_db}
+    raise ValueError(f'unrecognized Control op {op}')
+
+
 def needs_ack(header):
     """True if a received (CRC-verified) header is a Data frame asking to be acknowledged."""
     return header['packet_type'] == PACKET_TYPE_DATA and parse_flags(header['flags'])['ack_requested']
@@ -427,8 +493,8 @@ class LinkReceiver:
                  on_ack_received=None, on_raw_message=None):
         self.station_id = station_id
         self.reassembler = FragmentReassembler()
-        self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'dup': 0, 'lost': 0,
-                        'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0,
+        self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'truncated': 0, 'dup': 0,
+                        'lost': 0, 'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0,
                         'frag_discarded': 0, 'not_for_us': 0}
         self.last_seq = None
         self.last_flags = 0
@@ -523,7 +589,11 @@ class LinkReceiver:
 
     def feed_crc_failure(self, status):
         """Call for a non-'ok' FrameParser.feed()/iter_frames() result:
-        status is 'crc_fail' or 'bad_length'."""
+        status is 'crc_fail' or 'bad_length' from those, or - only from
+        openwave_fec.py's decode_frames(), which unlike the uncoded sync
+        path doesn't swallow it internally - 'truncated' (not enough data
+        remained for a complete block, e.g. a burst cut short by noise
+        below the sync-word/header hit)."""
         self.counts[status] += 1
 
     def stats_line(self):
@@ -531,6 +601,7 @@ class LinkReceiver:
         c = self.counts
         seq_str = str(self.last_seq) if self.last_seq is not None else '-'
         return (f"OK:{c['ok']}  CRC fail:{c['crc_fail']}  Bad length:{c['bad_length']}  "
+                f"Truncated:{c['truncated']}  "
                 f"Dup:{c['dup']}  Lost:{c['lost']}  ACKs rx:{c['acks_rx']}  "
                 f"Frag abort:{c['frag_aborted']}  Frag overflow:{c['frag_overflow']}  "
                 f"Frag discarded:{c['frag_discarded']}  "
@@ -561,6 +632,90 @@ WAVEFORM_MODES = {
 
 # Derived for back-compat with any existing symbol-rate-only lookup.
 WAVEFORM_MODE_SYMBOL_RATES = {m: info['symbol_rate'] for m, info in WAVEFORM_MODES.items()}
+
+# Mode/FEC auto-selection thresholds for ota_station.py's --auto handshake:
+# (min_snr_db, mode_id, fec_preset), ordered weakest-link-first.
+# select_mode_for_snr() picks the highest-throughput row whose min_snr_db is
+# still <= the measured value - so this is read as "once the link is at
+# least this good, step up to this mode/preset".
+#
+# IMPORTANT: snr_db here is NOT a calibrated/textbook SNR - it's whatever
+# openwave_modem.py's estimate_snr_db() reports on the negotiation
+# handshake's own BPSK control-channel burst specifically (see
+# ota_station.py's CONTROL_MODE_ID). That estimator is a blind heuristic
+# with a real, measured optimistic bias (see its docstring/tests) - these
+# thresholds are denominated in ITS output scale, not ground-truth channel
+# SNR, on purpose.
+#
+# The mode 0/r1_4_k9 floor and the mode 1/r1_2_k3 step are grounded in
+# openwave_fec.py's real empirical sweep data (0dB true SNR -> r1_2_k3 98%
+# good; -6dB true -> only r1_4_k9 is reliable), calibrated against THIS
+# estimator by directly measuring what it reports on ota_sim.OTALink at
+# those same declared --base-snr-db values (8 trials each, tight spread):
+#   declared -6dB (r1_2_k3 known BAD)  -> blind estimate ~2.8-3.1dB
+#   declared  0dB (r1_2_k3 known GOOD) -> blind estimate ~6.6-7.0dB
+#   declared  3dB (r1_2_k3 known GOOD) -> blind estimate ~9.2-9.6dB
+# 5.0 sits with real margin on both sides of that known-bad/known-good gap.
+# An earlier version of this table used a threshold of 3.0 derived from a
+# synthetic-AWGN-only guess, not the real channel - live-tested (see
+# tasklist.txt) at declared -6dB and found to read ~2.9-3.1, i.e. right at
+# that threshold, and demonstrably unreliable there. This is exactly the
+# kind of miscalibration the "test it" half of this feature was meant to
+# catch.
+#
+# The QPSK (mode 3) row (9.0) is now a real reliability measurement too, not
+# just an estimate reading: 15/15 successful round trips (real send_text()
+# + --ack, not just "did the estimator read high enough") at EVERY declared
+# --base-snr-db tested from 6dB through 18dB, WITH fading enabled (fading
+# is on by default - an earlier pass here only tested with it off, which
+# is not representative). No threshold change needed for mode 3.
+#
+# The 16-QAM (mode 4) row is a real, and materially different, finding:
+# live-tested the same way (real send_text()+--ack round trips, fading on)
+# and found genuinely UNRELIABLE at 12-15dB true SNR (12/15, 11/15 - the
+# exact conditions a user hit live, where --auto picked mode 4 and a
+# message needed several retries before the sender gave up despite the
+# data having actually arrived - see tasklist.txt), fully reliable (15/15)
+# only from 18dB true SNR up. Mapping that through estimate_snr_db() -
+# WITH fading on this time, unlike the mode 0/1 calibration above -
+# surfaced a harder problem: fading makes the control probe's own single
+# reading noisy enough that the "unreliable at 15dB" and "reliable at
+# 18dB" ranges of ITS estimate overlap substantially (measured: 14.7-23.8
+# at declared 15dB vs 17.6-26.8 at declared 18dB, 10 trials each) - a
+# single BPSK probe just doesn't predict a 16-QAM burst's own independent
+# fade draw precisely. No threshold here can be both safe AND commonly
+# reachable; 24.0 is deliberately conservative (favors avoiding another
+# false "reliable" pick over recovering mode 4's throughput often) - most
+# of the measured 15dB-unreliable readings fall below it, so mode 4 will
+# now mostly only get picked on genuinely excellent links (roughly 21dB+
+# true SNR). Fixing this properly would mean negotiate() averaging
+# multiple probes instead of trusting one - noted as a follow-up, not
+# done here.
+#
+# Modes 1/3 are preferred over their same-modulation, lower-symbol-rate
+# siblings (0/2) whenever reachable, since this simulated baseband chain
+# doesn't model any reliability cost from a higher symbol rate - only real
+# decode reliability (modulation + FEC) matters here, so there's no reason
+# to ever pick the slower one.
+MODE_SNR_TABLE = (
+    (-100.0, 0, 'r1_4_k9'),
+    (5.0, 1, 'r1_2_k3'),
+    (9.0, 3, 'r1_2_k3'),
+    (24.0, 4, 'r1_2_k3'),
+)
+
+
+def select_mode_for_snr(snr_db):
+    """Estimated SNR (see MODE_SNR_TABLE's docstring for exactly what this
+    should be) -> (mode_id, fec_preset): the highest-throughput mode this
+    link can apparently support. Always returns something, even for an SNR
+    below every threshold (falls back to the most robust row)."""
+    best = MODE_SNR_TABLE[0]
+    for row in MODE_SNR_TABLE:
+        if row[0] <= snr_db:
+            best = row
+    return best[1], best[2]
+
 
 BROADCAST_ID = 'ALL'
 

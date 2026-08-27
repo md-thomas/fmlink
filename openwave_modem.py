@@ -25,6 +25,7 @@ layout). No header, so this reads directly into numpy as
 block if that's ever useful, even though nothing here depends on numpy or
 GNU Radio itself.
 """
+import math
 import struct
 
 BPSK_POINTS = (-1 + 0j, 1 + 0j)  # index = bit value: 0 -> -1, 1 -> +1
@@ -64,6 +65,16 @@ _QAM16_SCALE = 10 ** -0.5
 QAM16_POINTS = {
     (bi0, bi1, bq0, bq1): complex(_PAM4_LEVELS[(bi0, bi1)], _PAM4_LEVELS[(bq0, bq1)]) * _QAM16_SCALE
     for bi0 in (0, 1) for bi1 in (0, 1) for bq0 in (0, 1) for bq1 in (0, 1)
+}
+
+
+# Flat point sets for estimate_snr_db()'s brute-force nearest-point search -
+# keyed the same way modulate.py's MODULATORS/demodulate.py's DEMODULATORS
+# are, by modulation name.
+_CONSTELLATIONS = {
+    'bpsk': BPSK_POINTS,
+    'qpsk': tuple(QPSK_POINTS.values()),
+    '16qam': tuple(QAM16_POINTS.values()),
 }
 
 
@@ -163,6 +174,37 @@ def demodulate_qam16(symbols):
         bits.extend(_pam4_slice(s.real))
         bits.extend(_pam4_slice(s.imag))
     return bits_to_bytes(bits)
+
+
+def estimate_snr_db(symbols, modulation, floor_db=-30.0):
+    """Blind EVM-based SNR estimate for a received symbol stream: normalizes
+    average received symbol energy to match the constellation's unit-energy
+    convention (see BPSK_POINTS/QPSK_POINTS/QAM16_POINTS), then measures
+    each symbol's squared distance to its OWN nearest ideal point (the same
+    hard decision demodulate_bpsk/qpsk/qam16 already make, just kept as a
+    distance instead of only a bit) as a noise-power estimate.
+
+    This is blind - no known pilot/preamble symbols involved, just the
+    received data itself - so it's a coarse heuristic, not a calibrated
+    measurement: "nearest own point" is biased optimistic at very low true
+    SNR, since a symbol that's drifted past a decision boundary is, by
+    definition, closest to the WRONG point, which this can't tell apart
+    from genuinely being close to the right one. Good enough to drive mode-
+    selection thresholds (see openwave_link.py's MODE_SNR_TABLE); floor_db
+    caps the returned value when measured noise is ~0 (e.g. synthetic
+    noiseless symbols in a test), avoiding a math domain error/+inf.
+    """
+    points = _CONSTELLATIONS[modulation]
+    n = len(symbols)
+    if n == 0:
+        return floor_db
+    mean_energy = sum(abs(s) ** 2 for s in symbols) / n
+    if mean_energy <= 0:
+        return floor_db
+    scale = mean_energy ** -0.5  # normalizes average received energy to 1
+    noise_power = sum(min(abs(s * scale - p) ** 2 for p in points) for s in symbols) / n
+    noise_power = max(noise_power, 10 ** (floor_db / 10))
+    return 10 * math.log10(1.0 / noise_power)
 
 
 def symbols_to_iq_bytes(symbols):
