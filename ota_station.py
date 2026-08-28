@@ -148,6 +148,20 @@ def _human_size(num_bytes, short=False):
     return label if short else f"{label} ({num_bytes} bytes)"
 
 
+def _snr_db_to_evm_percent(snr_db):
+    """Converts openwave_modem.py's estimate_snr_db() output back to an
+    EVM_rms percentage - the conventional RF unit for this exact same
+    measurement. estimate_snr_db() computes SNR_dB = 10*log10(1/noise_power)
+    with signal energy normalized to 1, so noise_power (mean-square error)
+    = 10**(-SNR_dB/10) and EVM_rms (a fraction of the ideal symbol
+    magnitude) = sqrt(noise_power) = 10**(-SNR_dB/20); this just expresses
+    that as a percentage instead of re-deriving it from symbols - it's a
+    pure unit conversion of the same underlying blind estimate, not a
+    separate/more accurate measurement (see that function's docstring for
+    the estimator's own accuracy caveats, which apply here identically)."""
+    return 100 * 10 ** (-snr_db / 20)
+
+
 # LinkReceiver.counts entries worth ever mentioning in ota_station.py's own
 # output, grouped the way _link_stats_lines()/_link_counts_compact() render
 # them - zero-value counters are always omitted (except 'ok', the anchor
@@ -343,6 +357,13 @@ class Station(asyncio.DatagramProtocol):
         self._mode_set_event = None
         self._ping_seq = None  # seq of our own outstanding /ping, if any
         self._ping_event = None
+        # Set by _handle_received_samples() whenever a burst arrives (or
+        # fails to even sync) WHILE a ping is outstanding - lets
+        # _ping_trials() tell "nothing came back at all" apart from "a
+        # reply came back but was corrupted" on a timeout, instead of
+        # reporting both identically as "timed out". Reset at the start
+        # of each trial.
+        self._ping_last_rx_status = None
         self._negotiating = False  # reentrancy guard - see negotiate()
         self._last_rx_snr_db = None
 
@@ -473,6 +494,8 @@ class Station(asyncio.DatagramProtocol):
         if not frames:
             self._log("[rx] no frame found in this burst - link too weak to even find sync "
                       "(try a shorter --distance-km or a higher --base-snr-db on the simulator)")
+            if self._ping_event is not None:
+                self._ping_last_rx_status = 'no_sync'
             return
 
         self._last_rx_snr_db = modem.estimate_snr_db(symbols, matched_modulation)
@@ -511,6 +534,8 @@ class Station(asyncio.DatagramProtocol):
                 self._log(f"[rx] {status} - burst not recovered "
                           f"(try --fec, a shorter --distance-km, or a higher --base-snr-db)")
                 self.receiver.feed_crc_failure(status)
+                if self._ping_event is not None:
+                    self._ping_last_rx_status = status
 
     def _log_fragment_events(self, counts_before):
         """FragmentReassembler (via LinkReceiver) tracks aborted/overflowed/
@@ -750,43 +775,84 @@ class Station(asyncio.DatagramProtocol):
         own short timeout - a lost ping is recorded as a failure for
         that trial, not retried within it, matching a real `ping` tool's
         semantics rather than the ACK/negotiate retry-until-success
-        pattern used elsewhere in this file. Returns (results,
-        summary_line); results is a list of {'ok': bool, 'rtt_s':
-        float|None, 'snr_db': float|None}, one per trial."""
+        pattern used elsewhere in this file.
+
+        Returns (results, summary_line); results is a list of one dict
+        per trial: {'ok': bool, 'rtt_s': float|None, 'snr_db': float|None,
+        'evm_percent': float|None, 'burst_bytes': int, 'failure_reason':
+        str|None}. burst_bytes is always set (the ping itself is sent
+        regardless of outcome, and is the same size every trial - mode/
+        FEC/payload don't change within one call); the rest are only set
+        on success (or, for failure_reason, only on failure).
+        failure_reason distinguishes a genuine timeout - nothing arrived
+        at all ('no_reply') - from a reply that DID arrive but couldn't
+        be used ('no_sync', or a decode status like 'crc_fail'/
+        'bad_length'/'truncated') - see _handle_received_samples()'s
+        _ping_last_rx_status hook. This is an approximation: it
+        attributes ANY RX failure seen while this ping is outstanding to
+        the ping itself, which is usually right (nothing else is
+        normally in flight during a ping trial) but isn't a guarantee in
+        a busier session."""
         results = []
         for i in range(count):
             seq = self._seq
             self._seq = (self._seq + 1) % link.SEQ_MODULUS
             self._ping_seq = seq
             self._ping_event = asyncio.Event()
+            self._ping_last_rx_status = None
 
             ping_frame = link.build_ping_frame(
                 seq, mode_id=self.mode_id, src_id=self.station_id.encode(),
                 dst_id=self.dst_id.encode())
+            air_bytes_before = self.stats['sent_air_bytes']
             started_at = time.monotonic()
             self._transmit_frame(ping_frame)
+            burst_bytes = self.stats['sent_air_bytes'] - air_bytes_before
             try:
                 await asyncio.wait_for(self._ping_event.wait(), timeout=PING_TIMEOUT_S)
                 rtt_s = time.monotonic() - started_at
                 snr_db = self._last_rx_snr_db
-                results.append({'ok': True, 'rtt_s': rtt_s, 'snr_db': snr_db})
+                evm_percent = _snr_db_to_evm_percent(snr_db)
+                results.append({'ok': True, 'rtt_s': rtt_s, 'snr_db': snr_db,
+                                 'evm_percent': evm_percent, 'burst_bytes': burst_bytes,
+                                 'failure_reason': None})
                 if self.verbose:
-                    self._log(f"[ping] {i + 1}/{count}: {rtt_s * 1000:.0f}ms, SNR ~{snr_db:.1f}dB")
+                    self._log(f"[ping] {i + 1}/{count}: {rtt_s * 1000:.0f}ms, "
+                              f"SNR ~{snr_db:.1f}dB (EVM ~{evm_percent:.1f}%)")
             except asyncio.TimeoutError:
-                results.append({'ok': False, 'rtt_s': None, 'snr_db': None})
+                reason = self._ping_last_rx_status or 'no_reply'
+                results.append({'ok': False, 'rtt_s': None, 'snr_db': None,
+                                 'evm_percent': None, 'burst_bytes': burst_bytes,
+                                 'failure_reason': reason})
                 if self.verbose:
-                    self._log(f"[ping] {i + 1}/{count}: timed out")
+                    self._log(f"[ping] {i + 1}/{count}: failed ({reason})")
             finally:
                 self._ping_seq = None
                 self._ping_event = None
+                self._ping_last_rx_status = None
 
+        burst_bytes = results[0]['burst_bytes'] if results else 0
         successes = [r for r in results if r['ok']]
         if successes:
-            avg_rtt_ms = sum(r['rtt_s'] for r in successes) / len(successes) * 1000
+            rtts_ms = [r['rtt_s'] * 1000 for r in successes]
+            avg_rtt_ms = sum(rtts_ms) / len(rtts_ms)
             avg_snr = sum(r['snr_db'] for r in successes) / len(successes)
-            summary = f"{len(successes)}/{count} ok, avg {avg_rtt_ms:.0f}ms, SNR ~{avg_snr:.1f}dB"
+            avg_evm = sum(r['evm_percent'] for r in successes) / len(successes)
+            rtt_range = f"{min(rtts_ms):.0f}-{max(rtts_ms):.0f}ms" if len(rtts_ms) > 1 \
+                else f"{rtts_ms[0]:.0f}ms"
+            summary = (f"{len(successes)}/{count} ok, RTT {rtt_range} (avg {avg_rtt_ms:.0f}ms), "
+                       f"SNR ~{avg_snr:.1f}dB (EVM ~{avg_evm:.1f}%), {burst_bytes}B/burst")
         else:
-            summary = f"0/{count} ok"
+            summary = f"0/{count} ok, {burst_bytes}B/burst"
+
+        failures = [r for r in results if not r['ok']]
+        if failures:
+            reason_counts = {}
+            for r in failures:
+                reason_counts[r['failure_reason']] = reason_counts.get(r['failure_reason'], 0) + 1
+            reasons = ', '.join(f"{n} {reason}" for reason, n in sorted(reason_counts.items()))
+            summary += f", {len(failures)} failed ({reasons})"
+
         return results, summary
 
     async def ping(self):

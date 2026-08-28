@@ -1015,3 +1015,42 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           input() behaves the same as readline() for that case, the only
           difference is real-terminal behavior, which a piped test can't
           exercise directly but is a well-established stdlib pattern.
+  [x] 8.33 /ping and /ping survey now report EVM%, RTT range (not just
+          average), on-air burst size, and a failure-reason breakdown,
+          per user request:
+            - EVM% is a pure unit conversion of the SNR already being
+              measured, not a new estimate - estimate_snr_db() computes
+              SNR_dB = 10*log10(1/noise_power) with signal energy
+              normalized to 1, so EVM_rms% = sqrt(noise_power)*100 =
+              10**(-SNR_dB/20)*100 (new _snr_db_to_evm_percent(), a
+              display-layer conversion - openwave_modem.py untouched).
+            - Burst size: diffed self.stats['sent_air_bytes'] around the
+              _transmit_frame() call, same pattern send_text() already
+              used elsewhere in this file.
+            - RTT min/max: trivial, just tracked across trials instead of
+              only summing for the average.
+            - Failure reason needed real plumbing: ping/pong bypass
+              LinkReceiver.feed_frame() entirely (dispatched straight
+              from _handle_received_samples() via packet_type), so
+              nothing was tracking WHY a ping timed out - a lost ping and
+              a corrupted-but-received reply looked identical. Added
+              Station._ping_last_rx_status, set by
+              _handle_received_samples() at its two existing failure
+              points (the "no frame found at all" branch -> 'no_sync';
+              the crc_fail/bad_length/truncated branch -> that status
+              string) whenever a ping is currently outstanding
+              (self._ping_event is not None), reset per trial.
+              _ping_trials() then reports 'no_reply' only when NEITHER
+              hook fired during the wait - true silence, not just "no
+              matching pong." Documented as an approximation: attributes
+              any RX failure seen during the wait to the outstanding
+              ping, which is usually right (nothing else is normally in
+              flight during a ping trial) but not guaranteed in a busier
+              session.
+          New tests: success trials populate evm_percent/burst_bytes and
+          leave failure_reason None; a no-listener scenario reports
+          'no_reply' specifically; a direct unit-level test of the
+          _ping_last_rx_status hook (feeds unsyncable garbage bytes into
+          _handle_received_samples() with/without a ping pending, no
+          network needed) confirming it fires only when scoped to an
+          actual outstanding ping.

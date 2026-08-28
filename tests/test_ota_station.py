@@ -542,9 +542,63 @@ class OTAStationIntegrationTests(unittest.TestCase):
             self.assertEqual(len(results), 3)
             self.assertTrue(all(r['ok'] for r in results), results)
             self.assertTrue(all(r['rtt_s'] > 0 for r in results), results)
+            self.assertTrue(all(r['evm_percent'] > 0 for r in results), results)
+            self.assertTrue(all(r['burst_bytes'] > 0 for r in results), results)
+            self.assertTrue(all(r['failure_reason'] is None for r in results), results)
             self.assertIn('3/3 ok', summary)
+            self.assertIn('EVM', summary)
+            self.assertIn('B/burst', summary)
 
         self._run(scenario())
+
+    def test_ping_trials_reports_no_reply_when_nothing_is_listening(self):
+        # Nobody home at all (no station B, no reply of any kind) must be
+        # distinguished from a reply that arrived but couldn't be used -
+        # see _handle_received_samples()'s _ping_last_rx_status hook.
+        async def scenario():
+            channel = OTALink(distance_m=500, reference_distance_m=500,
+                               base_snr_db=60, fading=False, drop_prob=0.0,
+                               latency_s=0.01, jitter_s=0.0, seed=14)
+            sim, sim_transport = await _create_simulator(channel)
+            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0)
+            sim_addr = sim_transport.get_extra_info('sockname')
+            a._sim_addr = sim_addr
+            a.register()
+            await asyncio.sleep(0.02)
+
+            results, summary = await a._ping_trials(count=1)
+
+            a_transport.close()
+            sim_transport.close()
+
+            self.assertFalse(results[0]['ok'])
+            self.assertEqual(results[0]['failure_reason'], 'no_reply')
+            self.assertIn('no_reply', summary)
+
+        self._run(scenario())
+
+    def test_ping_last_rx_status_hook_records_no_sync_while_pending(self):
+        # Unit-level check of the hook _ping_trials() relies on to tell
+        # "nothing came back" from "something came back but was
+        # unusable" - a burst that doesn't even sync, arriving WHILE a
+        # ping is outstanding, must set _ping_last_rx_status. No network
+        # needed - _handle_received_samples() works on raw bytes alone.
+        a = Station(station_id='K0MDT', dst_id='W1AW', mode_id=0)
+        a._log = lambda msg: None
+        self.assertIsNone(a._ping_last_rx_status, "sanity check")
+
+        a._ping_event = asyncio.Event()  # simulate an outstanding ping
+        garbage = (b'\x00' * 64)  # not a real modulated burst - won't sync at all
+        a._handle_received_samples(garbage)
+
+        self.assertEqual(a._ping_last_rx_status, 'no_sync')
+
+        # ...but the SAME garbage must NOT set anything when no ping is
+        # outstanding - this hook is scoped to ping's own concern only.
+        a._ping_event = None
+        a._ping_last_rx_status = None
+        a._handle_received_samples(garbage)
+        self.assertIsNone(a._ping_last_rx_status)
 
     def test_ping_survey_tests_every_mode_and_restores_original(self):
         async def scenario():

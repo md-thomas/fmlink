@@ -587,8 +587,14 @@ Up/down-arrow command history and basic line editing work at the prompt
 (both for chat messages and `/` commands) - the standard Python
 `readline` module is imported for exactly this.
 - **`/ping`** - a quick round-trip timing/quality check at whatever mode
-  is currently active: 5 ping/pong round trips, reporting success
-  count, average RTT, and average measured SNR.
+  is currently active: 5 ping/pong round trips, reporting success count,
+  RTT range and average, measured SNR *and* EVM% (the same blind
+  estimate `estimate_snr_db()` already makes, just also expressed in the
+  conventional RF unit - see its comment in `ota_station.py` for the
+  direct SNR-to-EVM conversion), on-air burst size at the current mode,
+  and - if any trials failed - a breakdown of *why*: `no_reply` (nothing
+  came back at all) is tracked separately from a reply that arrived but
+  couldn't be used (`no_sync`, or a decode failure like `crc_fail`).
 - **`/ping survey`** (or `/ping --survey`) - really tests *every* waveform
   mode this station is willing to use against the peer, one at a time -
   not a prediction from a single measurement, actual transmissions at
