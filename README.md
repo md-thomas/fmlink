@@ -493,8 +493,9 @@ side beyond its own `--listen-host`/`--listen-port`.
 Run `python3 ota_station.py -h` for the full reference, including a
 table of the Waveform Modes and FEC presets available. Key flags:
 
-`--mode N` (0-4) selects a Waveform Mode ID - modulation and symbol rate
-per `openwave_link.py`'s `WAVEFORM_MODES`. `--fec` FEC-encodes/decodes
+`--mode N` (0-5) selects a Waveform Mode ID - modulation and symbol rate
+per `openwave_link.py`'s `WAVEFORM_MODES` (0/1 BPSK, 2/3/4 QPSK, 5 16-QAM,
+each step roughly doubling raw throughput). `--fec` FEC-encodes/decodes
 using `--fec-preset` (default: `r1_4_k7`, independent of the mode's own
 documented default preset - see `openwave_fec.py`'s `PRESETS` for the
 full list). `--ack` requests ACKs and retries on timeout, **per fragment**
@@ -526,33 +527,108 @@ flags on both ends, over a fixed, always-robust control channel (BPSK +
 **listen-first, not eager**: a station with `--auto` transmits nothing on
 its own at startup and just listens - negotiation only happens once THIS
 station actually has a message to send, triggered lazily by its own first
-`send_text()` call (typing a line and pressing Enter). A station that never
-sends anything of its own never negotiates its own sending mode either -
-it only ever responds when it hears a peer's probe (which it does
-regardless of whether it was itself started with `--auto`). Concretely:
-whichever station's operator types first sends a probe, the other station
-(purely listening until then) measures that probe's SNR (a blind EVM-style
-estimate - no pilot symbols, computed straight off the received symbols)
-and grants back the best mode/FEC its own `MODE_SNR_TABLE`
-(`openwave_link.py`) supports at that estimate. Because each side measures
-its OWN reception of the other's probe, the two directions can legitimately
-end up using *different* modes (a station's `-v` banner shows
-`(expecting <mode> from <peer>)` whenever that happens). Implies FEC is in
-play even without `--fec`. Negotiated **once** per station for the whole
-session (attempted on that station's first send regardless of outcome) -
-not continuous mid-session adaptation (a bad turn partway through a
-session won't trigger a re-probe).
-`MODE_SNR_TABLE`'s BPSK (mode 0/1) and QPSK (mode 3) thresholds are
-grounded in real round-trip reliability measurements (see its comment in
-`openwave_link.py`). The 16-QAM (mode 4) threshold is deliberately
-conservative for the same reason: under real fading, the control probe's
-own SNR reading is noisy enough that it can't reliably distinguish a link
-where 16-QAM will actually hold up from one where it won't - so 16-QAM
-now only gets picked on genuinely excellent links (~21dB+), trading away
-some throughput for not repeating a real failure mode this table used to
-have (`--auto` picking 16-QAM, the message actually arriving but its ACK
-failing to get back, so the sender reports failure despite delivery
-succeeding).
+`send_text()` call (typing a line and pressing Enter).
+
+Negotiation is a two-phase handshake, and the **initiator's own
+measurement decides the mode for both directions** - not two independent
+opinions. A station can only ever measure what arrives *at* it, never
+what it sends, so: (1) the initiator (whichever station's operator typed
+first) probes the peer, purely to get something back to measure; (2)
+having now measured its own reception of that reply (a blind EVM-style
+estimate - no pilot symbols, computed straight off the received symbols),
+it picks the best mode/FEC from `MODE_SNR_TABLE` (`openwave_link.py`) and
+authoritatively tells the peer to use it too, waiting for confirmation
+before either side trusts the link is in sync. A station that never
+initiates (never had its own message to send first) never negotiates on
+its own - it just adopts whatever the initiator sets, and considers the
+session already negotiated from then on. Implies FEC is in play even
+without `--fec`. Negotiated **once** per session (attempted by the
+initiator regardless of outcome) - not continuous mid-session adaptation
+(a bad turn partway through a session won't trigger a re-probe automatically).
+Known gap: if both stations get their own first message to send within the
+same handshake window, both may start as their own initiator concurrently
+- not handled.
+
+Since it's not automatic, several commands are available at the
+interactive prompt (any line starting with `/`, instead of a chat
+message):
+
+- **`/renegotiate`** - re-runs the full handshake right now, regardless of
+  `--auto` or whether this station already negotiated once. Useful after
+  changing the simulator's channel settings mid-session.
+- **`/modes`** - lists the Waveform Modes table (same as `-h`'s epilog),
+  so you can see what's available without restarting.
+- **`/mode N`** - manually switches to Waveform Mode `N` right now, no
+  restart needed - and tells the peer, the same confirmed `MODE_SET`/
+  `MODE_SET_ACK` exchange `--auto` itself uses, so both stations actually
+  end up on the mode you picked, not just this one. Bare `/mode` (no
+  number) reports the current mode/FEC instead of changing anything.
+  Counts as already-negotiated, so `--auto`'s lazy first-send trigger
+  won't immediately override a manual choice made before your first
+  message. Rejected if `N`'s symbol rate is over the current
+  `--bandwidth narrow` ceiling - narrow is a hard limit on what the
+  deployment can carry, not just a hint for automatic selection, so it
+  can't be bypassed by hand either.
+- **`/fec PRESET`** - same idea, but for the FEC preset alone (keeps the
+  current mode) - see `openwave_fec.py`'s `PRESETS` for the list, or run
+  `/fec` with no argument to see the current preset and the full list.
+  Turns FEC on if this station was started without `--fec`/`--auto` -
+  otherwise the preset you just set would silently go unused.
+- **`/bandwidth [narrow|wide]`** - reports or changes the `--bandwidth`
+  ceiling live, without restarting. Unlike `/mode`/`/fec`, this doesn't
+  touch the currently active mode or send anything to the peer by itself
+  - it only affects *future* automatic selection, so follow it with
+  `/renegotiate` (or `/mode`) to actually apply it.
+- **`/help`** (or `/?`) - prints the full command reference.
+- **`/quit`** (or `/exit`) - closes this station cleanly, same as EOF/Ctrl+C
+  (still prints the session summary on the way out).
+
+Up/down-arrow command history and basic line editing work at the prompt
+(both for chat messages and `/` commands) - the standard Python
+`readline` module is imported for exactly this.
+- **`/ping`** - a quick round-trip timing/quality check at whatever mode
+  is currently active: 5 ping/pong round trips, reporting success
+  count, average RTT, and average measured SNR.
+- **`/ping survey`** (or `/ping --survey`) - really tests *every* waveform
+  mode this station is willing to use against the peer, one at a time -
+  not a prediction from a single measurement, actual transmissions at
+  each mode (reusing the same confirmed `MODE_SET`/`MODE_SET_ACK`
+  mechanism `--auto` itself uses to switch modes, just to an explicitly
+  chosen mode each time instead of one picked from `MODE_SNR_TABLE`).
+  Respects `--bandwidth`: with `narrow`, only modes at or below the
+  ceiling get tested at all - unlike `--auto` (which just declines to
+  *pick* a mode above the ceiling), there's no point spending several
+  seconds surveying a mode this deployment can't actually use. Takes
+  several seconds; restores the original mode when done, and finishes
+  with a consolidated summary of every mode's results together plus a
+  pick for the best *fully*-reliable one (highest throughput with zero
+  dropped pings) - the per-mode rows printed live while it runs scroll
+  away, so this is the look-back-at-everything-at-once view. Don't send a
+  real chat message while a survey is running - the active mode is being
+  changed underneath it and a message would land using the wrong one.
+`MODE_SNR_TABLE`'s BPSK (modes 0/1) and QPSK (modes 2/3/4, all one
+reliability tier - see below) thresholds are grounded in real round-trip
+reliability measurements (see its comment in `openwave_link.py`). The
+16-QAM (mode 5) threshold is deliberately conservative for the same
+reason: under real fading, the control probe's own SNR reading is noisy
+enough that it can't reliably distinguish a link where 16-QAM will
+actually hold up from one where it won't - so 16-QAM now only gets picked
+on genuinely excellent links (~21dB+), trading away some throughput for
+not repeating a real failure mode this table used to have (`--auto`
+picking 16-QAM, the message actually arriving but its ACK failing to get
+back, so the sender reports failure despite delivery succeeding).
+
+`--bandwidth {narrow,wide}` (default `wide`) caps what `--auto` is
+willing to pick, independent of SNR - `narrow` limits selection to modes
+at or below 1200 sym/s (`NARROWBAND_MAX_SYMBOL_RATE`, `ota_station.py`),
+for a link that physically can't carry a faster symbol rate no matter how
+good its measured SNR is (e.g. a narrowband/audio-bandwidth channel) -
+something this simulator's own channel model has no concept of on its
+own. `MODE_SNR_TABLE` has one row per throughput tier within the QPSK
+family specifically so a narrow ceiling still lands on the best QPSK mode
+that fits (mode 2, 1200 sym/s) instead of falling through past QPSK
+entirely. Doesn't affect manual `--mode`/`--fec` or `/ping survey`, only
+what `--auto`/`/renegotiate` will choose automatically.
 
 `--verbose`/`-v` prints per-message stats as they happen: on send, text
 size/fragment count/on-air byte count; on `--ack` delivery, round-trip

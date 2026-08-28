@@ -19,11 +19,16 @@ Requires `ota_sim` installed: from this repo, `pip install -e ../ota_sim`.
 Known v1 limitations:
   - Without --auto, both stations must be launched with the SAME --mode
     (and --fec on/off) - the receiver has to already know which modulation
-    to demodulate with. --auto negotiates this automatically (see
-    negotiate()/openwave_link.py's MODE_SNR_TABLE), but only once at
-    startup - it's not continuous/mid-session rate adaptation, and its
-    threshold table is only empirically verified for BPSK so far (see
-    MODE_SNR_TABLE's own comment).
+    to demodulate with. --auto negotiates this automatically: the station
+    that gets a message ready FIRST measures its own link and tells the
+    peer to use that mode too (see negotiate()/openwave_link.py's
+    MODE_SNR_TABLE) - lazily, on that station's own first send, not
+    eagerly at startup. Session-scoped, not continuous - re-run it anytime
+    with the /renegotiate command. /ping and /ping survey give a live look
+    at how the link (or every mode) is actually performing right now.
+    MODE_SNR_TABLE's 16-QAM threshold is deliberately conservative (its
+    own comment has the full story); BPSK/QPSK are grounded in real
+    round-trip reliability measurements.
   - This is an interactive-messaging tool, not a bulk-file-transfer one:
     UDP's ~65KB single-datagram ceiling bounds worst-case on-air sample
     counts (low-order modulation + strong FEC + a near-MAX_PAYLOAD_LEN
@@ -52,6 +57,16 @@ import argparse
 import asyncio
 import sys
 import time
+
+try:
+    # Importing this is enough to make input() (see _stdin_lines()) do
+    # readline-style line editing and up/down-arrow history for free -
+    # it's not a function this module calls directly, just a hook Python's
+    # input() picks up automatically once it's imported. Not in the
+    # stdlib on Windows; degrades to plain input() (no history) there.
+    import readline  # noqa: F401
+except ImportError:
+    pass
 
 import numpy as np
 
@@ -97,6 +112,19 @@ DEFAULT_FEC_PRESET = 'r1_4_k7'
 CONTROL_MODE_ID = 0
 CONTROL_FEC_PRESET = 'r1_2_k9'
 NEGOTIATE_MAX_ATTEMPTS = 4
+# /ping and /ping survey - see Station.ping()/ping_survey()/_ping_trials().
+PING_TRIAL_COUNT = 5
+PING_TIMEOUT_S = 2.0
+# --bandwidth narrow's ceiling on what --auto is willing to pick (see
+# Station.__init__'s bandwidth param/negotiate()) - this simulator's own
+# channel model has no concept of a symbol-rate limit (mode 5's 9600
+# sym/s is exactly as "free" here as mode 0's 600), but a real deployment
+# might (e.g. a narrowband/audio-bandwidth channel that just can't carry
+# a faster symbol rate no matter how good its SNR is). 1200 caps
+# selection to modes 0-2 - the highest symbol rate in WAVEFORM_MODES that
+# still has a BPSK sibling one step down, i.e. the same "1200 sym/s
+# ceiling" a classic packet-radio-style narrowband channel would impose.
+NARROWBAND_MAX_SYMBOL_RATE = 1200
 # Largest UDP payload a standard IPv4 socket can send in one datagram
 # (65535 - 8-byte UDP header - 20-byte IPv4 header). A burst that would
 # exceed this can't be sent at all - asyncio's transport swallows the
@@ -190,6 +218,38 @@ def _traffic_line(label, num_messages, text_bytes, air_bytes, arrow, extra_parts
     return line
 
 
+def _ping_survey_summary(rows):
+    """rows: list of (mode_id, results, per-trial-summary-string), one
+    per mode tested by ping_survey() -> a final consolidated block
+    recapping every mode together - the per-mode rows already printed
+    live scroll away in a longer session, so this is the "see everything
+    at once, after the fact" view - plus a pick for the best mode that
+    was FULLY reliable (every trial succeeded), matching the same "use
+    the best you can reliably get, not more than the link needs"
+    philosophy as MODE_SNR_TABLE itself. "Best" is ranked by actual
+    throughput (link.mode_raw_bps()), NOT by mode_id/row order - mode_id
+    is not guaranteed to increase monotonically with throughput (see
+    WAVEFORM_MODES' comment - e.g. mode 5 is slower than mode 4)."""
+    lines = ["[ping] survey summary:"]
+    best_mode_id = None
+    for mode_id, results, summary in rows:
+        mode_info = link.WAVEFORM_MODES[mode_id]
+        label = f"Mode {mode_id} ({mode_info['modulation']}, {mode_info['symbol_rate']} sym/s)"
+        lines.append(f"  {label:<32} {summary}")
+        if results and all(r['ok'] for r in results):
+            if best_mode_id is None or link.mode_raw_bps(mode_id) > link.mode_raw_bps(best_mode_id):
+                best_mode_id = mode_id
+
+    if best_mode_id is not None:
+        mode_info = link.WAVEFORM_MODES[best_mode_id]
+        lines.append(f"  best fully-reliable mode: Mode {best_mode_id} "
+                     f"({mode_info['modulation']}, {mode_info['symbol_rate']} sym/s)")
+    else:
+        lines.append("  no mode was fully reliable this pass (every mode dropped at least "
+                     "one ping) - the link may be too weak or too fading-prone right now")
+    return "\n".join(lines)
+
+
 def _waveform_modes_table():
     lines = ["Waveform Modes (openwave_link.py's WAVEFORM_MODES):"]
     for mode_id, info in sorted(link.WAVEFORM_MODES.items()):
@@ -200,6 +260,25 @@ def _waveform_modes_table():
     return "\n".join(lines)
 
 
+def _help_text():
+    """The full interactive-command reference for /help - see
+    _handle_command() for what each one actually does. Kept separate from
+    the one-line startup hint (which just names the commands) since this
+    is meant to be read on demand, not on every launch."""
+    return "\n".join([
+        "Commands (anything else is sent as a chat message):",
+        "  /ping                       quick round-trip timing/quality check at the current mode",
+        "  /ping survey                really tests every mode this station can use (see /bandwidth)",
+        "  /renegotiate                re-run the mode/FEC handshake with the peer now",
+        "  /mode [N]                   show the current mode, or switch to Waveform Mode N (tells the peer)",
+        "  /modes                      list the Waveform Modes table",
+        "  /fec [PRESET]               show the current FEC preset, or switch it (keeps the mode, tells the peer)",
+        "  /bandwidth [narrow|wide]    show or set the ceiling on automatic mode selection",
+        "  /help (or /?)               show this list",
+        "  /quit (or /exit)            close this station",
+    ])
+
+
 class Station(asyncio.DatagramProtocol):
     """One live OpenWave station. Sends text via send_text(); received,
     decoded messages arrive via the on_message callback. Talks to a peer
@@ -207,12 +286,20 @@ class Station(asyncio.DatagramProtocol):
     directly to the peer's address."""
 
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
-                 fec_preset=None, use_ack=False, auto=False, on_message=None, verbose=False):
+                 fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
+                 on_message=None, verbose=False):
         self.station_id = station_id
         self.dst_id = dst_id
         self.use_fec = use_fec
         self.use_ack = use_ack
         self.auto = auto
+        # Ceiling on what --auto is willing to pick (see
+        # NARROWBAND_MAX_SYMBOL_RATE/select_mode_for_snr's max_symbol_rate
+        # param) - None (wide, the default) considers every mode, matching
+        # behavior before this parameter existed. Manual --mode/--fec and
+        # /ping survey are NOT constrained by this - it only limits what
+        # negotiate() will automatically choose.
+        self.max_symbol_rate = NARROWBAND_MAX_SYMBOL_RATE if bandwidth == 'narrow' else None
         self.verbose = verbose
         self._on_message = on_message
         # negotiate() runs lazily, at most once, on this station's own
@@ -252,26 +339,29 @@ class Station(asyncio.DatagramProtocol):
         self._control_fec_generators, self._control_fec_k = fec.PRESETS[CONTROL_FEC_PRESET]
         self._negotiation_seq = None  # seq of our own outstanding negotiate() request, if any
         self._negotiation_event = None
+        self._mode_set_seq = None  # seq of our own outstanding MODE_SET, if any
+        self._mode_set_event = None
+        self._ping_seq = None  # seq of our own outstanding /ping, if any
+        self._ping_event = None
+        self._negotiating = False  # reentrancy guard - see negotiate()
         self._last_rx_snr_db = None
 
-        self._apply_tx_mode(mode_id, fec_preset)
-        self._apply_rx_mode(mode_id, fec_preset)
+        self._apply_mode(mode_id, fec_preset)
 
-    def _apply_tx_mode(self, mode_id, fec_preset=None):
-        """(Re)configures what THIS station uses to SEND - called once
-        from __init__, and again by _handle_control_frame() when a
-        negotiate() call's own MODE_GRANT lands (the peer telling us what
-        IT can receive). Never touches the control channel (see __init__'s
-        control_info block) - that's fixed for the station's whole
-        lifetime. See _apply_rx_mode for the separate, independent
-        receive-side counterpart - negotiation is asymmetric (each side
-        grants the other whatever ITS OWN measurement of the incoming
-        probe supports), so what this station sends with and what it
-        should expect FROM its peer are not necessarily the same mode."""
+    def _apply_mode(self, mode_id, fec_preset=None):
+        """(Re)configures this station's mode/FEC - used for BOTH sending
+        and receiving (see _demod_attempts()). Called once from __init__,
+        and again by _handle_control_frame() once negotiate() (initiator
+        side) or an incoming MODE_SET (responder side) establishes the
+        session's one mode - see negotiate()'s docstring for the full
+        two-phase handshake. Never touches the control channel (see
+        __init__'s control_info block) - that's fixed for the station's
+        whole lifetime."""
         mode_info = link.WAVEFORM_MODES[mode_id]
         self.mode_id = mode_id
         self.modulation = mode_info['modulation']
         self._modulate = MODULATORS[self.modulation]
+        self._demodulate = DEMODULATORS[self.modulation]
         # fec_preset defaults to the mode's own WAVEFORM_MODES entry, but can
         # be overridden independently - e.g. to use a stronger code than the
         # mode's documented default without changing WAVEFORM_MODES itself.
@@ -288,20 +378,6 @@ class Station(asyncio.DatagramProtocol):
         # the wire; at a tight combo like mode 0 + r1_4_k7 it can be far
         # smaller than MAX_PAYLOAD_LEN).
         self.max_fragment_chars = max(1, self.max_single_fragment_chars())
-
-    def _apply_rx_mode(self, mode_id, fec_preset=None):
-        """(Re)configures what THIS station expects an incoming DATA burst
-        from its peer to be using - called once from __init__ (mirroring
-        the starting TX mode, since nothing better is known yet), and
-        again by _handle_control_frame() whenever THIS station grants a
-        mode to its peer (since the peer will start sending in exactly
-        that mode). Deliberately separate state from _apply_tx_mode's -
-        see that method's docstring for why they can diverge."""
-        mode_info = link.WAVEFORM_MODES[mode_id]
-        self._rx_modulation = mode_info['modulation']
-        self._rx_demodulate = DEMODULATORS[self._rx_modulation]
-        rx_fec_preset = fec_preset or mode_info['fec_preset']
-        self._rx_fec_generators, self._rx_fec_k = fec.PRESETS[rx_fec_preset]
 
     def _handle_message(self, text):
         if self._suppress_next_message:
@@ -335,19 +411,17 @@ class Station(asyncio.DatagramProtocol):
 
     def _demod_attempts(self):
         """(modulation, demodulate_fn, use_fec, fec_generators, fec_k)
-        tuples to try, in order, for an incoming burst: the RX mode first -
-        what THIS station itself last granted its peer, i.e. what the peer
-        should actually be sending with (the common case once negotiated;
-        see _apply_rx_mode - this is deliberately NOT self.modulation,
-        this station's own SEND mode, since negotiation is asymmetric and
-        the two can differ) - falling back to the fixed CONTROL mode so a
-        MODE_REQUEST/MODE_GRANT can always be heard no matter what data
-        mode is currently active. Skipped entirely when they're already
-        identical (e.g. before any negotiation has happened, mode 0
-        usually already IS the control mode)."""
-        attempts = [(self._rx_modulation, self._rx_demodulate, self.use_fec,
-                     self._rx_fec_generators, self._rx_fec_k)]
-        if (self._rx_modulation, self._rx_fec_generators, self._rx_fec_k) != \
+        tuples to try, in order, for an incoming burst: this station's
+        current mode first (the common case once negotiated - both
+        directions always share one mode, see negotiate()), falling back
+        to the fixed CONTROL mode so a MODE_REQUEST/GRANT/SET/SET_ACK can
+        always be heard no matter what data mode is currently active.
+        Skipped entirely when they're already identical (e.g. before any
+        negotiation has happened, mode 0 usually already IS the control
+        mode)."""
+        attempts = [(self.modulation, self._demodulate, self.use_fec,
+                     self._fec_generators, self._fec_k)]
+        if (self.modulation, self._fec_generators, self._fec_k) != \
                 (self._control_modulation, self._control_fec_generators, self._control_fec_k) \
                 or not self.use_fec:
             attempts.append((self._control_modulation, self._control_demodulate, True,
@@ -465,8 +539,10 @@ class Station(asyncio.DatagramProtocol):
 
     def _handle_control_frame(self, header, payload):
         """Dispatches a decoded PACKET_TYPE_CONTROL frame - see
-        openwave_link.py's CONTROL_OP_MODE_REQUEST/CONTROL_OP_MODE_GRANT
-        and this class's negotiate()."""
+        openwave_link.py's CONTROL_OP_* constants and this class's
+        negotiate() for the full two-phase handshake (probe so the
+        initiator has something to measure, then an authoritative
+        MODE_SET both stations end up sharing)."""
         try:
             parsed = link.parse_control_payload(payload)
         except ValueError as exc:
@@ -474,65 +550,301 @@ class Station(asyncio.DatagramProtocol):
             return
 
         if parsed['op'] == link.CONTROL_OP_MODE_REQUEST:
-            granted_mode_id, fec_preset = link.select_mode_for_snr(self._last_rx_snr_db)
+            # Phase 1 reply: purely something for the requester to measure
+            # (self._last_rx_snr_db was already updated off THIS frame by
+            # _handle_received_samples before this dispatch). Still
+            # computes/logs an opinion for visibility, but does NOT apply
+            # anything here - only an eventual MODE_SET is authoritative.
+            # Respects OUR OWN --bandwidth ceiling even though this reply
+            # is non-binding, so the logged opinion doesn't suggest a mode
+            # this station wouldn't actually be willing to use itself.
+            proposed_mode_id, proposed_fec_preset = link.select_mode_for_snr(
+                self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
             grant = link.build_mode_grant_frame(
-                header['seq'], granted_mode_id, fec_preset, self._last_rx_snr_db,
+                header['seq'], proposed_mode_id, proposed_fec_preset, self._last_rx_snr_db,
                 mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
                 dst_id=self.dst_id.encode(),
             )
             self._transmit_control_frame(grant)
-            # The peer will start sending TO US in exactly the mode we just
-            # granted them - remember that as our own RX expectation (see
-            # _apply_rx_mode/_demod_attempts), separate from self.mode_id
-            # (what WE send with, only touched by a GRANT we receive).
-            self._apply_rx_mode(granted_mode_id, fec_preset)
             self._log(f"[negotiate] {self.dst_id} probed the link (estimated their SNR ~"
-                      f"{self._last_rx_snr_db:.1f}dB) - granted them "
-                      f"{link.format_mode(granted_mode_id)}/{fec_preset}")
+                      f"{self._last_rx_snr_db:.1f}dB) - replied so they can measure us "
+                      f"(our own, non-authoritative opinion: "
+                      f"{link.format_mode(proposed_mode_id)}/{proposed_fec_preset})")
             return
 
         if parsed['op'] == link.CONTROL_OP_MODE_GRANT:
             if self._negotiation_event is None or header['seq'] != self._negotiation_seq:
-                return  # stale grant (e.g. a retried request's earlier reply) - ignore
-            self._apply_tx_mode(parsed['mode_id'], parsed['fec_preset'])
-            self._log(f"[negotiate] {self.dst_id} granted {link.format_mode(parsed['mode_id'])}/"
-                      f"{parsed['fec_preset']} (their estimate of our link SNR: "
-                      f"~{parsed['snr_db']:.1f}dB)")
+                return  # stale/unmatched reply (e.g. a retried request's earlier reply) - ignore
+            # self._last_rx_snr_db is OUR OWN measurement of this frame -
+            # negotiate() decides from that, not from parsed['mode_id']/
+            # fec_preset (the peer's own opinion, logged only).
+            self._log(f"[negotiate] measured {self.dst_id}'s reply at ~"
+                      f"{self._last_rx_snr_db:.1f}dB (their own, non-authoritative opinion: "
+                      f"{link.format_mode(parsed['mode_id'])}/{parsed['fec_preset']})")
             self._negotiation_event.set()
+            return
+
+        if parsed['op'] == link.CONTROL_OP_MODE_SET:
+            # The peer initiated and measured its own link to us - adopt
+            # its decision for BOTH directions, and mark ourselves as
+            # already negotiated so our own first send later doesn't
+            # redundantly re-negotiate and second-guess an already-
+            # established session mode.
+            self._apply_mode(parsed['mode_id'], parsed['fec_preset'])
+            self._auto_negotiate_done = True
+            ack = link.build_mode_set_ack_frame(
+                header['seq'], mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
+                dst_id=self.dst_id.encode())
+            self._transmit_control_frame(ack)
+            self._log(f"[negotiate] {self.dst_id} set the link to "
+                      f"{link.format_mode(parsed['mode_id'])}/{parsed['fec_preset']} - adopted")
+            return
+
+        if parsed['op'] == link.CONTROL_OP_MODE_SET_ACK:
+            if self._mode_set_event is None or header['seq'] != self._mode_set_seq:
+                return  # stale/unmatched ack - ignore
+            self._mode_set_event.set()
+            return
+
+        if parsed['op'] == link.CONTROL_OP_PING:
+            # Reply at THIS station's current active mode (not the fixed
+            # control mode) - /ping and /ping survey exist specifically to
+            # measure real round-trip behavior at whatever mode is in use,
+            # see _ping_trials()/_transmit_frame() (default = current mode).
+            pong = link.build_pong_frame(
+                header['seq'], mode_id=self.mode_id, src_id=self.station_id.encode(),
+                dst_id=self.dst_id.encode())
+            self._transmit_frame(pong)
+            return
+
+        if parsed['op'] == link.CONTROL_OP_PONG:
+            if self._ping_event is None or header['seq'] != self._ping_seq:
+                return  # stale/unmatched pong - ignore
+            self._ping_event.set()
 
     async def negotiate(self):
-        """Probe the link at the fixed control mode/FEC and adopt whatever
-        mode/FEC the peer grants back for this station's future sends (see
-        openwave_link.py's MODE_SNR_TABLE/select_mode_for_snr()). Setup-
-        only - call once before the first send_text(), not continuously;
-        mid-session re-negotiation isn't implemented (would need to handle
-        frames already in flight under the old mode). A non-responding peer
-        (e.g. one without negotiation support) is non-fatal: logs a
-        warning and leaves the current mode/FEC unchanged."""
+        """Two-phase handshake, run by whichever station has a message
+        ready first (see send_text()) - or explicitly via /renegotiate:
+        (1) probe the peer, since a station can only ever measure signals
+        arriving AT it, never what it sends - this station has nothing to
+        measure until the peer replies; (2) having now measured its OWN
+        reception of that reply, pick a mode/FEC (openwave_link.py's
+        MODE_SNR_TABLE/select_mode_for_snr()) and authoritatively tell
+        the peer to use it too, via _announce_mode() - both stations end
+        up on the SAME mode for BOTH directions, not two independently-
+        chosen ones (see openwave_link.py's CONTROL_OP_* module comment
+        for the full rationale). Session-scoped: call once before the
+        first send_text() (already done automatically - see send_text()),
+        or again at any time via /renegotiate; not continuous. Known gap:
+        if both stations happen to get their own first message to send
+        within the same handshake window, both may start this as their
+        own initiator concurrently - not handled (no tie-breaking). A
+        non-responding peer at either phase is non-fatal: logs a warning
+        and leaves (or proceeds with) the current mode/FEC. Guarded
+        against overlapping calls (self._negotiating) - a second call
+        while one's already in flight is a no-op, not a second concurrent
+        handshake stomping on the first's state."""
+        if self._negotiating:
+            self._log("[negotiate] already negotiating - ignoring overlapping call")
+            return
+        self._negotiating = True
+        try:
+            # -- Phase 1: probe, so we have something of the peer's to measure --
+            seq = self._seq
+            self._seq = (self._seq + 1) % link.SEQ_MODULUS
+            self._negotiation_seq = seq
+            self._negotiation_event = asyncio.Event()
+
+            request = link.build_mode_request_frame(
+                seq, mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
+                dst_id=self.dst_id.encode())
+
+            probed = False
+            for attempt in range(NEGOTIATE_MAX_ATTEMPTS):
+                self._transmit_control_frame(request)
+                try:
+                    await asyncio.wait_for(self._negotiation_event.wait(),
+                                            timeout=RETRY_POLL_INTERVAL_S * 10)
+                    probed = True
+                    break
+                except asyncio.TimeoutError:
+                    if self.verbose:
+                        self._log(f"[negotiate] no response yet (attempt {attempt + 1}/"
+                                  f"{NEGOTIATE_MAX_ATTEMPTS}), retrying")
+
+            self._negotiation_seq = None
+            self._negotiation_event = None
+
+            if not probed:
+                self._log(f"[negotiate] {self.dst_id} did not respond after "
+                          f"{NEGOTIATE_MAX_ATTEMPTS} attempts - keeping "
+                          f"{link.format_mode(self.mode_id)}/{self.fec_preset}")
+                return
+
+            # -- Decide from OUR OWN measurement, then tell the peer (phase 2) --
+            mode_id, fec_preset = link.select_mode_for_snr(
+                self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
+            self._log(f"[negotiate] measured our own link at ~{self._last_rx_snr_db:.1f}dB - "
+                      f"setting both directions to {link.format_mode(mode_id)}/{fec_preset}")
+            await self._announce_mode(mode_id, fec_preset)
+        finally:
+            self._negotiating = False
+
+    async def _announce_mode(self, mode_id, fec_preset=None):
+        """Applies mode_id/fec_preset to THIS station immediately, then
+        authoritatively tells the peer to do the same (MODE_SET, retried
+        until MODE_SET_ACK confirms) - negotiate()'s phase 2, factored out
+        so it's reusable anywhere a mode/FEC needs to be EXPLICITLY chosen
+        (not one picked from select_mode_for_snr()) and communicated to
+        the peer: ping_survey() (switching through every mode to test it
+        for real) and the /mode, /fec commands (a manual override) both
+        go through this. A lost/unconfirmed MODE_SET could otherwise
+        leave the two stations on different modes, which earlier live-
+        testing showed goes badly.
+        Returns True if the peer confirmed, False if it never did (the
+        local application happens either way - proceeding anyway is the
+        right call: a peer that never confirms is either not listening
+        or doesn't support this, and there's nothing better to fall back
+        to)."""
+        self._apply_mode(mode_id, fec_preset)
+
         seq = self._seq
         self._seq = (self._seq + 1) % link.SEQ_MODULUS
-        self._negotiation_seq = seq
-        self._negotiation_event = asyncio.Event()
+        self._mode_set_seq = seq
+        self._mode_set_event = asyncio.Event()
 
-        request = link.build_mode_request_frame(
-            seq, mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
-            dst_id=self.dst_id.encode())
+        set_frame = link.build_mode_set_frame(
+            seq, mode_id, self.fec_preset, mode_id=CONTROL_MODE_ID,
+            src_id=self.station_id.encode(), dst_id=self.dst_id.encode())
 
+        confirmed = False
         for attempt in range(NEGOTIATE_MAX_ATTEMPTS):
-            self._transmit_control_frame(request)
+            self._transmit_control_frame(set_frame)
             try:
-                await asyncio.wait_for(self._negotiation_event.wait(),
+                await asyncio.wait_for(self._mode_set_event.wait(),
                                         timeout=RETRY_POLL_INTERVAL_S * 10)
-                return  # _handle_control_frame already applied the grant and logged it
+                confirmed = True
+                break
             except asyncio.TimeoutError:
                 if self.verbose:
-                    self._log(f"[negotiate] no response yet (attempt {attempt + 1}/"
-                              f"{NEGOTIATE_MAX_ATTEMPTS}), retrying")
+                    self._log(f"[negotiate] {self.dst_id} hasn't confirmed "
+                              f"{link.format_mode(mode_id)}/{self.fec_preset} yet "
+                              f"(attempt {attempt + 1}/{NEGOTIATE_MAX_ATTEMPTS}), retrying")
 
-        self._log(f"[negotiate] {self.dst_id} did not respond after {NEGOTIATE_MAX_ATTEMPTS} "
-                  f"attempts - keeping {link.format_mode(self.mode_id)}/{self.fec_preset}")
-        self._negotiation_seq = None
-        self._negotiation_event = None
+        self._mode_set_seq = None
+        self._mode_set_event = None
+
+        if confirmed:
+            self._log(f"[negotiate] {self.dst_id} confirmed - both directions now "
+                      f"{link.format_mode(mode_id)}/{self.fec_preset}")
+        else:
+            self._log(f"[negotiate] {self.dst_id} never confirmed "
+                      f"{link.format_mode(mode_id)}/{self.fec_preset} after "
+                      f"{NEGOTIATE_MAX_ATTEMPTS} attempts - proceeding anyway on our end")
+        return confirmed
+
+    async def _ping_trials(self, count=PING_TRIAL_COUNT):
+        """Runs `count` ping/pong round trips at whatever mode is
+        CURRENTLY active (no mode-switching here - see ping()/
+        ping_survey() for that). Each trial is a single attempt with its
+        own short timeout - a lost ping is recorded as a failure for
+        that trial, not retried within it, matching a real `ping` tool's
+        semantics rather than the ACK/negotiate retry-until-success
+        pattern used elsewhere in this file. Returns (results,
+        summary_line); results is a list of {'ok': bool, 'rtt_s':
+        float|None, 'snr_db': float|None}, one per trial."""
+        results = []
+        for i in range(count):
+            seq = self._seq
+            self._seq = (self._seq + 1) % link.SEQ_MODULUS
+            self._ping_seq = seq
+            self._ping_event = asyncio.Event()
+
+            ping_frame = link.build_ping_frame(
+                seq, mode_id=self.mode_id, src_id=self.station_id.encode(),
+                dst_id=self.dst_id.encode())
+            started_at = time.monotonic()
+            self._transmit_frame(ping_frame)
+            try:
+                await asyncio.wait_for(self._ping_event.wait(), timeout=PING_TIMEOUT_S)
+                rtt_s = time.monotonic() - started_at
+                snr_db = self._last_rx_snr_db
+                results.append({'ok': True, 'rtt_s': rtt_s, 'snr_db': snr_db})
+                if self.verbose:
+                    self._log(f"[ping] {i + 1}/{count}: {rtt_s * 1000:.0f}ms, SNR ~{snr_db:.1f}dB")
+            except asyncio.TimeoutError:
+                results.append({'ok': False, 'rtt_s': None, 'snr_db': None})
+                if self.verbose:
+                    self._log(f"[ping] {i + 1}/{count}: timed out")
+            finally:
+                self._ping_seq = None
+                self._ping_event = None
+
+        successes = [r for r in results if r['ok']]
+        if successes:
+            avg_rtt_ms = sum(r['rtt_s'] for r in successes) / len(successes) * 1000
+            avg_snr = sum(r['snr_db'] for r in successes) / len(successes)
+            summary = f"{len(successes)}/{count} ok, avg {avg_rtt_ms:.0f}ms, SNR ~{avg_snr:.1f}dB"
+        else:
+            summary = f"0/{count} ok"
+        return results, summary
+
+    async def ping(self):
+        """/ping: a quick round-trip timing/quality check at the
+        CURRENTLY active mode - see _ping_trials(). To really test every
+        mode instead of just this one, see ping_survey()."""
+        self._log(f"[ping] testing {link.format_mode(self.mode_id)}/{self.fec_preset} "
+                  f"against {self.dst_id}...")
+        _, summary = await self._ping_trials()
+        self._log(f"[ping] {summary}")
+
+    async def ping_survey(self):
+        """/ping survey: really tests every waveform mode this station is
+        willing to use against the peer, one at a time - not predicted
+        from a single measurement (see MODE_SNR_TABLE's own comment for
+        why that's unreliable under fading). Respects --bandwidth: narrow
+        only tests modes at or below NARROWBAND_MAX_SYMBOL_RATE (there's
+        no point surveying a mode this station won't ever actually pick
+        or be willing to use) - unlike --auto's ceiling, which only
+        constrains automatic selection, the survey's whole point is
+        showing real performance for modes actually in play, so it
+        follows the same ceiling rather than testing modes off-limits
+        under the current deployment. Each mode is actually switched to
+        on BOTH stations first (_announce_mode()'s normal confirmed
+        MODE_SET/MODE_SET_ACK exchange - the same mechanism negotiate()
+        uses, just with an explicitly chosen mode instead of one picked
+        from the SNR table) before testing it for real, so this needs no
+        new "guess what mode an unexpected burst might be" machinery on
+        the receive side. Restores the original mode afterward and logs a
+        final consolidated summary of every mode tested together (see
+        _ping_survey_summary()) - the live per-mode rows printed during
+        the survey scroll away in a longer session, so this is the
+        look-back-at-everything-at-once view. Takes several seconds (a
+        confirmed mode switch plus PING_TRIAL_COUNT round trips, per
+        mode). Known limitation: a real chat message sent by either
+        operator during an active survey would be misinterpreted, since
+        the active mode is being changed underneath it - not guarded
+        against."""
+        original_mode_id, original_fec_preset = self.mode_id, self.fec_preset
+        mode_ids = sorted(link.WAVEFORM_MODES)
+        if self.max_symbol_rate is not None:
+            mode_ids = [m for m in mode_ids
+                        if link.WAVEFORM_MODES[m]['symbol_rate'] <= self.max_symbol_rate]
+        scope = f"modes at or below {self.max_symbol_rate} sym/s" \
+            if self.max_symbol_rate is not None else "all modes"
+        self._log(f"[ping] surveying {scope} against {self.dst_id} "
+                  f"({PING_TRIAL_COUNT} trials each)...")
+        rows = []
+        for mode_id in mode_ids:
+            await self._announce_mode(mode_id)
+            results, summary = await self._ping_trials()
+            self._log(f"[ping]   {link.format_mode(mode_id):<28} {summary}")
+            rows.append((mode_id, results, summary))
+
+        await self._announce_mode(original_mode_id, original_fec_preset)
+        self._log(f"[ping] survey complete - back to {link.format_mode(self.mode_id)}/"
+                  f"{self.fec_preset}")
+        self._log(_ping_survey_summary(rows))
 
     def register(self):
         """Send a zero-length 'hello' datagram to the simulator so it
@@ -750,28 +1062,158 @@ class Station(asyncio.DatagramProtocol):
 
 
 async def _stdin_lines():
-    """Yield lines typed on stdin without blocking the event loop."""
+    """Yield lines typed on stdin without blocking the event loop.
+
+    Uses input(), not sys.stdin.readline() - the two look interchangeable
+    but aren't: readline (the module, imported at the top of this file)
+    only hooks into input(), giving up/down-arrow command history and
+    basic line editing for free. sys.stdin.readline() is a plain buffered
+    read with none of that, no matter what's imported. input() raises
+    EOFError at end-of-input instead of returning '' - caught below to
+    end the generator the same way the old readline()-based version did."""
     loop = asyncio.get_running_loop()
     while True:
-        line = await loop.run_in_executor(None, sys.stdin.readline)
-        if not line:
+        try:
+            line = await loop.run_in_executor(None, input)
+        except EOFError:
             return
         line = line.rstrip('\n')
         if line:
             yield line
 
 
+async def _handle_command(station, line):
+    """Dispatches a '/'-prefixed stdin line to a diagnostic/control action
+    instead of sending it as a chat message - see run()'s stdin loop.
+
+    /ping and /ping survey (or --survey) map to Station.ping()/
+    ping_survey(). /renegotiate to Station.negotiate() (works regardless
+    of --auto, and regardless of whether this station has already
+    negotiated once). /modes lists the Waveform Modes table. /mode [N]
+    with no argument reports the current mode/FEC; with one, switches to
+    Waveform Mode N - like /fec PRESET (switches just the FEC preset,
+    keeping the current mode), both go through _announce_mode(), the same
+    confirmed MODE_SET/MODE_SET_ACK exchange negotiate()/ping_survey()
+    already use, so the peer is actually told and confirms before this
+    station considers the switch done - not just a local setting change.
+    Either one also marks the session as already-negotiated
+    (_auto_negotiate_done), so a manual choice made before this station's
+    own first send isn't immediately overridden by --auto's lazy trigger.
+    /mode also enforces the current --bandwidth ceiling (max_symbol_rate)
+    - a narrow ceiling is a hard limit on what this deployment can
+    actually carry, not just a hint for automatic selection, so a manual
+    /mode request above it is rejected rather than silently honored.
+    /bandwidth [narrow|wide] reports or changes the --bandwidth ceiling
+    (Station.max_symbol_rate) live - unlike /mode and /fec, it's a
+    constraint on FUTURE automatic selection, not a mode choice itself,
+    so it doesn't touch the current mode or trigger a re-negotiation on
+    its own (follow up with /renegotiate to actually apply it). /help (or
+    /?) prints the full command reference (_help_text()) - the one-line
+    startup hint just points here rather than listing every command.
+
+    Unrecognized commands, an out-of-range mode, an unknown FEC preset, or
+    an invalid /bandwidth value just log an error - not fatal.
+
+    Returns True to keep the session running, False if the command was
+    /quit or /exit and run()'s stdin loop should stop."""
+    parts = line[1:].split()
+    cmd = parts[0].lower() if parts else ''
+
+    if cmd == 'ping':
+        survey = len(parts) > 1 and parts[1].lstrip('-').lower() == 'survey'
+        await (station.ping_survey() if survey else station.ping())
+
+    elif cmd == 'renegotiate':
+        await station.negotiate()
+
+    elif cmd == 'modes':
+        station._log(_waveform_modes_table())
+
+    elif cmd == 'mode':
+        if len(parts) < 2:
+            station._log(f"[cmd] current: {link.format_mode(station.mode_id)}/"
+                         f"{station.fec_preset} - usage: /mode N (see /modes for the list)")
+            return True
+        try:
+            mode_id = int(parts[1])
+            if mode_id not in link.WAVEFORM_MODES:
+                raise ValueError
+        except ValueError:
+            station._log(f"[cmd] /mode: {parts[1]!r} is not a valid Waveform Mode ID - see /modes")
+            return True
+        # A narrow --bandwidth/--bandwidth ceiling is a hard limit on what
+        # this deployment can actually carry, not just a hint for
+        # automatic selection to prefer - /mode must respect it too, the
+        # same as negotiate()/ping_survey() already do, or "narrow" would
+        # be trivially bypassable by hand.
+        symbol_rate = link.WAVEFORM_MODES[mode_id]['symbol_rate']
+        if station.max_symbol_rate is not None and symbol_rate > station.max_symbol_rate:
+            station._log(f"[cmd] /mode: {link.format_mode(mode_id)} needs {symbol_rate} sym/s, "
+                         f"over the current bandwidth=narrow ceiling of "
+                         f"{station.max_symbol_rate} sym/s - use /bandwidth wide first if you "
+                         f"really want this mode")
+            return True
+        await station._announce_mode(mode_id)
+        station._auto_negotiate_done = True
+
+    elif cmd == 'fec':
+        if len(parts) < 2:
+            station._log(f"[cmd] current FEC preset: {station.fec_preset} "
+                         f"(use={'on' if station.use_fec else 'off'}) - usage: /fec PRESET "
+                         f"(one of {', '.join(sorted(fec.PRESETS))})")
+            return True
+        preset = parts[1]
+        if preset not in fec.PRESETS:
+            station._log(f"[cmd] /fec: {preset!r} is not a known FEC preset - "
+                         f"one of {', '.join(sorted(fec.PRESETS))}")
+            return True
+        # Explicitly requesting a preset unambiguously means "use FEC,
+        # with this preset" - without this, /fec on a station started
+        # without --fec/--auto would silently do nothing (fec_preset gets
+        # set, but self.use_fec stays off, so nothing on the wire
+        # actually changes). Set before _announce_mode() so
+        # max_fragment_chars is recomputed with FEC's overhead accounted
+        # for (see _apply_mode()/max_single_fragment_chars()).
+        station.use_fec = True
+        await station._announce_mode(station.mode_id, preset)
+        station._auto_negotiate_done = True
+
+    elif cmd == 'bandwidth':
+        if len(parts) < 2:
+            current = 'narrow' if station.max_symbol_rate is not None else 'wide'
+            station._log(f"[cmd] current bandwidth: {current} - usage: /bandwidth {{narrow,wide}}")
+            return True
+        value = parts[1].lower()
+        if value not in ('narrow', 'wide'):
+            station._log(f"[cmd] /bandwidth: {parts[1]!r} must be 'narrow' or 'wide'")
+            return True
+        # Unlike /mode and /fec, this is a CEILING on future automatic
+        # selection (--auto/negotiate()/ping_survey()), not a mode choice
+        # itself - see Station.__init__'s max_symbol_rate. Doesn't touch
+        # the currently active mode or re-negotiate on its own; the
+        # ceiling only takes effect the next time something picks a mode
+        # automatically.
+        station.max_symbol_rate = NARROWBAND_MAX_SYMBOL_RATE if value == 'narrow' else None
+        station._log(f"[cmd] bandwidth set to {value} - doesn't change the current mode by "
+                     f"itself; use /renegotiate (or /mode) to actually apply it")
+
+    elif cmd in ('help', '?'):
+        station._log(_help_text())
+
+    elif cmd in ('quit', 'exit'):
+        station._log("[cmd] closing...")
+        return False
+
+    else:
+        station._log(f"[cmd] unrecognized command: {line!r} - try /help")
+
+    return True
+
+
 def _mode_banner(station_id, station):
     fec_note = f"on ({station.fec_preset})" if station.use_fec else "off"
-    rx_note = ""
-    if station._rx_modulation != station.modulation:
-        # Negotiation is asymmetric - each side grants the other whatever
-        # ITS OWN measurement supports, so what we send with and what we
-        # expect FROM the peer can legitimately differ (see
-        # _apply_tx_mode/_apply_rx_mode).
-        rx_note = f" (expecting {station._rx_modulation} from {station.dst_id})"
-    return (f"[{station_id}] mode={station.mode_id} ({station.modulation}) fec={fec_note}"
-            f"{rx_note} - max ~{station.max_fragment_chars} chars per burst at these settings "
+    return (f"[{station_id}] mode={station.mode_id} ({station.modulation}) fec={fec_note} "
+            f"- max ~{station.max_fragment_chars} chars per burst at these settings "
             f"(UDP's {MAX_UDP_PAYLOAD_BYTES}-byte datagram limit); longer messages "
             f"auto-fragment into multiple bursts.")
 
@@ -785,7 +1227,7 @@ async def run(args):
     station = Station(
         station_id=args.station_id, dst_id=args.dst, mode_id=args.mode,
         use_fec=args.fec or args.auto, fec_preset=args.fec_preset, use_ack=args.ack,
-        auto=args.auto, verbose=args.verbose,
+        auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
     )
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
@@ -794,8 +1236,10 @@ async def run(args):
     station._sim_addr = (args.sim_host, args.sim_port)
     station.register()
     local_port = transport.get_extra_info('sockname')[1]
-    print(f"[{args.station_id}] ack={'on' if args.ack else 'off'} auto={'on' if args.auto else 'off'} "
-          f"- local port {local_port}, relaying via {args.sim_host}:{args.sim_port}.", file=sys.stderr)
+    bandwidth_note = f" bandwidth={args.bandwidth}" if args.auto else ""
+    print(f"[{args.station_id}] ack={'on' if args.ack else 'off'} auto={'on' if args.auto else 'off'}"
+          f"{bandwidth_note} - local port {local_port}, relaying via "
+          f"{args.sim_host}:{args.sim_port}.", file=sys.stderr)
     print(_mode_banner(args.station_id, station), file=sys.stderr)
 
     # With --auto, negotiation is deliberately NOT run here - it happens
@@ -809,11 +1253,16 @@ async def run(args):
         print(f"[{args.station_id}] --auto: will negotiate mode/FEC with {args.dst} on first "
               f"send, not now - listening until then.", file=sys.stderr)
 
-    print(f"[{args.station_id}] type a message and press Enter.", file=sys.stderr)
+    print(f"[{args.station_id}] type a message and press Enter, or a command "
+          f"(/help for the list).", file=sys.stderr)
 
     try:
         async for line in _stdin_lines():
-            await station.send_text(line)
+            if line.startswith('/'):
+                if not await _handle_command(station, line):
+                    break
+            else:
+                await station.send_text(line)
     finally:
         transport.close()
         print(station.stats_summary(), file=sys.stderr)
@@ -844,12 +1293,22 @@ def main():
                               'next - a lost fragment only costs that fragment a retry, not the '
                               'whole message)')
     parser.add_argument('--auto', action='store_true',
-                         help='Negotiate mode/FEC with the peer automatically at startup, instead '
-                              'of requiring matching --mode/--fec on both ends - probes the link '
-                              'at a fixed robust control mode, estimates its SNR, and adopts '
-                              'whatever the peer grants back (see openwave_link.py\'s '
-                              'MODE_SNR_TABLE). Implies FEC is available for use even without '
-                              '--fec. One-time at startup, not continuous re-adaptation.')
+                         help='Negotiate mode/FEC with the peer automatically instead of requiring '
+                              'matching --mode/--fec on both ends - whichever station gets a '
+                              'message ready first probes the peer, measures its OWN reception of '
+                              'the reply, and picks the best mode/FEC both stations then use (see '
+                              'openwave_link.py\'s MODE_SNR_TABLE). Implies FEC is available even '
+                              'without --fec. Runs lazily on this station\'s own first send, not '
+                              'eagerly at startup; session-scoped, not continuous - re-run anytime '
+                              'with /renegotiate.')
+    parser.add_argument('--bandwidth', choices=('narrow', 'wide'), default='wide',
+                         help='Ceiling on what --auto is willing to pick (default: wide, no '
+                              'ceiling - every mode in WAVEFORM_MODES is eligible). narrow caps '
+                              f'selection to modes at or below {NARROWBAND_MAX_SYMBOL_RATE} '
+                              'sym/s, for a link that physically cannot carry a faster symbol '
+                              'rate no matter how good its SNR is (this simulator\'s own channel '
+                              'model has no such limit on its own). Does not affect manual '
+                              '--mode/--fec or /ping survey, only automatic selection.')
     parser.add_argument('--verbose', '-v', action='store_true',
                          help='Print per-message stats as they happen (size, fragment count, '
                               'timing/throughput, LinkReceiver counters). A session summary '

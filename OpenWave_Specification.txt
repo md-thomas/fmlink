@@ -93,9 +93,10 @@ Link layer
         lookup contract, not yet wired into the CLI modulation/FEC flags)
             Mode 0: 	600 symbols/sec, bpsk,  600 bps raw
             Mode 1: 	1200 symbols/sec, bpsk,  1200 bps raw
-            Mode 2: 	2400 symbols/sec, qpsk,  4800 bps raw
-            Mode 3: 	4800 symbols/sec, qpsk,  9600 bps raw
-            Mode 4: 	9600 symbols/sec, 16qam, 38400 bps raw
+            Mode 2: 	1200 symbols/sec, qpsk,  2400 bps raw
+            Mode 3: 	2400 symbols/sec, qpsk,  4800 bps raw
+            Mode 4: 	4800 symbols/sec, qpsk,  9600 bps raw
+            Mode 5: 	9600 symbols/sec, 16qam, 38400 bps raw
 
 	    Flags: 1 byte 
             Bit 0: 	ACK Requested 
@@ -166,7 +167,7 @@ Link layer
         B8 C3 2D 60 98 18 9F CB 	   across 4 lines)
         1A CF FC 1D 			    <- Sync Word
         01 				            <- Version 
-        02 				            <- Waveform Mode ID (Mode 2: 2400 sym/s, qpsk)
+        02 				            <- Waveform Mode ID (Mode 2: 1200 sym/s, qpsk)
         01 				            <- Packet Type (Data) 
         01 				            <- Flags (ACK requested) 
         00 01 				        <- Sequence Number 

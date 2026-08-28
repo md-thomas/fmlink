@@ -297,10 +297,31 @@ def build_ack_frame(acked_seq, lead_pad=24, end_pad=24, **header_kwargs):
 # extension living entirely in the payload, so it doesn't need a header
 # format change. op byte first so parse_control_payload() can dispatch
 # before knowing which build_* function produced it.
+#
+# Two-phase handshake: REQUEST/GRANT (phase 1) exists purely so the
+# INITIATOR has something of its peer's to measure (a station can only
+# ever measure what arrives AT it, never what it sends) - the GRANT's own
+# embedded mode_id/fec_preset is informational only now, not adopted by
+# either side. SET/SET_ACK (phase 2) is the initiator authoritatively
+# telling its peer the ONE mode/FEC it measured and chose - both stations
+# end up on that same mode, not two independently-chosen ones. See
+# ota_station.py's negotiate() for the full flow.
 CONTROL_OP_MODE_REQUEST = 1
 CONTROL_OP_MODE_GRANT = 2
+CONTROL_OP_MODE_SET = 3
+CONTROL_OP_MODE_SET_ACK = 4
+# PING/PONG: ota_station.py's /ping and /ping survey diagnostics - a bare
+# round trip (no payload beyond the op byte) for measuring RTT/link
+# quality, either at whatever mode is currently active (/ping) or, for a
+# survey, at each waveform mode in turn after actually switching both
+# stations to it via a normal negotiate()-style MODE_SET/MODE_SET_ACK
+# exchange first (see ota_station.py's _announce_mode()/ping_survey()) -
+# PING/PONG themselves carry no mode information, unlike REQUEST/GRANT.
+CONTROL_OP_PING = 5
+CONTROL_OP_PONG = 6
 
 _CONTROL_GRANT_STRUCT = struct.Struct('>BfB')  # op, snr_db (float32), mode_id
+_CONTROL_SET_STRUCT = struct.Struct('>BB')  # op, mode_id
 
 
 def build_mode_request_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
@@ -336,16 +357,67 @@ def build_mode_grant_frame(seq, granted_mode_id, fec_preset, snr_db, lead_pad=24
     return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
 
 
+def build_mode_set_frame(seq, chosen_mode_id, fec_preset, lead_pad=24, end_pad=24, **header_kwargs):
+    """The initiator's authoritative announcement, after measuring its OWN
+    reception of the peer's mode_grant_frame reply: "use this mode/FEC for
+    BOTH directions" - unlike build_mode_grant_frame's snr_db, this
+    carries no measurement, just the decision itself. fec_preset is
+    trailing ASCII bytes, same convention as build_mode_grant_frame.
+
+    chosen_mode_id is deliberately a distinct name from the header's own
+    mode_id field (in header_kwargs, if the caller passes one) - same
+    reasoning as build_mode_grant_frame's granted_mode_id: header mode_id
+    is what mode THIS frame itself was sent with (the fixed control
+    mode), unrelated to chosen_mode_id, which is payload content naming
+    the mode both stations are about to switch to."""
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
+    payload = _CONTROL_SET_STRUCT.pack(CONTROL_OP_MODE_SET, chosen_mode_id) + fec_preset.encode('ascii')
+    return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
+
+
+def build_mode_set_ack_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
+    """Acknowledges a mode_set_frame (echoing its seq) - the initiator
+    waits for this before applying the new mode itself and before sending
+    any real data, so a lost MODE_SET can't leave the two stations on
+    different modes."""
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
+    return build_frame(bytes([CONTROL_OP_MODE_SET_ACK]), lead_pad=lead_pad,
+                        end_pad=end_pad, seq=seq, **header_kwargs)
+
+
+def build_ping_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
+    """A bare round-trip probe for ota_station.py's /ping - no payload
+    beyond the op byte; seq is what a reply is matched back to (like
+    build_ack_frame's acked_seq). Unlike build_mode_request_frame, this
+    is sent at whatever mode is CURRENTLY active (the caller's choice,
+    via header_kwargs/the transmit path used) - the point is to measure
+    that mode's real round-trip behavior, not to probe at a fixed
+    control mode."""
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
+    return build_frame(bytes([CONTROL_OP_PING]), lead_pad=lead_pad,
+                        end_pad=end_pad, seq=seq, **header_kwargs)
+
+
+def build_pong_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
+    """Replies to a ping_frame, echoing its seq - same bare shape as
+    build_ping_frame, just the other op byte."""
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
+    return build_frame(bytes([CONTROL_OP_PONG]), lead_pad=lead_pad,
+                        end_pad=end_pad, seq=seq, **header_kwargs)
+
+
 def parse_control_payload(payload):
-    """A Control frame's payload -> {'op': int} for a request, or
-    {'op': int, 'mode_id': int, 'fec_preset': str, 'snr_db': float} for a
-    grant. Raises ValueError for an unrecognized/malformed op - a CRC-
-    verified frame guarantees the bytes are what the sender put there, but
-    not that the sender speaks this same control-payload version."""
+    """A Control frame's payload -> {'op': int} for a request, set-ack,
+    ping, or pong; {'op': int, 'mode_id': int, 'fec_preset': str,
+    'snr_db': float} for a grant; or {'op': int, 'mode_id': int,
+    'fec_preset': str} for a set. Raises ValueError for an unrecognized/
+    malformed op - a CRC-verified frame guarantees the bytes are what the
+    sender put there, but not that the sender speaks this same control-
+    payload version."""
     if not payload:
         raise ValueError('empty Control frame payload')
     op = payload[0]
-    if op == CONTROL_OP_MODE_REQUEST:
+    if op in (CONTROL_OP_MODE_REQUEST, CONTROL_OP_MODE_SET_ACK, CONTROL_OP_PING, CONTROL_OP_PONG):
         return {'op': op}
     if op == CONTROL_OP_MODE_GRANT:
         prefix_len = _CONTROL_GRANT_STRUCT.size
@@ -354,6 +426,13 @@ def parse_control_payload(payload):
         _, snr_db, mode_id = _CONTROL_GRANT_STRUCT.unpack(payload[:prefix_len])
         fec_preset = payload[prefix_len:].decode('ascii', errors='replace')
         return {'op': op, 'mode_id': mode_id, 'fec_preset': fec_preset, 'snr_db': snr_db}
+    if op == CONTROL_OP_MODE_SET:
+        prefix_len = _CONTROL_SET_STRUCT.size
+        if len(payload) < prefix_len:
+            raise ValueError(f'mode set payload too short ({len(payload)} bytes)')
+        _, mode_id = _CONTROL_SET_STRUCT.unpack(payload[:prefix_len])
+        fec_preset = payload[prefix_len:].decode('ascii', errors='replace')
+        return {'op': op, 'mode_id': mode_id, 'fec_preset': fec_preset}
     raise ValueError(f'unrecognized Control op {op}')
 
 
@@ -625,13 +704,41 @@ class LinkReceiver:
 WAVEFORM_MODES = {
     0: {'modulation': 'bpsk',  'symbol_rate': 600,  'fec_preset': 'r1_2_k7'},
     1: {'modulation': 'bpsk',  'symbol_rate': 1200, 'fec_preset': 'r1_2_k7'},
-    2: {'modulation': 'qpsk',  'symbol_rate': 2400, 'fec_preset': 'r1_2_k7'},
-    3: {'modulation': 'qpsk',  'symbol_rate': 4800, 'fec_preset': 'r1_2_k7'},
-    4: {'modulation': '16qam', 'symbol_rate': 9600, 'fec_preset': 'r1_2_k7'},
+    # Mode 2 fills a gap an original 5-mode spread (0/1/[gap]/3/4 in what
+    # are now modes 0/1/3/4/5) skipped: every OTHER modulation step
+    # doubled throughput via symbol rate alone, but the modulation-order
+    # steps doubled it via bits/symbol AND symbol rate at once (a 4x
+    # jump), with no "same bits/symbol bump, same rate as the slower BPSK
+    # mode" QPSK entry in between. Renumbered into its natural throughput
+    # slot (not appended at the end) - OpenWave_Specification.txt's
+    # Waveform Modes table/worked example and every mode-number reference
+    # elsewhere were updated to match when this happened.
+    2: {'modulation': 'qpsk',  'symbol_rate': 1200, 'fec_preset': 'r1_2_k7'},
+    3: {'modulation': 'qpsk',  'symbol_rate': 2400, 'fec_preset': 'r1_2_k7'},
+    4: {'modulation': 'qpsk',  'symbol_rate': 4800, 'fec_preset': 'r1_2_k7'},
+    5: {'modulation': '16qam', 'symbol_rate': 9600, 'fec_preset': 'r1_2_k7'},
 }
 
 # Derived for back-compat with any existing symbol-rate-only lookup.
 WAVEFORM_MODE_SYMBOL_RATES = {m: info['symbol_rate'] for m, info in WAVEFORM_MODES.items()}
+
+# bits/symbol per modulation scheme - matches modulate.py's MODULATORS/
+# demodulate.py's DEMODULATORS keys. Used by mode_raw_bps() below; also
+# the same convention OpenWave_Specification.txt's Waveform Modes table
+# uses for its "bps raw" column (symbol_rate * bits/symbol).
+_BITS_PER_SYMBOL = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
+
+
+def mode_raw_bps(mode_id):
+    """Waveform Mode ID -> raw bit rate (symbol_rate * bits/symbol),
+    ignoring FEC overhead - a mode-agnostic way to compare/rank modes by
+    actual throughput. Use this rather than assuming mode_id order tracks
+    throughput when ranking modes (ota_station.py's _ping_survey_summary()
+    does) - WAVEFORM_MODES happens to be in throughput order today, but
+    a table edit could easily break that again, the way inserting what's
+    now mode 2 briefly did before it was renumbered into place."""
+    info = WAVEFORM_MODES[mode_id]
+    return info['symbol_rate'] * _BITS_PER_SYMBOL[info['modulation']]
 
 # Mode/FEC auto-selection thresholds for ota_station.py's --auto handshake:
 # (min_snr_db, mode_id, fec_preset), ordered weakest-link-first.
@@ -663,55 +770,86 @@ WAVEFORM_MODE_SYMBOL_RATES = {m: info['symbol_rate'] for m, info in WAVEFORM_MOD
 # kind of miscalibration the "test it" half of this feature was meant to
 # catch.
 #
-# The QPSK (mode 3) row (9.0) is now a real reliability measurement too, not
-# just an estimate reading: 15/15 successful round trips (real send_text()
-# + --ack, not just "did the estimator read high enough") at EVERY declared
+# The QPSK row (9.0, pointing at mode 4 - the fastest QPSK sibling, 4800
+# sym/s) is now a real reliability measurement too, not just an estimate
+# reading: 15/15 successful round trips (real send_text() + --ack, not
+# just "did the estimator read high enough") at EVERY declared
 # --base-snr-db tested from 6dB through 18dB, WITH fading enabled (fading
 # is on by default - an earlier pass here only tested with it off, which
-# is not representative). No threshold change needed for mode 3.
+# is not representative). No threshold change needed for this row.
 #
-# The 16-QAM (mode 4) row is a real, and materially different, finding:
-# live-tested the same way (real send_text()+--ack round trips, fading on)
-# and found genuinely UNRELIABLE at 12-15dB true SNR (12/15, 11/15 - the
-# exact conditions a user hit live, where --auto picked mode 4 and a
-# message needed several retries before the sender gave up despite the
-# data having actually arrived - see tasklist.txt), fully reliable (15/15)
-# only from 18dB true SNR up. Mapping that through estimate_snr_db() -
-# WITH fading on this time, unlike the mode 0/1 calibration above -
-# surfaced a harder problem: fading makes the control probe's own single
-# reading noisy enough that the "unreliable at 15dB" and "reliable at
-# 18dB" ranges of ITS estimate overlap substantially (measured: 14.7-23.8
-# at declared 15dB vs 17.6-26.8 at declared 18dB, 10 trials each) - a
-# single BPSK probe just doesn't predict a 16-QAM burst's own independent
-# fade draw precisely. No threshold here can be both safe AND commonly
-# reachable; 24.0 is deliberately conservative (favors avoiding another
-# false "reliable" pick over recovering mode 4's throughput often) - most
-# of the measured 15dB-unreliable readings fall below it, so mode 4 will
-# now mostly only get picked on genuinely excellent links (roughly 21dB+
-# true SNR). Fixing this properly would mean negotiate() averaging
-# multiple probes instead of trusting one - noted as a follow-up, not
-# done here.
+# The 16-QAM row (pointing at mode 5, 9600 sym/s) is a real, and
+# materially different, finding: live-tested the same way (real
+# send_text()+--ack round trips, fading on) and found genuinely
+# UNRELIABLE at 12-15dB true SNR (12/15, 11/15 - the exact conditions a
+# user hit live, where --auto picked 16-QAM and a message needed several
+# retries before the sender gave up despite the data having actually
+# arrived - see tasklist.txt), fully reliable (15/15) only from 18dB true
+# SNR up. Mapping that through estimate_snr_db() - WITH fading on this
+# time, unlike the mode 0/1 calibration above - surfaced a harder
+# problem: fading makes the control probe's own single reading noisy
+# enough that the "unreliable at 15dB" and "reliable at 18dB" ranges of
+# ITS estimate overlap substantially (measured: 14.7-23.8 at declared
+# 15dB vs 17.6-26.8 at declared 18dB, 10 trials each) - a single BPSK
+# probe just doesn't predict a 16-QAM burst's own independent fade draw
+# precisely. No threshold here can be both safe AND commonly reachable;
+# 24.0 is deliberately conservative (favors avoiding another false
+# "reliable" pick over recovering this mode's throughput often) - most of
+# the measured 15dB-unreliable readings fall below it, so 16-QAM will now
+# mostly only get picked on genuinely excellent links (roughly 21dB+ true
+# SNR). Fixing this properly would mean negotiate() averaging multiple
+# probes instead of trusting one - noted as a follow-up, not done here.
 #
-# Modes 1/3 are preferred over their same-modulation, lower-symbol-rate
-# siblings (0/2) whenever reachable, since this simulated baseband chain
-# doesn't model any reliability cost from a higher symbol rate - only real
-# decode reliability (modulation + FEC) matters here, so there's no reason
-# to ever pick the slower one.
+# Mode 1 is preferred over its same-modulation, lower-symbol-rate sibling
+# (0), and mode 4 over ITS slower QPSK siblings (2, 3), whenever
+# reachable - this simulated baseband chain doesn't model any reliability
+# cost from a higher symbol rate, only real decode reliability
+# (modulation + FEC), so there's no reason to ever pick a slower
+# same-family mode over a faster one at the same threshold, UNLESS a
+# max_symbol_rate ceiling rules the faster one out (a real-world
+# narrowband deployment that genuinely can't use a faster symbol rate,
+# even though this simulator would happily allow it - see
+# select_mode_for_snr()'s max_symbol_rate param). That's exactly why the
+# QPSK family (2/3/4) gets one row EACH at the same 9.0 threshold below,
+# not just one row for the fastest (4): select_mode_for_snr() keeps the
+# LAST row whose threshold is satisfied, so with no ceiling that's still
+# mode 4 (last in table order) - but a ceiling that excludes mode 4's row
+# (symbol_rate too high) leaves mode 3's or mode 2's row still standing,
+# rather than falling through to nothing reachable at this reliability
+# tier at all. A first version of this table had only one QPSK row and a
+# narrow ceiling would have made --auto skip QPSK entirely, straight from
+# BPSK to 16-QAM - caught by test_max_symbol_rate_caps_selection_even_
+# at_high_snr expecting the best mode UNDER the ceiling, not just any
+# mode reachable overall.
 MODE_SNR_TABLE = (
     (-100.0, 0, 'r1_4_k9'),
     (5.0, 1, 'r1_2_k3'),
+    (9.0, 2, 'r1_2_k3'),
     (9.0, 3, 'r1_2_k3'),
-    (24.0, 4, 'r1_2_k3'),
+    (9.0, 4, 'r1_2_k3'),
+    (24.0, 5, 'r1_2_k3'),
 )
 
 
-def select_mode_for_snr(snr_db):
+def select_mode_for_snr(snr_db, max_symbol_rate=None):
     """Estimated SNR (see MODE_SNR_TABLE's docstring for exactly what this
     should be) -> (mode_id, fec_preset): the highest-throughput mode this
     link can apparently support. Always returns something, even for an SNR
-    below every threshold (falls back to the most robust row)."""
-    best = MODE_SNR_TABLE[0]
-    for row in MODE_SNR_TABLE:
+    below every threshold (falls back to the most robust row).
+
+    max_symbol_rate, if given, excludes any row whose mode's symbol_rate
+    exceeds it before picking - for a real deployment that physically
+    can't use a given symbol rate (e.g. a narrowband/audio-bandwidth
+    channel), not something this simulator's own channel model has any
+    concept of on its own. None (the default) considers every row,
+    unchanged from before this parameter existed."""
+    rows = MODE_SNR_TABLE
+    if max_symbol_rate is not None:
+        rows = tuple(row for row in rows if WAVEFORM_MODES[row[1]]['symbol_rate'] <= max_symbol_rate)
+        if not rows:
+            rows = (MODE_SNR_TABLE[0],)  # even the floor row's symbol_rate must fit any sane ceiling
+    best = rows[0]
+    for row in rows:
         if row[0] <= snr_db:
             best = row
     return best[1], best[2]

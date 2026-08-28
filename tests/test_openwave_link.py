@@ -103,7 +103,7 @@ class FlagsTests(unittest.TestCase):
 class ModeAndStationIdTests(unittest.TestCase):
     def test_format_mode_known(self):
         self.assertEqual(link.format_mode(0), 'Mode 0 (600 sym/s, bpsk)')
-        self.assertEqual(link.format_mode(4), 'Mode 4 (9600 sym/s, 16qam)')
+        self.assertEqual(link.format_mode(5), 'Mode 5 (9600 sym/s, 16qam)')
 
     def test_format_mode_unknown(self):
         self.assertEqual(link.format_mode(99), 'Mode 99 (unknown)')
@@ -127,6 +127,28 @@ class ModeAndStationIdTests(unittest.TestCase):
         for mode_id, info in link.WAVEFORM_MODES.items():
             self.assertIn(info['fec_preset'], fec.PRESETS,
                            f"mode {mode_id} has unknown fec_preset {info['fec_preset']!r}")
+
+    def test_mode_2_is_qpsk_at_1200(self):
+        # The gap the original 0/1/[gap]/3/4 spread skipped - see
+        # WAVEFORM_MODES' comment. Renumbered into its natural
+        # throughput-order slot (not appended at the end) -
+        # OpenWave_Specification.txt's worked example and every other
+        # mode-number reference were updated to match.
+        self.assertEqual(link.WAVEFORM_MODES[2]['modulation'], 'qpsk')
+        self.assertEqual(link.WAVEFORM_MODES[2]['symbol_rate'], 1200)
+
+    def test_mode_raw_bps(self):
+        self.assertEqual(link.mode_raw_bps(0), 600)      # bpsk, 600 sym/s
+        self.assertEqual(link.mode_raw_bps(5), 38400)    # 16qam, 9600 sym/s
+        self.assertEqual(link.mode_raw_bps(2), 2400)     # qpsk, 1200 sym/s
+
+    def test_waveform_modes_currently_monotonic_in_throughput(self):
+        # True today (mode_id 0..5 happens to track throughput), but
+        # mode_raw_bps() exists specifically so nothing has to assume
+        # this stays true - this test just documents/locks in the
+        # current shape, it isn't a correctness requirement.
+        rates = [link.mode_raw_bps(mode_id) for mode_id in sorted(link.WAVEFORM_MODES)]
+        self.assertEqual(rates, sorted(rates))
 
     def test_decode_station_id_strips_padding(self):
         header = link.build_header(0, src_id=b'K0MDT', dst_id=b'W1AW')
@@ -400,6 +422,49 @@ class ControlFrameTests(unittest.TestCase):
         self.assertEqual(parsed['fec_preset'], 'r1_2_k3')
         self.assertAlmostEqual(parsed['snr_db'], 4.5, places=3)
 
+    def test_mode_set_frame_round_trips(self):
+        frame = link.build_mode_set_frame(seq=7, chosen_mode_id=4, fec_preset='r1_2_k3')
+        start = self._header_start(frame)
+        parser = link.FrameParser()
+        status, payload = self._feed_all(parser, frame[start:])
+        self.assertEqual(status, 'ok')
+        self.assertEqual(parser.last_header['packet_type'], link.PACKET_TYPE_CONTROL)
+        self.assertEqual(parser.last_header['seq'], 7)
+        parsed = link.parse_control_payload(payload)
+        self.assertEqual(parsed, {'op': link.CONTROL_OP_MODE_SET, 'mode_id': 4,
+                                   'fec_preset': 'r1_2_k3'})
+
+    def test_mode_set_ack_frame_round_trips(self):
+        frame = link.build_mode_set_ack_frame(seq=7)
+        start = self._header_start(frame)
+        parser = link.FrameParser()
+        status, payload = self._feed_all(parser, frame[start:])
+        self.assertEqual(status, 'ok')
+        self.assertEqual(parser.last_header['packet_type'], link.PACKET_TYPE_CONTROL)
+        self.assertEqual(parser.last_header['seq'], 7)
+        parsed = link.parse_control_payload(payload)
+        self.assertEqual(parsed, {'op': link.CONTROL_OP_MODE_SET_ACK})
+
+    def test_ping_frame_round_trips(self):
+        frame = link.build_ping_frame(seq=9)
+        start = self._header_start(frame)
+        parser = link.FrameParser()
+        status, payload = self._feed_all(parser, frame[start:])
+        self.assertEqual(status, 'ok')
+        self.assertEqual(parser.last_header['packet_type'], link.PACKET_TYPE_CONTROL)
+        self.assertEqual(parser.last_header['seq'], 9)
+        self.assertEqual(link.parse_control_payload(payload), {'op': link.CONTROL_OP_PING})
+
+    def test_pong_frame_round_trips(self):
+        frame = link.build_pong_frame(seq=9)
+        start = self._header_start(frame)
+        parser = link.FrameParser()
+        status, payload = self._feed_all(parser, frame[start:])
+        self.assertEqual(status, 'ok')
+        self.assertEqual(parser.last_header['packet_type'], link.PACKET_TYPE_CONTROL)
+        self.assertEqual(parser.last_header['seq'], 9)
+        self.assertEqual(link.parse_control_payload(payload), {'op': link.CONTROL_OP_PONG})
+
     def test_parse_control_payload_rejects_empty(self):
         with self.assertRaises(ValueError):
             link.parse_control_payload(b'')
@@ -416,7 +481,7 @@ class ModeSnrTableTests(unittest.TestCase):
 
     def test_very_high_snr_selects_top_row(self):
         mode_id, fec_preset = link.select_mode_for_snr(999.0)
-        self.assertEqual((mode_id, fec_preset), (4, 'r1_2_k3'))
+        self.assertEqual((mode_id, fec_preset), (5, 'r1_2_k3'))
 
     def test_selection_is_monotonic_in_snr(self):
         results = [link.select_mode_for_snr(snr) for snr in range(-20, 21)]
@@ -432,9 +497,38 @@ class ModeSnrTableTests(unittest.TestCase):
         self.assertEqual(picked_rows, sorted(picked_rows))
 
     def test_thresholds_match_table_exactly_at_boundary(self):
+        # Several rows can share the same threshold (the whole QPSK family
+        # sits at 9.0 - see MODE_SNR_TABLE's comment), so an unconstrained
+        # query at that threshold always returns the fastest of them, not
+        # necessarily THIS row - pin max_symbol_rate to this row's own
+        # symbol rate to isolate it (excludes any faster same-threshold
+        # sibling, same technique ota_station.py's --bandwidth uses for
+        # real).
         for min_snr_db, mode_id, fec_preset in link.MODE_SNR_TABLE:
-            with self.subTest(min_snr_db=min_snr_db):
-                self.assertEqual(link.select_mode_for_snr(min_snr_db), (mode_id, fec_preset))
+            with self.subTest(min_snr_db=min_snr_db, mode_id=mode_id):
+                symbol_rate = link.WAVEFORM_MODES[mode_id]['symbol_rate']
+                self.assertEqual(
+                    link.select_mode_for_snr(min_snr_db, max_symbol_rate=symbol_rate),
+                    (mode_id, fec_preset))
+
+    def test_max_symbol_rate_none_is_unaffected(self):
+        self.assertEqual(link.select_mode_for_snr(999.0, max_symbol_rate=None),
+                          link.select_mode_for_snr(999.0))
+
+    def test_max_symbol_rate_caps_selection_even_at_high_snr(self):
+        mode_id, fec_preset = link.select_mode_for_snr(999.0, max_symbol_rate=1200)
+        self.assertLessEqual(link.WAVEFORM_MODES[mode_id]['symbol_rate'], 1200)
+        # and it should still pick the BEST mode that fits under that
+        # ceiling, not just any one that fits
+        candidates = [m for m in link.WAVEFORM_MODES if link.WAVEFORM_MODES[m]['symbol_rate'] <= 1200]
+        best_candidate = max(candidates, key=link.mode_raw_bps)
+        self.assertEqual(mode_id, best_candidate)
+
+    def test_max_symbol_rate_falls_back_to_floor_row_if_nothing_fits(self):
+        # Degenerate case - a ceiling below even the floor row's own
+        # symbol rate. Should still return something rather than raise.
+        mode_id, fec_preset = link.select_mode_for_snr(999.0, max_symbol_rate=1)
+        self.assertEqual((mode_id, fec_preset), (0, 'r1_4_k9'))
 
 
 class _FakeClock:

@@ -714,3 +714,304 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               send used isn't otherwise obvious from that line alone.
           User picked this exact structured-block style from a few
           preview options rather than guessing at one.
+  [x] 8.21 Negotiation redesigned to be initiator-driven and symmetric,
+          superseding 8.16's asymmetric per-direction design (user
+          explicitly asked for this after seeing two directions land on
+          different modes in 8.16's live testing): the INITIATOR (whichever
+          station gets a message to send first) measures the link ITSELF
+          and picks ONE mode/FEC that both directions use, rather than each
+          side independently granting the other its own opinion.
+          A station can only ever measure signals arriving AT it, never
+          what it sends, so this needs a real two-phase handshake instead
+          of one exchange:
+            - Phase 1 (mostly reuses the existing REQUEST/GRANT wire
+              format): the initiator (A) sends MODE_REQUEST; the peer (B)
+              measures A's probe and replies with the existing GRANT
+              payload - but that reply is now purely something for A to
+              measure (a "pong"), not authoritative; B does NOT apply
+              anything from it. A measures its OWN reception of B's reply
+              (this is "the initiator's own EVM measurement") and picks a
+              mode via the unchanged select_mode_for_snr()/MODE_SNR_TABLE.
+            - Phase 2 (new): A sends the new CONTROL_OP_MODE_SET (new
+              build_mode_set_frame()/openwave_link.py) naming its choice,
+              retried until B's new CONTROL_OP_MODE_SET_ACK
+              (build_mode_set_ack_frame()) confirms - given how badly a
+              lost/mismatched mode announcement went earlier in this
+              session (8.17's crashes), this is deliberately confirmed,
+              not fire-and-forget. B applies the announced mode to BOTH
+              its own send and receive, then marks itself already-
+              negotiated so its own later first send doesn't redundantly
+              re-negotiate and second-guess the session's established mode.
+          Removed the asymmetric TX/RX mode-tracking machinery from 8.16
+          (_apply_tx_mode/_apply_rx_mode and the _rx_* state) since it's no
+          longer needed once both directions always share one mode -
+          collapsed back to a single _apply_mode(), and _demod_attempts()
+          back to trying just that one mode + control-mode fallback.
+          _mode_banner()'s "(expecting X from peer)" note is gone too
+          (nothing can differ anymore). The old asymmetric design remains
+          fully recoverable from git history (commit 7359245) if ever
+          needed again - nothing kept dead-code-commented alongside the
+          new path.
+          Known, accepted gap (not solved): if both stations get their own
+          first message to send within the same handshake window, both
+          could start as their own initiator concurrently - no tie-
+          breaking implemented.
+          Verified live: re-ran the earlier asymmetric-grant scenario
+          (base-snr-db 15) - both stations now converge on one identical
+          mode (Mode 3/qpsk) for both directions, confirmed by a real
+          bidirectional message exchange. Also re-verified the -6dB floor
+          case still completes the two-phase handshake and delivers
+          reliably. New tests: ControlFrameTests' mode_set/mode_set_ack
+          round trips, and test_negotiate_leaves_both_stations_on_the_
+          same_mode (asserts (mode_id, fec_preset) equality across both
+          stations after only the initiator calls negotiate(), plus B's
+          _auto_negotiate_done).
+  [x] 8.22 /renegotiate, /ping, and /ping survey - interactive commands
+          (any stdin line starting with '/', dispatched by a new
+          _handle_command() instead of send_text()) addressing two gaps:
+          negotiation only ever running once automatically with no way to
+          re-trigger it (relevant now that a runtime-control UI is wanted
+          for ota_sim/ota_station.py - see that memory note), and no way
+          to actually see how the link/different modes are performing
+          short of the one-off Python scripts used earlier this session
+          to calibrate MODE_SNR_TABLE.
+            - /renegotiate: directly calls the existing negotiate() - no
+              protocol changes needed, just a new call site. Added a
+              self._negotiating reentrancy guard to negotiate() itself so
+              a double-trigger can't run two overlapping handshakes and
+              corrupt shared seq/event state.
+            - /ping: new minimal CONTROL_OP_PING/CONTROL_OP_PONG frames
+              (build_ping_frame()/build_pong_frame(), openwave_link.py) -
+              5 round trips at whatever mode is CURRENTLY active, timed
+              locally (time.monotonic(), no wire timestamp needed, same
+              approach negotiate() already uses for its own phases),
+              reporting success count/avg RTT/avg measured SNR
+              (Station._ping_trials(), reused by both /ping and the
+              survey below).
+            - /ping survey: really tests EVERY waveform mode, not a
+              prediction from one measurement (explicitly confirmed with
+              the user - this needed a real design decision: how does the
+              receiving side know to expect a burst at some mode other
+              than its current one, since a receiver can't demodulate
+              what it doesn't know the shape of). Rather than inventing a
+              new "temporarily widen which modes I'll try to decode"
+              mechanism, the survey reuses negotiate()'s own phase 2 -
+              factored out into a new _announce_mode(mode_id, fec_preset)
+              - to actually, genuinely switch BOTH stations to mode X
+              (same confirmed MODE_SET/MODE_SET_ACK round trip --auto
+              itself uses, just with an explicitly chosen mode instead of
+              one picked from select_mode_for_snr()) before testing it
+              for real. No new protocol surface, no receive-side guessing
+              across 5 modes added to the hot path for ordinary traffic.
+              Restores the original mode at the end. Known, accepted
+              limitation: a real chat message sent by either operator
+              during an active survey would be misinterpreted, since the
+              active mode is being changed underneath it - not guarded
+              against.
+          Verified live: /ping against a real link showed real per-trial
+          RTT/SNR; /ping survey genuinely exercised all 5 modes with real
+          transmissions and correctly showed mode 4 (16-QAM) struggling
+          (3/5 succeeded) at a link where modes 0-3 were solid (5/5 each)
+          - a real, honest result, not a guess - then correctly restored
+          the original mode; /renegotiate afterward re-ran the handshake
+          and picked a different mode based on a fresh measurement. New
+          tests: PING/PONG frame round trips, _ping_trials() measuring a
+          real round trip, and ping_survey() visiting every waveform mode
+          then restoring the original.
+  [x] 8.23 /ping survey now ends with a consolidated summary
+          (_ping_survey_summary()) recapping every mode's result together
+          - the live per-mode rows printed while the survey runs scroll
+          away in a longer session, so this is the look-back-at-
+          everything-at-once view - plus a "best fully-reliable mode"
+          pick (highest throughput among modes with zero dropped pings,
+          not just highest success rate), matching MODE_SNR_TABLE's own
+          "use the best you can reliably get" philosophy. New tests
+          (PingSurveySummaryTests) exercise the selection logic directly
+          against synthetic rows, no simulator needed.
+  [x] 8.24 WAVEFORM_MODES gap filled: the original 0-4 spread alternated
+          2x/4x throughput steps (0->1 and 2->3 double via symbol rate
+          alone; 1->2 and 3->4 double via bits/symbol AND symbol rate at
+          once) with no "QPSK at the same 1200 sym/s as Mode 1" entry in
+          between - user noticed this while reading a /ping survey
+          summary. Added as Mode 5 (qpsk, 1200 sym/s), appended rather
+          than inserted/renumbered in throughput order: modes 0-4 are
+          also documented with a worked byte-dump example in
+          OpenWave_Specification.txt, and renumbering would've
+          invalidated that plus every existing test/doc/log reference to
+          a specific mode number, for no real benefit. Real consequence:
+          mode_id is no longer guaranteed monotonic in throughput past
+          mode 4 (mode 5 is slower than mode 4) - added
+          openwave_link.py's mode_raw_bps() (symbol_rate * bits/symbol,
+          the same "bps raw" convention the spec's table already used) so
+          anything that needs to RANK modes does so by actual throughput,
+          not mode_id/iteration order. This was a real, live latent bug
+          fix, not just future-proofing: ota_station.py's
+          _ping_survey_summary() (8.23, added just before this) picked
+          the "best fully-reliable mode" by taking the last such row in
+          sorted-by-mode_id order, which would have silently picked mode
+          5 over mode 4 the moment both happened to be fully reliable in
+          the same survey - fixed to rank by mode_raw_bps() instead.
+          MODE_SNR_TABLE unchanged - mode 5 has identical reliability to
+          modes 2/3 (same modulation, and this simulated baseband models
+          no reliability cost from symbol rate) but lower throughput, so
+          it's dominated by mode 3 under --auto's existing "prefer the
+          fastest same-reliability sibling" logic, same as mode 0/2
+          already are - reachable via manual --mode 5, never auto-picked.
+          New tests: WAVEFORM_MODES[5]/mode_raw_bps() in
+          test_openwave_link.py; a PingSurveySummaryTests case
+          reproducing the exact mode-4-vs-mode-5 ordering bug directly.
+  [x] 8.25 8.24's "append, don't renumber" call reversed: user weighed the
+          cost (invalidating OpenWave_Specification.txt's worked example
+          and every mode-number reference) and wanted the renumber
+          anyway, plus a real-world reason 8.24's mode 5 would rarely
+          ever get used - see below. WAVEFORM_MODES is now:
+            0 bpsk/600, 1 bpsk/1200, 2 qpsk/1200 (was 5), 3 qpsk/2400
+            (was 2), 4 qpsk/4800 (was 3), 5 16qam/9600 (was 4)
+          NOTE FOR READING EARLIER ENTRIES (8.16-8.24): every "mode 3"/
+          "mode 4" mentioned there means what's now mode 4/mode 5 - those
+          entries are left as an accurate record of what happened at the
+          time, not rewritten to the new numbers. OpenWave_Specification.
+          txt's table and worked byte-dump example were updated to match
+          (this is the exact cost 8.24 avoided paying, paid for real this
+          time). mode_raw_bps() (8.24) stays regardless - defensive
+          either way, and _ping_survey_summary() keeps ranking by it
+          rather than trusting mode_id order now that it happens to hold
+          again.
+
+          Also added: a real --bandwidth {narrow,wide} ceiling on what
+          --auto/negotiate()/select_mode_for_snr() will automatically
+          pick (default wide, unchanged behavior) - this simulator's own
+          channel model has no concept of a symbol-rate limit, but a real
+          deployment might (SSB audio bandwidth, legal limits, classic
+          1200-baud packet-radio convention - the user specifically
+          predicted mode 2/QPSK@1200 would end up one of the most-used
+          modes for exactly this reason). narrow caps selection to modes
+          <= NARROWBAND_MAX_SYMBOL_RATE (1200 sym/s, ota_station.py) -
+          manual --mode/--fec and /ping survey are NOT constrained by it,
+          only automatic selection.
+
+          Real finding while wiring this up: MODE_SNR_TABLE previously
+          had only ONE row per reliability tier (pointing at the fastest
+          sibling - e.g. one QPSK row, at mode 4/2400 pre-renumber). A
+          max_symbol_rate filter that excluded that one row (as narrow
+          would for the whole QPSK family above 1200 sym/s) left NOTHING
+          reachable at that reliability tier, falling through past QPSK
+          entirely rather than landing on a slower QPSK mode that still
+          fits - caught by test_max_symbol_rate_caps_selection_even_at_
+          high_snr expecting the best mode UNDER the ceiling. Fixed by
+          giving the QPSK family one row EACH (modes 2/3/4, all at the
+          same 9.0 threshold, since symbol rate doesn't affect reliability
+          in this sim) - select_mode_for_snr() already picks the LAST
+          qualifying row in table order, so unfiltered this still lands
+          on mode 4 (fastest) exactly as before; a ceiling that excludes
+          mode 4's row now correctly leaves mode 3's or mode 2's row
+          standing instead of nothing.
+          New tests: select_mode_for_snr's max_symbol_rate param (none/
+          narrow/degenerate-ceiling-with-nothing-fitting cases); a
+          negotiate()-level test confirming bandwidth='narrow' never
+          exceeds 1200 sym/s even at a clean/high-SNR link that would
+          otherwise reach mode 5. Updated: every mode-number-specific
+          existing test to the new numbering; PingSurveySummaryTests'
+          ordering test switched to a synthetic row order (not tied to
+          which real modes happen to be throughput-inverted, so it keeps
+          testing something meaningful even if the table changes again).
+  [x] 8.26 /ping survey now respects --bandwidth too, not just --auto:
+          with bandwidth='narrow', it only tests modes at or below
+          NARROWBAND_MAX_SYMBOL_RATE (0-2) instead of all six. Different
+          reasoning from --auto's ceiling (which just declines to
+          automatically *pick* a mode above it, but doesn't stop --mode/
+          --fec or a survey from touching it) - the survey's whole point
+          is showing real performance for modes actually usable under the
+          current deployment, so spending several seconds real-testing a
+          mode this station could never actually use doesn't serve that
+          purpose. New test: test_ping_survey_respects_narrow_bandwidth_
+          ceiling, confirming only modes 0-2 get announced/tested (plus
+          the original mode, to restore it) when bandwidth='narrow'.
+  [x] 8.27 /mode, /modes, /fec commands - manual mode/FEC control without
+          restarting the process. /modes lists the Waveform Modes table
+          (same as -h's epilog). /mode N and /fec PRESET both go through
+          _announce_mode() (8.21/8.22's confirmed MODE_SET/MODE_SET_ACK
+          exchange) - the user's explicit requirement: choosing a mode
+          manually has to actually tell the peer and get it confirmed,
+          not just change a local setting the peer never hears about.
+          Bare /mode or /fec (no argument) reports current state instead
+          of changing anything; an invalid mode number or unknown FEC
+          preset logs an error and changes nothing. Either command marks
+          the session already-negotiated (_auto_negotiate_done) so a
+          manual choice made before this station's own first send isn't
+          immediately clobbered by --auto's lazy trigger.
+          Real bug caught by live-testing before writing it up: /fec
+          PRESET only updated self.fec_preset, but a station started
+          without --fec/--auto has self.use_fec=False, which nothing
+          about applying a preset alone would change - the new preset
+          would sit there unused, no different FEC actually applied on
+          the wire. Fixed: /fec now sets use_fec=True first (before
+          _announce_mode(), so max_fragment_chars gets recomputed with
+          FEC's real overhead) - /mode deliberately does NOT force FEC on
+          (modulation choice and FEC on/off are orthogonal; a mode change
+          alone shouldn't silently start encoding).
+          New tests: mode/fec command switches both stations and confirms
+          it (not just applied locally); invalid mode/unknown preset
+          rejected without side effects; /fec turning use_fec on from a
+          station started without it.
+  [x] 8.28 /bandwidth [narrow|wide] - the live-switch counterpart to
+          --bandwidth (8.25), same gap as 8.27 closed for --auto's
+          ceiling specifically: previously startup-only. Deliberately
+          different shape from /mode and /fec: it's a CONSTRAINT on
+          future automatic selection (Station.max_symbol_rate), not a
+          mode choice itself, so it doesn't touch the current mode or
+          send anything to the peer on its own - follow it with
+          /renegotiate (or /mode) to actually apply the new ceiling.
+          Bare /bandwidth reports the current setting; an invalid value
+          logs an error and changes nothing.
+          New tests: updates max_symbol_rate without touching the current
+          mode; invalid value rejected without changing anything.
+  [x] 8.29 /mode now enforces the current --bandwidth ceiling too - user
+          pointed out narrow shouldn't be bypassable at all, and /mode
+          was the one remaining gap (negotiate()/ping_survey()/the GRANT
+          opinion already respected it per 8.25/8.26, but a manual
+          /mode N above the ceiling was still silently honored). A narrow
+          ceiling is a hard limit on what the deployment can actually
+          carry, not just a hint for automatic selection to prefer, so
+          /mode now rejects a request above it with a clear reason
+          (mentioning /bandwidth wide as the way out if the mode is
+          really wanted) rather than silently switching anyway.
+          New test: test_mode_command_rejects_modes_above_narrow_
+          bandwidth_ceiling.
+  [x] 8.30 /help (and /? alias) - the command list had grown to 6
+          (/ping[+survey], /renegotiate, /mode, /modes, /fec,
+          /bandwidth) across 8.16-8.29, all crammed into the one-line
+          startup hint. New _help_text() prints the full reference on
+          demand; the startup hint now just points to /help instead of
+          enumerating everything inline, and an unrecognized command's
+          error does the same rather than repeating the list.
+          New tests: /help lists every command name; /? is a byte-for-
+          byte alias for /help; an unrecognized command's error mentions
+          /help.
+  [x] 8.31 /quit and /exit - clean shutdown from the interactive prompt,
+          same path as EOF/Ctrl+C (transport.close() + the session
+          summary print in run()'s finally block). Needed
+          _handle_command() to actually signal run()'s stdin loop to
+          stop, since it previously had no return value at all - now
+          returns True (keep going) for every existing command, False
+          only for /quit/exit, and run()'s loop breaks when it sees
+          False. New test: /quit and /exit both return False; every
+          other command (including an unrecognized one) still returns
+          True.
+  [x] 8.32 Up/down-arrow command history at the interactive prompt -
+          _stdin_lines() switched from sys.stdin.readline() to input(),
+          plus `import readline` at the top of the file. These look
+          interchangeable but aren't: the stdlib readline module only
+          hooks into input() (giving history/line-editing for free once
+          imported, nothing to call directly), never
+          sys.stdin.readline(), which stays a plain blocking read no
+          matter what's imported - this was the actual reason it never
+          worked before. input() raises EOFError at end-of-input instead
+          of returning '' - handled to end the generator the same way.
+          Not in the stdlib on Windows; import wrapped in try/except so
+          it degrades to plain input() (no history) there instead of
+          failing to start. Verified piped/non-interactive stdin (every
+          live test this session has used) still works identically -
+          input() behaves the same as readline() for that case, the only
+          difference is real-terminal behavior, which a piped test can't
+          exercise directly but is a well-established stdlib pattern.
