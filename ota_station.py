@@ -205,7 +205,7 @@ def _link_stats_lines(receiver, indent='  '):
         lines.append(f"{indent}acks:    {c['acks_rx']} received")
     frag_parts = _nonzero_parts(c, _FRAG_COUNT_LABELS)
     if frag_parts:
-        lines.append(f"{indent}fragments: {', '.join(frag_parts)}")
+        lines.append(f"{indent}message segments: {', '.join(frag_parts)}")
     if c['not_for_us']:
         lines.append(f"{indent}filtered: {c['not_for_us']} not for us")
     mode_info = link.WAVEFORM_MODES.get(receiver.last_mode)
@@ -301,12 +301,19 @@ class Station(asyncio.DatagramProtocol):
 
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
-                 on_message=None, verbose=False):
+                 on_message=None, verbose=False, on_log=None, on_symbols=None):
         self.station_id = station_id
         self.dst_id = dst_id
         self.use_fec = use_fec
         self.use_ack = use_ack
         self.auto = auto
+        # Optional GUI hooks - both None by default, in which case behavior
+        # is identical to before they existed (_log() prints to stderr as
+        # always; nothing extra happens in _handle_received_samples()). See
+        # open_wave_ui, which uses these instead of scraping stderr or
+        # duplicating the RX pipeline to get at received symbols.
+        self._on_log = on_log
+        self._on_symbols = on_symbols
         # Ceiling on what --auto is willing to pick (see
         # NARROWBAND_MAX_SYMBOL_RATE/select_mode_for_snr's max_symbol_rate
         # param) - None (wide, the default) considers every mode, matching
@@ -415,7 +422,10 @@ class Station(asyncio.DatagramProtocol):
             self._on_message(text)
 
     def _log(self, msg):
-        print(msg, file=sys.stderr)
+        if self._on_log:
+            self._on_log(msg)
+        else:
+            print(msg, file=sys.stderr)
 
     # -- asyncio.DatagramProtocol -------------------------------------
     def connection_made(self, transport):
@@ -499,6 +509,8 @@ class Station(asyncio.DatagramProtocol):
             return
 
         self._last_rx_snr_db = modem.estimate_snr_db(symbols, matched_modulation)
+        if self._on_symbols:
+            self._on_symbols(symbols, matched_modulation, self._last_rx_snr_db)
         if self.verbose:
             # Full explanation of what this number is/isn't (blind estimate,
             # no pilot symbols) lives once in openwave_modem.py's
@@ -551,16 +563,17 @@ class Station(asyncio.DatagramProtocol):
         this only makes that loss visible instead of silent."""
         c = self.receiver.counts
         if c['frag_aborted'] > counts_before['frag_aborted']:
-            self._log("[rx] a fragmented message was abandoned mid-run - a fragment never "
-                      "arrived (lost/corrupted) before a later one broke the sequence. "
-                      "Fragments aren't retried, so this message is unrecoverable - try "
+            self._log("[rx] a multi-segment message was abandoned mid-run - a message segment "
+                      "never arrived (lost/corrupted) before a later one broke the sequence. "
+                      "Message segments aren't retried, so this message is unrecoverable - try "
                       "a shorter message, a stronger --fec, or a better link.")
         if c['frag_overflow'] > counts_before['frag_overflow']:
-            self._log("[rx] a fragmented message exceeded the fragment-count safety limit "
+            self._log("[rx] a multi-segment message exceeded the segment-count safety limit "
                       "without completing - abandoned.")
         if c['frag_discarded'] > counts_before['frag_discarded']:
-            self._log("[rx] ignored a stray fragment that didn't match any message in progress "
-                      "(wrong sequence/index/source - likely a symptom of an earlier lost fragment).")
+            self._log("[rx] ignored a stray message segment that didn't match any message in "
+                      "progress (wrong sequence/index/source - likely a symptom of an earlier "
+                      "lost segment).")
 
     def _handle_control_frame(self, header, payload):
         """Dispatches a decoded PACKET_TYPE_CONTROL frame - see
@@ -615,6 +628,16 @@ class Station(asyncio.DatagramProtocol):
             # already negotiated so our own first send later doesn't
             # redundantly re-negotiate and second-guess an already-
             # established session mode.
+            # A negotiated MODE_SET always carries a real, calibrated FEC
+            # preset (select_mode_for_snr() never returns "no FEC") - so
+            # adopting one means actually USING FEC, not just remembering
+            # its preset name for later. Without this, a station that
+            # started with FEC off (no --fec/--auto) would silently keep
+            # sending/expecting unencoded frames after "adopting" a
+            # negotiated mode, while the peer (which measured/chose this
+            # preset) sends FEC-encoded ones - every burst then fails to
+            # decode despite negotiate() having just reported success.
+            self.use_fec = True
             self._apply_mode(parsed['mode_id'], parsed['fec_preset'])
             self._auto_negotiate_done = True
             ack = link.build_mode_set_ack_frame(
@@ -711,6 +734,11 @@ class Station(asyncio.DatagramProtocol):
                 self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
             self._log(f"[negotiate] measured our own link at ~{self._last_rx_snr_db:.1f}dB - "
                       f"setting both directions to {link.format_mode(mode_id)}/{fec_preset}")
+            # See the matching comment on the CONTROL_OP_MODE_SET handler -
+            # select_mode_for_snr() always returns a real FEC preset, so
+            # acting on one means actually enabling FEC, not just applying
+            # its preset name.
+            self.use_fec = True
             await self._announce_mode(mode_id, fec_preset)
         finally:
             self._negotiating = False
@@ -1038,7 +1066,7 @@ class Station(asyncio.DatagramProtocol):
             if self.verbose:
                 air_bytes = self.stats['sent_air_bytes'] - air_bytes_before
                 self._log(f"[stats] sent {_human_size(len(text_bytes))} text -> "
-                          f"{len(frames)} fragment(s), {_human_size(air_bytes)} on-air "
+                          f"{len(frames)} message segment(s), {_human_size(air_bytes)} on-air "
                           f"(no --ack: no delivery confirmation)")
             return
 
@@ -1046,11 +1074,11 @@ class Station(asyncio.DatagramProtocol):
         for i, frame in enumerate(frames):
             seq = (first_seq + i) % link.SEQ_MODULUS
             if not await self._send_with_retry(seq, frame):
-                self._log(f"[ack] gave up on fragment {i + 1}/{len(frames)} (seq {seq}) - "
-                          f"message incomplete, aborting remaining fragments")
+                self._log(f"[ack] gave up on message segment {i + 1}/{len(frames)} (seq {seq}) - "
+                          f"message incomplete, aborting remaining segments")
                 return
             if self.verbose and len(frames) > 1:
-                self._log(f"[ack] fragment {i + 1}/{len(frames)} delivered")
+                self._log(f"[ack] message segment {i + 1}/{len(frames)} delivered")
 
         elapsed = time.monotonic() - started_at
         note = ""
@@ -1059,8 +1087,8 @@ class Station(asyncio.DatagramProtocol):
             bps = (len(text_bytes) * 8 / elapsed) if elapsed > 0 else 0
             note = (f" ({_human_size(len(text_bytes))} text / {_human_size(air_bytes)} on-air "
                     f"in {elapsed:.2f}s, {bps:.0f} bps text-level)")
-        self._log(f"[ack] delivered - {len(frames)} fragment(s) acknowledged by {self.dst_id} "
-                  f"(mode {self.mode_id}/{self.modulation}, {self.fec_preset}){note}")
+        self._log(f"[ack] delivered - {len(frames)} message segment(s) acknowledged by "
+                  f"{self.dst_id} (mode {self.mode_id}/{self.modulation}, {self.fec_preset}){note}")
 
     # -- ACK/retry ------------------------------------------------------
     def _on_ack_needed(self, seq):
@@ -1114,7 +1142,7 @@ class Station(asyncio.DatagramProtocol):
         s = self.stats
         sent_bps = (s['sent_text_bytes'] * 8 / elapsed) if elapsed > 0 else 0
         recv_bps = (s['received_text_bytes'] * 8 / elapsed) if elapsed > 0 else 0
-        sent_extra = ([f"{s['sent_fragments']} fragments"] if s['sent_fragments'] != s['sent_messages'] else []) \
+        sent_extra = ([f"{s['sent_fragments']} message segments"] if s['sent_fragments'] != s['sent_messages'] else []) \
             + [f"{sent_bps:.0f} bps"]
         lines = [
             f"[{self.station_id}] session summary ({elapsed:.1f}s):",
@@ -1281,7 +1309,7 @@ def _mode_banner(station_id, station):
     return (f"[{station_id}] mode={station.mode_id} ({station.modulation}) fec={fec_note} "
             f"- max ~{station.max_fragment_chars} chars per burst at these settings "
             f"(UDP's {MAX_UDP_PAYLOAD_BYTES}-byte datagram limit); longer messages "
-            f"auto-fragment into multiple bursts.")
+            f"auto-split into multiple message segments.")
 
 
 async def run(args):
