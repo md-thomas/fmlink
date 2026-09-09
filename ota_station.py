@@ -55,6 +55,8 @@ Known v1 limitations:
 """
 import argparse
 import asyncio
+import os
+import signal
 import sys
 import time
 
@@ -67,6 +69,15 @@ try:
     import readline  # noqa: F401
 except ImportError:
     pass
+
+try:
+    # POSIX-only, like readline above - see main()'s SIGINT handler for why
+    # this is needed at all (restoring the terminal's own echo, which
+    # readline turns off for its own line-editing and would otherwise never
+    # get to turn back on itself - see that handler's docstring).
+    import termios
+except ImportError:
+    termios = None
 
 import numpy as np
 
@@ -1409,6 +1420,45 @@ def main():
                               '(bytes/messages sent+received, elapsed time) always prints on exit '
                               'regardless of this flag.')
     args = parser.parse_args()
+
+    # _stdin_lines() reads via input() on a background thread (see its own
+    # docstring) so readline can give free history/line-editing. That's a
+    # real problem specifically for Ctrl+C: asyncio can never actually
+    # cancel a thread already blocked inside a blocking call (a documented
+    # asyncio/run_in_executor limitation - concurrent.futures.Future.
+    # cancel() is a no-op once the underlying call has started), so the
+    # normal KeyboardInterrupt -> asyncio.run() shutdown path doesn't just
+    # fail to stop that read promptly, it HANGS INDEFINITELY - asyncio.run()
+    # tries to cancel and then wait for every remaining task before
+    # returning, including that stuck one, which never completes on its
+    # own without more stdin input. Confirmed with a pty-based repro: the
+    # process was still alive 30+s after SIGINT. And because that
+    # background input() never gets to return normally, readline never
+    # restores the raw/echo-off terminal mode it set up for its own line-
+    # editing either, leaving the shell this was run from echo-less - the
+    # visible symptom (typed characters stop appearing) of the same root
+    # cause as the hang.
+    #
+    # Handling SIGINT directly, restoring the terminal ourselves, and
+    # exiting immediately via os._exit() - instead of letting a raised
+    # KeyboardInterrupt unwind through asyncio.run()'s own cancel-and-wait
+    # shutdown sequence at all - sidesteps both problems in one step.
+    # os._exit() skips further Python-level cleanup (no waiting for
+    # threads, no atexit handlers), which is exactly what's needed here:
+    # nothing else CAN cleanly finish given the stuck background thread.
+    saved_termios = None
+    if termios is not None:
+        try:
+            saved_termios = termios.tcgetattr(sys.stdin.fileno())
+        except termios.error:
+            pass  # not a real tty (e.g. piped input) - nothing to save/restore
+
+    def _handle_sigint(signum, frame):
+        if saved_termios is not None:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved_termios)
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, _handle_sigint)
 
     try:
         asyncio.run(run(args))
