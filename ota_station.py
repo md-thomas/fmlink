@@ -30,9 +30,7 @@ Known v1 limitations:
     own comment has the full story); BPSK/QPSK are grounded in real
     round-trip reliability measurements.
   - This is an interactive-messaging tool, not a bulk-file-transfer one:
-    UDP's ~65KB single-datagram ceiling bounds worst-case on-air sample
-    counts (low-order modulation + strong FEC + a near-MAX_PAYLOAD_LEN
-    fragment can exceed it). Use file_xfer_test.sh for bulk transfers.
+    use file_xfer_test.sh for bulk transfers.
   - --ack retries per fragment (stop-and-wait: send one, await its own
     ACK, then the next), so a lost fragment only costs that fragment a
     retry, not the whole message - but fragments are still sent strictly
@@ -90,7 +88,7 @@ from modulate import MODULATORS
 from demodulate import DEMODULATORS
 
 try:
-    from ota_sim.simulator import encode_peer_id, PEER_ID_LEN
+    from ota_sim.simulator import SimClient
 except ImportError:
     sys.exit("error: ota_sim is not installed - run `pip install -e ../ota_sim` "
              "from this repo (see /data/Projects/ota_sim/README.md)")
@@ -109,8 +107,11 @@ DEFAULT_FEC_PRESET = 'r1_4_k7'
 # openwave_link.py's MODE_SNR_TABLE): measured directly while building
 # this - a Control frame's fixed ~120-byte overhead (preamble+header+CRC+
 # padding) already costs ~81KB at BPSK+r1_4_k9 after pulse-shaping, over
-# MAX_UDP_PAYLOAD_BYTES before any actual payload is even counted, so a
-# MODE_GRANT could never be sent at all. r1_2_k9 is the strongest preset
+# the old single-UDP-datagram ceiling (~64KB) before any actual payload
+# was even counted, so a MODE_GRANT could never be sent at all. (The relay
+# is TCP now, with no such ceiling - r1_4_k9 would fit today, but switching
+# changes the control channel both peers must agree on, so it stays a
+# deliberate protocol decision rather than a side effect.) r1_2_k9 is the strongest preset
 # that measurably still fits (~52KB, ~13KB of headroom) - it's the same
 # rate as r1_2_k3 (the OTHER empirical anchor, proven good at 0dB) with
 # the best available K for slightly better correction at that rate, NOT
@@ -136,12 +137,6 @@ PING_TIMEOUT_S = 2.0
 # still has a BPSK sibling one step down, i.e. the same "1200 sym/s
 # ceiling" a classic packet-radio-style narrowband channel would impose.
 NARROWBAND_MAX_SYMBOL_RATE = 1200
-# Largest UDP payload a standard IPv4 socket can send in one datagram
-# (65535 - 8-byte UDP header - 20-byte IPv4 header). A burst that would
-# exceed this can't be sent at all - asyncio's transport swallows the
-# resulting OSError internally and silently kills itself, so this has to
-# be checked before calling sendto(), not caught after.
-MAX_UDP_PAYLOAD_BYTES = 65507
 
 
 def _human_size(num_bytes, short=False):
@@ -304,11 +299,11 @@ def _help_text():
     ])
 
 
-class Station(asyncio.DatagramProtocol):
-    """One live OpenWave station. Sends text via send_text(); received,
-    decoded messages arrive via the on_message callback. Talks to a peer
-    only indirectly, through an ota_sim simulator's UDP relay - never
-    directly to the peer's address."""
+class Station:
+    """One live OpenWave station. connect() to an ota_sim simulator, then
+    send text via send_text(); received, decoded messages arrive via the
+    on_message callback. Talks to a peer only indirectly, through the
+    simulator's relay - never directly to the peer's address."""
 
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
@@ -347,8 +342,7 @@ class Station(asyncio.DatagramProtocol):
             'received_messages': 0, 'received_text_bytes': 0, 'received_air_bytes': 0,
         }
 
-        self.transport = None
-        self._sim_addr = None
+        self._sim = None  # ota_sim SimClient, set by connect()
         self._seq = 0
 
         self.receiver = link.LinkReceiver(
@@ -407,16 +401,10 @@ class Station(asyncio.DatagramProtocol):
         self.fec_preset = fec_preset or mode_info['fec_preset']
         self._fec_generators, self._fec_k = fec.PRESETS[self.fec_preset]
 
-        # Depends only on mode/fec, not per-message - recomputed here (not
-        # just at __init__) since a negotiated mode change can move this
-        # ceiling a lot. Used as build_fragmented_frames()'s chunk_size in
-        # send_text(), so ANY message length auto-splits into bursts that
-        # actually fit in one UDP datagram - not just messages over
-        # link.MAX_PAYLOAD_LEN (that's the protocol's own fragmentation
-        # threshold, unrelated to what a given mode/FEC combo can fit on
-        # the wire; at a tight combo like mode 0 + r1_4_k7 it can be far
-        # smaller than MAX_PAYLOAD_LEN).
-        self.max_fragment_chars = max(1, self.max_single_fragment_chars())
+        # build_fragmented_frames()'s chunk_size in send_text(). Once had
+        # to shrink per mode/FEC to fit one UDP datagram; the TCP relay has
+        # no per-burst ceiling, so it's simply the protocol's own limit.
+        self.max_fragment_chars = link.MAX_PAYLOAD_LEN
 
     def _handle_message(self, text):
         if self._suppress_next_message:
@@ -438,14 +426,18 @@ class Station(asyncio.DatagramProtocol):
         else:
             print(msg, file=sys.stderr)
 
-    # -- asyncio.DatagramProtocol -------------------------------------
-    def connection_made(self, transport):
-        self.transport = transport
+    # -- simulator connection -----------------------------------------
+    async def connect(self, sim_host, sim_port):
+        """Connect to an ota_sim simulator. Registers this station's
+        peer_id immediately, so a receive-only station is reachable before
+        it ever sends anything."""
+        self._sim = await SimClient(self.station_id, self._burst_received).connect(sim_host, sim_port)
 
-    def datagram_received(self, data, addr):
-        if len(data) < PEER_ID_LEN:
-            return
-        payload = data[PEER_ID_LEN:]
+    def close(self):
+        if self._sim is not None:
+            self._sim.close()
+
+    def _burst_received(self, payload):
         try:
             self._handle_received_samples(payload)
         except Exception as exc:  # a malformed/short burst shouldn't kill the station
@@ -951,83 +943,38 @@ class Station(asyncio.DatagramProtocol):
                   f"{self.fec_preset}")
         self._log(_ping_survey_summary(rows))
 
-    def register(self):
-        """Send a zero-length 'hello' datagram to the simulator so it
-        learns this station's address right away, even if this station
-        never sends anything itself (a receive-only listener would
-        otherwise be unreachable - the simulator only learns a peer's
-        address from something it has sent)."""
-        self.transport.sendto(encode_peer_id(self.station_id), self._sim_addr)
-
     # -- TX pipeline: frame bytes -> FEC -> modulate -> pulse-shape -----
     def _transmit_frame(self, frame_bytes, modulate_fn=None, use_fec=None,
-                         fec_generators=None, fec_k=None, mode_label=None):
+                         fec_generators=None, fec_k=None):
         """Defaults to the station's current DATA mode/FEC. Control frames
         (see _transmit_control_frame) pass the fixed control-channel
-        modulate/FEC instead, reusing this same size-check/send/stats
-        logic rather than duplicating it."""
+        modulate/FEC instead, reusing this same send/stats logic rather
+        than duplicating it."""
         modulate_fn = modulate_fn or self._modulate
         use_fec = self.use_fec if use_fec is None else use_fec
         fec_generators = self._fec_generators if fec_generators is None else fec_generators
         fec_k = self._fec_k if fec_k is None else fec_k
-        mode_label = mode_label or f"mode {self.mode_id}"
 
         encoded = fec.encode_frame(frame_bytes, fec_generators, fec_k) if use_fec else frame_bytes
         symbols = modulate_fn(encoded)
         samples = pulse.pulse_shape(symbols)
-        out = encode_peer_id(self.station_id) + samples.astype(np.complex64).tobytes()
-        if len(out) > MAX_UDP_PAYLOAD_BYTES:
-            fec_note = "with FEC" if use_fec else "no FEC"
-            self._log(f"[tx error] burst is {_human_size(len(out))}, over UDP's "
-                      f"{_human_size(MAX_UDP_PAYLOAD_BYTES)} datagram limit - NOT sent. "
-                      f"({fec_note} at {mode_label} is too expensive for this message length; "
-                      f"try a higher --mode/fewer bits of FEC redundancy, or a shorter message)")
+        out = samples.astype(np.complex64).tobytes()
+        if self._sim is None or not self._sim.connected:
+            self._log("[tx error] not connected to the simulator - burst NOT sent")
             return
-        self.transport.sendto(out, self._sim_addr)
+        self._sim.send(out)
         self.stats['sent_air_bytes'] += len(out)
 
     def _transmit_control_frame(self, frame_bytes):
         self._transmit_frame(frame_bytes, modulate_fn=self._control_modulate, use_fec=True,
                               fec_generators=self._control_fec_generators,
-                              fec_k=self._control_fec_k,
-                              mode_label=f"the control channel ({self._control_modulation})")
-
-    def max_single_fragment_chars(self):
-        """Binary-search the largest single-fragment ASCII message that
-        fits in one UDP datagram at this station's current --mode/--fec
-        settings - purely informational, computed once at startup so the
-        size ceiling (see _transmit_frame) is visible up front instead of
-        discovered message-by-message. A longer message just auto-
-        fragments into multiple bursts (build_fragmented_frames), each
-        independently bounded the same way - this is the per-burst limit,
-        not a hard cap on total message length."""
-        def burst_size(n):
-            frame = link.build_frame(b'x' * n, seq=0, mode_id=self.mode_id,
-                                      src_id=self.station_id.encode(), dst_id=self.dst_id.encode())
-            encoded = (fec.encode_frame(frame, self._fec_generators, self._fec_k)
-                       if self.use_fec else frame)
-            symbols = self._modulate(encoded)
-            samples = pulse.pulse_shape(symbols)
-            return len(samples.astype(np.complex64).tobytes()) + PEER_ID_LEN
-
-        lo, hi = 0, link.MAX_PAYLOAD_LEN
-        if burst_size(hi) <= MAX_UDP_PAYLOAD_BYTES:
-            return hi
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if burst_size(mid) <= MAX_UDP_PAYLOAD_BYTES:
-                lo = mid
-            else:
-                hi = mid - 1
-        return lo
+                              fec_k=self._control_fec_k)
 
     async def send_text(self, text):
         """Build, FEC-encode (if enabled), modulate, pulse-shape, and
         transmit one message. Longer-than-max_fragment_chars messages
         auto-split into independent bursts (build_fragmented_frames()'s
-        existing semantics - each fragment is its own frame/burst),
-        chunked to what actually fits in one UDP datagram at this
-        station's --mode/--fec settings, not link.MAX_PAYLOAD_LEN.
+        existing semantics - each fragment is its own frame/burst).
 
         With --ack, fragments are sent stop-and-wait: each one is
         transmitted and its OWN ACK awaited (with retry) before the next
@@ -1122,8 +1069,8 @@ class Station(asyncio.DatagramProtocol):
         self.retry_mgr.reset()
         # note_sent() before the actual transmit: an incoming ACK is only
         # ever processed by the event loop on a later iteration (never
-        # synchronously inside our own sendto() call), so this ordering
-        # doesn't matter for real UDP - but marking "pending" first, before
+        # synchronously inside our own send() call), so this ordering
+        # doesn't matter in practice - but marking "pending" first, before
         # anything could possibly race it, costs nothing and removes the
         # assumption entirely.
         self.retry_mgr.note_sent(seq)
@@ -1276,9 +1223,7 @@ async def _handle_command(station, line):
         # with this preset" - without this, /fec on a station started
         # without --fec/--auto would silently do nothing (fec_preset gets
         # set, but self.use_fec stays off, so nothing on the wire
-        # actually changes). Set before _announce_mode() so
-        # max_fragment_chars is recomputed with FEC's overhead accounted
-        # for (see _apply_mode()/max_single_fragment_chars()).
+        # actually changes).
         station.use_fec = True
         await station._announce_mode(station.mode_id, preset)
         station._auto_negotiate_done = True
@@ -1318,8 +1263,7 @@ async def _handle_command(station, line):
 def _mode_banner(station_id, station):
     fec_note = f"on ({station.fec_preset})" if station.use_fec else "off"
     return (f"[{station_id}] mode={station.mode_id} ({station.modulation}) fec={fec_note} "
-            f"- max ~{station.max_fragment_chars} chars per burst at these settings "
-            f"(UDP's {MAX_UDP_PAYLOAD_BYTES}-byte datagram limit); longer messages "
+            f"- max {station.max_fragment_chars} chars per burst; longer messages "
             f"auto-split into multiple message segments.")
 
 
@@ -1334,16 +1278,14 @@ async def run(args):
         use_fec=args.fec or args.auto, fec_preset=args.fec_preset, use_ack=args.ack,
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
     )
-    loop = asyncio.get_running_loop()
-    transport, _ = await loop.create_datagram_endpoint(
-        lambda: station, local_addr=('0.0.0.0', args.local_port),
-    )
-    station._sim_addr = (args.sim_host, args.sim_port)
-    station.register()
-    local_port = transport.get_extra_info('sockname')[1]
+    try:
+        await station.connect(args.sim_host, args.sim_port)
+    except OSError as exc:
+        sys.exit(f"error: can't reach the ota_sim simulator at {args.sim_host}:{args.sim_port} "
+                 f"({exc}) - is `python3 -m ota_sim.simulator` running?")
     bandwidth_note = f" bandwidth={args.bandwidth}" if args.auto else ""
     print(f"[{args.station_id}] ack={'on' if args.ack else 'off'} auto={'on' if args.auto else 'off'}"
-          f"{bandwidth_note} - local port {local_port}, relaying via "
+          f"{bandwidth_note} - connected, relaying via "
           f"{args.sim_host}:{args.sim_port}.", file=sys.stderr)
     print(_mode_banner(args.station_id, station), file=sys.stderr)
 
@@ -1369,7 +1311,7 @@ async def run(args):
             else:
                 await station.send_text(line)
     finally:
-        transport.close()
+        station.close()
         print(station.stats_summary(), file=sys.stderr)
 
 
@@ -1381,9 +1323,6 @@ def main():
     parser.add_argument('--dst', default='ALL', help="Peer's callsign (default: ALL/broadcast)")
     parser.add_argument('--sim-host', required=True, help='ota_sim simulator address')
     parser.add_argument('--sim-port', type=int, default=9500, help='ota_sim simulator port (default: 9500)')
-    parser.add_argument('--local-port', type=int, default=0,
-                         help='Local UDP port to bind (default: 0 = OS-assigned; set explicitly '
-                              'when crossing machines/firewalls)')
     parser.add_argument('--mode', type=int, default=0, choices=sorted(link.WAVEFORM_MODES),
                          help='Waveform Mode ID - selects modulation/symbol rate (see Waveform '
                               'Modes table below; default: 0)')

@@ -75,10 +75,12 @@ long-running interactive process, not a one-shot pipeline stage.
   `readline`, degrades gracefully where unavailable e.g. Windows).
 - **Network**: talks to a peer station through `ota_sim` (a separate
   sibling project at `/data/Projects/ota_sim`, its own package, zero
-  OpenWave-specific code) — a small UDP relay that models path loss,
+  OpenWave-specific code) — a small TCP relay that models path loss,
   Rayleigh fading, AWGN, and configurable latency between two peers
-  exchanging raw IQ samples. Peer addresses are learned dynamically from
-  a "hello" datagram, not statically configured.
+  exchanging raw IQ samples. Its `--channel fm` mode instead models an FM
+  transceiver pair's audio path, carrying PCM audio; the station doesn't
+  speak that yet. Each peer identifies itself by callsign on connect; no
+  static address configuration.
 - **Mode/FEC negotiation** (`--auto`): initiator-driven and symmetric —
   whichever station gets a message to send first measures the link
   itself and picks ONE mode/FEC both directions use, via a two-phase
@@ -161,10 +163,8 @@ and `ota_station.py`/`ota_sim` live-link testing).
   design (`WAVEFORM_MODES`) is deliberate — adding a new modulation
   means adding a constellation dict entry, not restructuring the link
   layer.
-- **Not a bulk-file-transfer tool via `ota_station.py`.** UDP's ~65KB
-  single-datagram ceiling bounds worst-case on-air sample counts for the
-  live station; use `file_xfer_test.sh` (the file-based pipeline) for
-  bulk transfers instead.
+- **Not a bulk-file-transfer tool via `ota_station.py`.** Use
+  `file_xfer_test.sh` (the file-based pipeline) for bulk transfers.
 - **Negotiation is setup-only, not continuous mid-session adaptation.**
   A bad turn partway through a session doesn't trigger an automatic
   re-probe (though `/renegotiate` can be triggered manually).

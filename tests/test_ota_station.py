@@ -28,18 +28,12 @@ TIMEOUT_S = 5.0
 
 
 async def _create_station(station_id, dst_id, **kwargs):
-    station = Station(station_id=station_id, dst_id=dst_id, **kwargs)
-    loop = asyncio.get_running_loop()
-    transport, _ = await loop.create_datagram_endpoint(
-        lambda: station, local_addr=('127.0.0.1', 0))
-    return station, transport
+    """Not yet connected - call station.connect(*sim.address)."""
+    return Station(station_id=station_id, dst_id=dst_id, **kwargs)
 
 
 async def _create_simulator(channel):
-    loop = asyncio.get_running_loop()
-    transport, protocol = await loop.create_datagram_endpoint(
-        lambda: OTASimulator(channel), local_addr=('127.0.0.1', 0))
-    return protocol, transport
+    return await OTASimulator(channel, log=lambda msg: None).start('127.0.0.1', 0)
 
 
 async def _wait_for(predicate, timeout_s=TIMEOUT_S, interval_s=0.02):
@@ -62,31 +56,62 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=1)
-            sim, sim_transport = await _create_simulator(channel)
+            sim = await _create_simulator(channel)
 
             received = []
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
-                                                     on_message=None)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
-                                                     on_message=received.append)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                      on_message=None)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                      on_message=received.append)
 
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.05)  # let both registrations land before sending
 
             await a.send_text("integration test message")
 
             ok = await _wait_for(lambda: len(received) > 0)
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertTrue(ok, "message never arrived within timeout")
             self.assertEqual(received[0], "integration test message")
+
+        self._run(scenario())
+
+    def test_burst_far_beyond_old_udp_ceiling_arrives_in_one_fragment(self):
+        # Mode 0 + r1_4_k9 with a full MAX_PAYLOAD_LEN payload is several
+        # hundred KB of samples - the old UDP relay's ~64KB datagram limit
+        # forced this down to a few dozen chars per burst.
+        async def scenario():
+            channel = OTALink(distance_m=500, reference_distance_m=500,
+                              base_snr_db=60, fading=False, drop_prob=0.0,
+                              latency_s=0.01, jitter_s=0.0, seed=1)
+            sim = await _create_simulator(channel)
+            received = []
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0, use_fec=True,
+                                      fec_preset='r1_4_k9')
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0, use_fec=True,
+                                      fec_preset='r1_4_k9', on_message=received.append)
+            await a.connect(*sim.address)
+            await b.connect(*sim.address)
+            await asyncio.sleep(0.05)
+
+            text = 'x' * link.MAX_PAYLOAD_LEN
+            await a.send_text(text)
+            ok = await _wait_for(lambda: len(received) > 0)
+
+            a.close()
+            b.close()
+            sim.close()
+
+            self.assertTrue(ok, "message never arrived within timeout")
+            self.assertEqual(received[0], text)
+            self.assertEqual(a.stats['sent_fragments'], 1)
+            self.assertGreater(a.stats['sent_air_bytes'], 4 * 65507)
 
         self._run(scenario())
 
@@ -95,27 +120,25 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=2)
-            sim, sim_transport = await _create_simulator(channel)
+            sim = await _create_simulator(channel)
 
             received = []
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0, use_ack=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0, use_ack=True,
-                                                     on_message=received.append)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0, use_ack=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0, use_ack=True,
+                                      on_message=received.append)
 
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.05)  # let both registrations land before sending
 
             await a.send_text("ack test")
 
             ok = await _wait_for(lambda: not a.retry_mgr.is_pending)
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertTrue(ok, "ACK never resolved within timeout")
             self.assertEqual(received, ["ack test"])
@@ -132,22 +155,20 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=1000, reference_distance_m=1000,
                                base_snr_db=base_snr_db, fading=False, drop_prob=0.0,
                                latency_s=0.005, jitter_s=0.0, seed=seed)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
-                                                     use_fec=True, use_ack=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
-                                                     use_fec=True, use_ack=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                      use_fec=True, use_ack=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                      use_fec=True, use_ack=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
             await a.negotiate()
             result = (a.mode_id, a.fec_preset)
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
             return result
 
         async def scenario():
@@ -167,23 +188,21 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=1000, reference_distance_m=1000,
                                base_snr_db=0, fading=False, drop_prob=0.0,
                                latency_s=0.005, jitter_s=0.0, seed=1)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
-                                                     use_fec=True, use_ack=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
-                                                     use_fec=True, use_ack=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                      use_fec=True, use_ack=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                      use_fec=True, use_ack=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             await a.negotiate()  # only A initiates - B never calls negotiate() itself
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertEqual((a.mode_id, a.fec_preset), (b.mode_id, b.fec_preset))
             self.assertTrue(b._auto_negotiate_done,
@@ -202,23 +221,21 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=6)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
-                                                     use_fec=True, use_ack=True, bandwidth='narrow')
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
-                                                     use_fec=True, use_ack=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                      use_fec=True, use_ack=True, bandwidth='narrow')
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                      use_fec=True, use_ack=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             await a.negotiate()
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertLessEqual(link.WAVEFORM_MODES[a.mode_id]['symbol_rate'], 1200)
             self.assertEqual((a.mode_id, a.fec_preset), (b.mode_id, b.fec_preset))
@@ -233,21 +250,19 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=8)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0, use_fec=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0, use_fec=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0, use_fec=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0, use_fec=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             await _handle_command(a, '/mode 3')
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertEqual(a.mode_id, 3)
             self.assertEqual((a.mode_id, a.fec_preset), (b.mode_id, b.fec_preset),
@@ -262,21 +277,19 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=9)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=2, use_fec=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=2, use_fec=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=2, use_fec=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=2, use_fec=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             await _handle_command(a, '/fec r1_4_k9')
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertEqual(a.mode_id, 2, "mode must be unchanged by /fec")
             self.assertEqual(a.fec_preset, 'r1_4_k9')
@@ -292,18 +305,17 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=12)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=1)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            a.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
             await asyncio.sleep(0.02)
             self.assertFalse(a.use_fec, "sanity check - station must start without FEC")
 
             await _handle_command(a, '/fec r1_2_k9')
 
-            a_transport.close()
-            sim_transport.close()
+            a.close()
+            sim.close()
 
             self.assertTrue(a.use_fec)
             self.assertEqual(a.fec_preset, 'r1_2_k9')
@@ -399,17 +411,16 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=10)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            a.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             await _handle_command(a, '/mode 99')
 
-            a_transport.close()
-            sim_transport.close()
+            a.close()
+            sim.close()
 
             self.assertEqual(a.mode_id, 1)
             self.assertFalse(a._auto_negotiate_done)
@@ -425,18 +436,17 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=13)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=1,
-                                                     use_fec=True, bandwidth='narrow')
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            a.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1,
+                                      use_fec=True, bandwidth='narrow')
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             await _handle_command(a, '/mode 5')  # 16-QAM @ 9600 sym/s - over the 1200 ceiling
 
-            a_transport.close()
-            sim_transport.close()
+            a.close()
+            sim.close()
 
             self.assertEqual(a.mode_id, 1, "must stay on the original mode, not switch to 5")
             self.assertFalse(a._auto_negotiate_done)
@@ -448,18 +458,17 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=11)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            a.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
             await asyncio.sleep(0.02)
             original_fec_preset = a.fec_preset
 
             await _handle_command(a, '/fec not-a-real-preset')
 
-            a_transport.close()
-            sim_transport.close()
+            a.close()
+            sim.close()
 
             self.assertEqual(a.fec_preset, original_fec_preset)
             self.assertFalse(a._auto_negotiate_done)
@@ -475,20 +484,18 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=3)
-            sim, sim_transport = await _create_simulator(channel)
+            sim = await _create_simulator(channel)
 
             received = []
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0,
-                                                     use_fec=True, use_ack=True, auto=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0,
-                                                     use_fec=True, use_ack=True,
-                                                     on_message=received.append)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0,
+                                      use_fec=True, use_ack=True, auto=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0,
+                                      use_fec=True, use_ack=True,
+                                      on_message=received.append)
 
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.05)
 
             self.assertFalse(a._auto_negotiate_done, "must not negotiate before there's anything to send")
@@ -512,9 +519,9 @@ class OTAStationIntegrationTests(unittest.TestCase):
                               "negotiate() must not run again on a later send")
             self.assertEqual(a.mode_id, negotiated_mode)
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
         self._run(scenario())
 
@@ -523,21 +530,19 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=4)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=0)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             results, summary = await a._ping_trials(count=3)
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             self.assertEqual(len(results), 3)
             self.assertTrue(all(r['ok'] for r in results), results)
@@ -559,17 +564,16 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=14)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=0)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            a.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             results, summary = await a._ping_trials(count=1)
 
-            a_transport.close()
-            sim_transport.close()
+            a.close()
+            sim.close()
 
             self.assertFalse(results[0]['ok'])
             self.assertEqual(results[0]['failure_reason'], 'no_reply')
@@ -605,14 +609,12 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=5)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True)
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=1, use_fec=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=1, use_fec=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             original = (a.mode_id, a.fec_preset)
@@ -627,9 +629,9 @@ class OTAStationIntegrationTests(unittest.TestCase):
 
             await a.ping_survey()
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             # every waveform mode announced once during the survey, plus once
             # more at the end to restore the original mode
@@ -649,15 +651,13 @@ class OTAStationIntegrationTests(unittest.TestCase):
             channel = OTALink(distance_m=500, reference_distance_m=500,
                                base_snr_db=60, fading=False, drop_prob=0.0,
                                latency_s=0.01, jitter_s=0.0, seed=7)
-            sim, sim_transport = await _create_simulator(channel)
-            a, a_transport = await _create_station('K0MDT', 'W1AW', mode_id=1,
-                                                     use_fec=True, bandwidth='narrow')
-            b, b_transport = await _create_station('W1AW', 'K0MDT', mode_id=1, use_fec=True)
-            sim_addr = sim_transport.get_extra_info('sockname')
-            a._sim_addr = sim_addr
-            b._sim_addr = sim_addr
-            a.register()
-            b.register()
+            sim = await _create_simulator(channel)
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1,
+                                      use_fec=True, bandwidth='narrow')
+            b = await _create_station('W1AW', 'K0MDT', mode_id=1, use_fec=True)
+            sim_addr = sim.address
+            await a.connect(*sim_addr)
+            await b.connect(*sim_addr)
             await asyncio.sleep(0.02)
 
             visited_modes = []
@@ -670,9 +670,9 @@ class OTAStationIntegrationTests(unittest.TestCase):
 
             await a.ping_survey()
 
-            a_transport.close()
-            b_transport.close()
-            sim_transport.close()
+            a.close()
+            b.close()
+            sim.close()
 
             expected = [m for m in sorted(link.WAVEFORM_MODES)
                         if link.WAVEFORM_MODES[m]['symbol_rate'] <= 1200]

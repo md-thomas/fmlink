@@ -483,10 +483,11 @@ and the other station on machine 2 with `--sim-host <machine-1's address>`.
 **Three machines**: run the simulator on its own machine; each station
 points `--sim-host` at it, from wherever it happens to be running.
 
-The simulator learns each station's real network address from the first
-datagram it sends (a small "hello" `ota_station.py` sends automatically at
-startup) - there's no static address configuration needed on the simulator
-side beyond its own `--listen-host`/`--listen-port`.
+Each station connects to the simulator over TCP (`--sim-host`/`--sim-port`)
+and identifies itself by callsign as soon as it connects, so the simulator
+needs no address configuration beyond its own
+`--listen-host`/`--listen-port`. Only the simulator's port has to be
+reachable through firewalls.
 
 ### Options
 
@@ -664,23 +665,21 @@ quiet run:
 **FEC preset vs. modulation is a real size tradeoff, not just a dial**:
 a stronger preset (lower rate, e.g. `r1_4_k7`) multiplies the coded
 frame's size, and a lower-order modulation (BPSK) needs more symbols -
-and therefore more samples - per coded byte than QPSK/16-QAM. Combining
-the two can push a single burst over UDP's ~65KB single-datagram limit
-even for a short message - e.g. `--mode 0` (BPSK, the default) +
-`--fec-preset r1_4_k7` (also the default when `--fec` is set) only fits
-**5 characters** per burst. Every station prints its actual per-burst
-character budget at startup (`max ~N chars per burst at these settings`)
-so this is visible up front instead of discovered message-by-message; a
-longer message just auto-fragments into multiple bursts, each
-independently bounded the same way. `ota_station.py` refuses to send an
-oversized burst and logs a clear `[tx error]` instead of silently
-failing - if you see one, use a higher `--mode` (QPSK/16-QAM) and/or a
-lighter FEC preset (e.g. `r1_2_k7`) together.
+and therefore more samples - per coded byte than QPSK/16-QAM. A single
+`--mode 0` + `r1_4_k9` burst at the full `MAX_PAYLOAD_LEN` is several
+hundred KB of samples. The relay is TCP, so there's no per-burst size
+ceiling: every message fragments only at the protocol's own
+`MAX_PAYLOAD_LEN`, whatever the mode or FEC. (The relay used to be UDP,
+whose ~65KB datagram limit cut the default `--mode 0` + `r1_4_k7` combo
+down to 5 characters per burst.)
 
 `ota_sim.simulator`'s channel knobs (`--distance-km`, `--freq-mhz`,
 `--base-snr-db`, `--no-fading`, `--drop-prob`, `--latency-ms`,
 `--jitter-ms`, `--seed`) are documented in `../ota_sim/README.md` and
-`python3 -m ota_sim.simulator -h`.
+`python3 -m ota_sim.simulator -h`. Its `--channel fm` mode (an FM
+transceiver audio-path model) carries 16-bit PCM audio rather than IQ, so
+`ota_station.py` can't use it until the modem has an audio-subcarrier
+path.
 A tighter/noisier link is a good way to see the real link layer at work:
 higher `--drop-prob` or lower `--base-snr-db` should never produce garbled
 text (CRC-verified frames only), just gaps or delivery failures - the same
@@ -690,9 +689,7 @@ text (CRC-verified frames only), just gaps or delivery failures - the same
 ### Known limitations
 
 This is an interactive-messaging tool, not a bulk-file-transfer one -
-UDP's ~65KB single-datagram ceiling bounds worst-case on-air sample counts
-(low-order modulation + strong FEC + a near-`MAX_PAYLOAD_LEN` fragment can
-exceed it). Use `file_xfer_test.sh` for bulk transfers. `--auto`'s
+use `file_xfer_test.sh` for bulk transfers. `--auto`'s
 negotiation (see above) is one-time at startup, not continuous.
 
 **More fragments means a real cost either way - latency with `--ack`,

@@ -45,11 +45,13 @@ far more frequently and carries the full reasoning behind each item.
       BER, BPSK only ±90°. A real fix (differential encoding, or a
       pilot/training sequence for the non-BPSK modes) is still open; the
       OTA simulator is the natural place to verify it once built.
-- [ ] **UDP ~65KB single-datagram ceiling on `ota_station.py` (found via
-      8.6).** Bounds worst-case on-air sample counts for the live
-      station — a chunked-datagram scheme or switching to TCP would lift
-      it; `file_xfer_test.sh`'s file-based pipeline already covers bulk
-      transfer, so this only matters for live-station bulk use.
+- [x] **UDP ~65KB single-datagram ceiling on `ota_station.py` (found via
+      8.6).** Resolved 2026-10-02: the `ota_sim` relay is now TCP with
+      length-prefixed messages, so there is no per-burst ceiling and
+      `max_fragment_chars` is simply `MAX_PAYLOAD_LEN`.
+      `CONTROL_FEC_PRESET` (r1_2_k9) was chosen only because r1_4_k9
+      didn't fit; revisiting it is now a protocol decision, not a size
+      constraint.
 - [ ] **Negotiation trusts a single SNR probe (found via 8.19).**
       `estimate_snr_db()`'s one-shot reading is noisy enough under fading
       that adjacent reliability tiers' estimate ranges overlap
@@ -112,7 +114,7 @@ expected to be picked up unless the GNU Radio track is revisited:
       `pipeline_test.sh`/`file_xfer_test.sh` end-to-end scripts.
 - [x] **Phase 8** (in progress, ~33 sub-items shipped, 8.1-8.33) — the
       live OTA simulator track: `ota_sim` sibling project (channel
-      physics + UDP relay), `ota_station.py` interactive station,
+      physics + TCP relay, plus an FM transceiver audio-path model), `ota_station.py` interactive station,
       per-fragment ACK/retry, initiator-driven symmetric mode/FEC
       negotiation (redesigned once after live testing exposed an
       asymmetric-grant problem), `/ping`+`/ping survey` diagnostics with
