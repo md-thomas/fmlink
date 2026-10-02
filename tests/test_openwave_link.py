@@ -530,6 +530,25 @@ class ModeSnrTableTests(unittest.TestCase):
         mode_id, fec_preset = link.select_mode_for_snr(999.0, max_symbol_rate=1)
         self.assertEqual((mode_id, fec_preset), (0, 'r1_4_k9'))
 
+    def test_fading_table_is_stronger_and_stricter(self):
+        # Under fading: floor row is the most robust code, every row above it
+        # uses a K=7 code (not K=3), and each mode needs more SNR than in
+        # the AWGN table.
+        self.assertEqual(link.select_mode_for_snr(10.0, table=link.FADING_MODE_SNR_TABLE),
+                         (0, 'r1_4_k9'))
+        self.assertEqual(link.select_mode_for_snr(15.0, table=link.FADING_MODE_SNR_TABLE),
+                         (1, 'r1_2_k7'))
+        self.assertEqual(link.select_mode_for_snr(30.0, table=link.FADING_MODE_SNR_TABLE),
+                         (2, 'r1_2_k7'))
+        awgn = {mode: threshold for threshold, mode, _ in link.MODE_SNR_TABLE}
+        for threshold, mode, _ in link.FADING_MODE_SNR_TABLE[1:]:
+            self.assertGreater(threshold, awgn[mode])
+
+    def test_fading_table_respects_ceiling(self):
+        mode_id, _ = link.select_mode_for_snr(30.0, max_symbol_rate=600,
+                                              table=link.FADING_MODE_SNR_TABLE)
+        self.assertEqual(mode_id, 0)
+
 
 class _FakeClock:
     """Manually-advanceable clock for RetryManager tests, so timeout behavior

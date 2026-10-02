@@ -12,6 +12,8 @@ optional-dependency skip pattern (see legacy/gnuradio/tests/).
 import asyncio
 import unittest
 
+import openwave_audio as audio_phy
+import openwave_fec as fec
 import openwave_link as link
 
 try:
@@ -750,6 +752,36 @@ class AudioPhyStationTests(unittest.TestCase):
             self.assertGreater(a._last_tx_airtime_s, 1.0)
 
         self._run(scenario())
+
+    def _probe_through_fm(self, **fm_kwargs):
+        """A MODE_REQUEST probe burst from W1AW, through an FM channel, fed
+        straight into a K0MDT station's RX path; returns that station."""
+        station = Station(station_id='K0MDT', dst_id='W1AW', phy='audio', audio_port='mic',
+                          on_log=lambda msg: None)
+        sender = Station(station_id='W1AW', dst_id='K0MDT', phy='audio', audio_port='mic')
+        request = link.build_mode_request_frame(7, mode_id=0, src_id=b'W1AW', dst_id=b'K0MDT')
+        coded = fec.encode_frame(request, sender._control_fec_generators, sender._control_fec_k)
+        audio = audio_phy.modulate(sender._control_modulate(coded), 600,
+                                   audio_phy.PORT_PROFILES['mic']['carrier_hz'])
+        received, _ = FMLink('mic', freq_hz=440e6, latency_s=0, jitter_s=0, **fm_kwargs).transmit(audio)
+        station._handle_received_samples(audio_phy.audio_to_pcm16(received))
+        return station
+
+    def test_mobile_fading_selects_from_the_fading_table(self):
+        # The case that motivated FADING_MODE_SNR_TABLE: 15 dB CNR, 80 km/h
+        # at 440 MHz. The plain table picked mode 2/r1_2_k3 here, which
+        # delivered ~6% of bursts; the fading table's choice delivered 100%.
+        station = self._probe_through_fm(base_cnr_db=15, fading='rayleigh', speed_kmh=80, seed=4)
+        self.assertIsNotNone(station._last_rx_quality, "probe should have decoded")
+        self.assertTrue(station._fading())
+        self.assertEqual(station._select_mode(), (0, 'r1_4_k9'))
+
+    def test_no_fading_keeps_the_regular_table(self):
+        station = self._probe_through_fm(base_cnr_db=15, seed=4)
+        self.assertFalse(station._fading())
+        self.assertEqual(station._select_mode(),
+                         link.select_mode_for_snr(station._last_rx_snr_db,
+                                                  max_symbol_rate=station.max_symbol_rate))
 
     def test_reply_timeout_tracks_airtime(self):
         iq = Station(station_id='K0MDT', dst_id='W1AW')

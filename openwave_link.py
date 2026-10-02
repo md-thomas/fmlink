@@ -831,7 +831,31 @@ MODE_SNR_TABLE = (
 )
 
 
-def select_mode_for_snr(snr_db, max_symbol_rate=None):
+# Mode selection for a FADING link (ota_station.py --phy audio detects
+# fading per burst - see openwave_audio.burst_quality()). MODE_SNR_TABLE
+# assumes noise spread evenly through a burst; mobile fading on an FM link
+# instead concentrates it into short dropouts below the FM threshold, many
+# per burst, and r1_2_k3 can't repair those error bursts: measured through
+# ota_sim's FM model (mic port), mode 2/r1_2_k3 delivered 6% at 15 dB CNR
+# and 80 km/h - where MODE_SNR_TABLE picks it - while mode 0/r1_4_k9
+# delivered 100%. A stronger K=7 code holds up far better under fading at
+# the same rate, so this table uses r1_2_k7 and much higher thresholds.
+#
+# Thresholds are the burst's AVERAGE data-aided SNR over the whole probe
+# (not the marker-only estimate MODE_SNR_TABLE uses), from a study of
+# 16-24 bursts per point across 5/30/80 km/h at 440 MHz and 15-35 dB CNR:
+# each row is the lowest average SNR at which its mode delivered >= 94%
+# at 30 and 80 km/h. Slow fading (5 km/h) is dominated by whole-burst
+# outages that no mode avoids; ARQ is the answer there, not mode choice.
+# Stops at mode 2: faster modes weren't measured under fading.
+FADING_MODE_SNR_TABLE = (
+    (-100.0, 0, 'r1_4_k9'),
+    (14.0, 1, 'r1_2_k7'),
+    (19.0, 2, 'r1_2_k7'),
+)
+
+
+def select_mode_for_snr(snr_db, max_symbol_rate=None, table=MODE_SNR_TABLE):
     """Estimated SNR (see MODE_SNR_TABLE's docstring for exactly what this
     should be) -> (mode_id, fec_preset): the highest-throughput mode this
     link can apparently support. Always returns something, even for an SNR
@@ -842,12 +866,14 @@ def select_mode_for_snr(snr_db, max_symbol_rate=None):
     can't use a given symbol rate (e.g. a narrowband/audio-bandwidth
     channel), not something this simulator's own channel model has any
     concept of on its own. None (the default) considers every row,
-    unchanged from before this parameter existed."""
-    rows = MODE_SNR_TABLE
+    unchanged from before this parameter existed. table defaults to
+    MODE_SNR_TABLE; pass FADING_MODE_SNR_TABLE for a link detected as
+    fading."""
+    rows = table
     if max_symbol_rate is not None:
         rows = tuple(row for row in rows if WAVEFORM_MODES[row[1]]['symbol_rate'] <= max_symbol_rate)
         if not rows:
-            rows = (MODE_SNR_TABLE[0],)  # even the floor row's symbol_rate must fit any sane ceiling
+            rows = (table[0],)  # even the floor row's symbol_rate must fit any sane ceiling
     best = rows[0]
     for row in rows:
         if row[0] <= snr_db:

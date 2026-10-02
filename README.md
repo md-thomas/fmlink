@@ -763,7 +763,27 @@ burst. With it, tested up to 300 ppm.
 
 `--auto` uses the same `MODE_SNR_TABLE` as the IQ path: the data-aided
 estimate measures the received symbols' SNR, the same quantity the
-table's thresholds are about.
+table's thresholds are about. **Unless the link is fading.** Mobile
+fading on FM concentrates the noise into short dropouts below the FM
+threshold, many per burst. The weak r1_2_k3 code the table uses can't
+repair those, so a link that averages a healthy SNR can still lose most
+bursts.
+
+To catch this:
+
+1. The receiver rebuilds each CRC-verified probe frame exactly, so it has
+   the error on every symbol.
+2. If more than 3% of the burst's 5 ms stretches sit 6 dB or more below
+   its median, the link is treated as fading.
+3. `--auto` then picks from `FADING_MODE_SNR_TABLE` instead: K=7/K=9
+   codes and higher thresholds.
+
+The negotiation log shows it, e.g. `measured our own link at ~12.0dB
+(fading: 17% of the burst in dropouts, ...)`.
+
+At 15 dB CNR, 80 km/h on 440 MHz, this moves `--auto` from mode 2/r1_2_k3
+(about 6% of bursts delivered) to mode 0/r1_4_k9 (100%). Across a study
+of 5-80 km/h at 15-35 dB, average delivery rose from 79% to 97%.
 
 Bursts now take real airtime: seconds per burst at modes 0-1. The ACK,
 `/ping` and negotiation reply timeouts stretch by twice the last burst's
@@ -772,9 +792,14 @@ retrying into it on the half-duplex channel.
 
 Not yet handled on the audio path:
 
-- **Mobile fading** loses 10-60% of bursts at 20 dB average CNR. Fades
-  cause clicks and squelch dropouts mid-burst, and convolutional FEC
-  can't repair long error bursts without an interleaver (TODO 3.2).
+- **Mobile fading costs throughput.** `--auto` now falls back to
+  slower, stronger modes on a fading link rather than losing bursts (see
+  above). An interleaver (TODO 3.2) would let faster modes survive the
+  same dropouts.
+- **Slow fading (walking speed)** fades are long enough to take out whole
+  bursts no matter the mode. ACK retries are the only defence.
+- **The fading table stops at mode 2.** It was measured on the mic port
+  only, so the data port's mode 3 is never picked on a fading link.
 - **The GUI** (`open_wave_ui`) has no `--phy audio` option yet.
 
 ### Known limitations

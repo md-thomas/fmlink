@@ -87,8 +87,10 @@ def modulate(symbols, symbol_rate, carrier_hz, sample_rate=AUDIO_SAMPLE_RATE,
     """Complex symbols -> real audio samples in [-level, level]: lead-in
     silence, RRC-shaped symbols on carrier_hz, tail silence."""
     sps = samples_per_symbol(symbol_rate, sample_rate)
-    baseband = pulse.pulse_shape(np.asarray(symbols, dtype=complex), alpha=ALPHA, sps=sps,
-                                 span_symbols=SPAN_SYMBOLS)
+    taps = pulse.rrc_taps(ALPHA, sps, SPAN_SYMBOLS)
+    upsampled = np.zeros(len(symbols) * sps, dtype=complex)
+    upsampled[::sps] = symbols
+    baseband = _fft_convolve(upsampled, taps)  # == pulse.pulse_shape(), just faster
     t = np.arange(len(baseband)) / sample_rate
     passband = np.real(baseband * np.exp(2j * np.pi * carrier_hz * t))
     peak = np.max(np.abs(passband)) if len(passband) else 0.0
@@ -114,18 +116,22 @@ def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
     info: 'quality' (normalized correlation peak, 0..1 - near 1 for a
     clean burst, ~0.1 or less for noise or the wrong mode/rate), 'snr_db'
     (data-aided, over the reference symbols), 'timing' (sample index of
-    the reference's first symbol in the matched-filter output).
+    the reference's first symbol in the matched-filter output),
+    'marker_index' (index of the reference's first symbol in the returned
+    symbols - pre_symbols, unless the audio began too late for all of
+    them).
     Returns (empty array, info with quality 0) if the audio is shorter
     than the reference."""
     sps = samples_per_symbol(symbol_rate, sample_rate)
     ref = np.asarray(reference_symbols, dtype=complex)
-    empty = (np.zeros(0, dtype=complex), {'quality': 0.0, 'snr_db': float('-inf'), 'timing': None})
+    empty = (np.zeros(0, dtype=complex), {'quality': 0.0, 'snr_db': float('-inf'), 'timing': None,
+                                          'marker_index': 0})
 
     audio = np.asarray(audio, dtype=float)
     t = np.arange(len(audio)) / sample_rate
     # sqrt(2) undoes the real-part's halving of the passband amplitude.
     mixed = np.sqrt(2) * audio * np.exp(-2j * np.pi * carrier_hz * t)
-    y = pulse.matched_filter(mixed, alpha=ALPHA, sps=sps, span_symbols=SPAN_SYMBOLS)
+    y = _fft_convolve(mixed, pulse.rrc_taps(ALPHA, sps, SPAN_SYMBOLS))  # == pulse.matched_filter()
 
     template = np.zeros(len(ref) * sps - (sps - 1), dtype=complex)
     template[::sps] = ref
@@ -166,7 +172,19 @@ def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
         after = _track(y / gain, timing, sps, ref, np.asarray(list(constellation), dtype=complex),
                        -symbol_rate / (2 * np.pi * carrier_hz))
     symbols = np.concatenate([before, after])
-    return symbols, {'quality': float(quality[timing]), 'snr_db': snr_db, 'timing': timing}
+    return symbols, {'quality': float(quality[timing]), 'snr_db': snr_db, 'timing': timing,
+                     'marker_index': n_pre}
+
+
+def _fft_convolve(x, taps):
+    """Full linear convolution, as np.convolve(x, taps, 'full'), via FFT:
+    at audio sample rates the RRC filter is hundreds of taps long (880 at
+    600 baud), where direct convolution dominates a burst's processing time."""
+    n = len(x) + len(taps) - 1
+    if len(x) == 0:
+        return np.zeros(len(taps) - 1, dtype=complex)
+    n_fft = 1 << int(np.ceil(np.log2(n)))
+    return np.fft.ifft(np.fft.fft(x, n_fft) * np.fft.fft(taps, n_fft))[:n]
 
 
 def _track(y, timing, sps, ref, points, eps_per_rad):
@@ -209,3 +227,34 @@ def pcm16_to_audio(data):
     """Inverse of audio_to_pcm16()."""
     data = data[:len(data) - len(data) % 2]
     return np.frombuffer(data, dtype='<i2').astype(float) / 32768.0
+
+
+
+# -- per-burst link quality, for fading-aware mode selection ----------------
+# A burst is "fading" when more than FADE_FRACTION_THRESHOLD of its
+# FADE_WINDOW_S-long stretches sit FADE_DEPTH_DB or more below the burst's
+# median SNR. Measured per probe through ota_sim's FM model: without fading
+# that fraction stayed <= 0.015 at every CNR from 8 dB up (it rises to
+# ~0.05 at 6 dB, the squelch edge, where being conservative is right
+# anyway); with 30-150 km/h Rayleigh fading it was >= 0.064 at every CNR
+# tested. 5 ms is about one fade's length at those speeds.
+FADE_WINDOW_S = 0.005
+FADE_DEPTH_DB = 6.0
+FADE_FRACTION_THRESHOLD = 0.03
+
+
+def burst_quality(received, reference, symbol_rate):
+    """Link quality over a whole decoded burst, from exact per-symbol
+    errors against the symbols actually transmitted (reference - e.g. a
+    CRC-verified frame rebuilt and re-encoded). Returns {'snr_db': average
+    SNR over the burst, 'fade_fraction': see above, 'fading': bool}."""
+    errors = np.abs(np.asarray(received) - np.asarray(reference)) ** 2
+    snr_db = float(10 * np.log10(1 / max(np.mean(errors), 1e-12)))
+    window = max(1, int(round(FADE_WINDOW_S * symbol_rate)))
+    if len(errors) < 2 * window:
+        return {'snr_db': snr_db, 'fade_fraction': 0.0, 'fading': False}
+    windowed = 10 * np.log10(1 / np.maximum(
+        np.convolve(errors, np.ones(window) / window, mode='valid'), 1e-12))
+    fade_fraction = float(np.mean(windowed < np.median(windowed) - FADE_DEPTH_DB))
+    return {'snr_db': snr_db, 'fade_fraction': fade_fraction,
+            'fading': fade_fraction > FADE_FRACTION_THRESHOLD}

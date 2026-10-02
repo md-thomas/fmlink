@@ -41,9 +41,12 @@ far more frequently and carries the full reasoning behind each item.
       their defaults (with explicit override still allowed) or decide to
       keep them permanently independent.
 - [ ] **3.2 — bit interleaver/de-interleaver not built.** Now the
-      main fringe weakness on the FM audio path: mobile Rayleigh fading
-      at 20 dB average CNR loses 10-60% of bursts to mid-burst clicks
-      and squelch dropouts, which arrive as long error bursts. Current FEC
+      main fringe weakness on the FM audio path. Mobile Rayleigh fading
+      produces mid-burst clicks and squelch dropouts, which arrive as
+      long error bursts. Since 2026-10-02 `--auto` detects fading and
+      falls back to slower, stronger modes (`FADING_MODE_SNR_TABLE`), so
+      bursts get through; an interleaver would win back the throughput
+      that fallback costs. Current FEC
       handles scattered bit errors within a fragment; a burst that takes
       out a large contiguous run within one fragment's coded block is a
       different, unaddressed failure mode.

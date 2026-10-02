@@ -417,6 +417,7 @@ class Station:
         self._ping_last_rx_status = None
         self._negotiating = False  # reentrancy guard - see negotiate()
         self._last_rx_snr_db = None
+        self._last_rx_quality = None
 
         self._apply_mode(mode_id, fec_preset)
 
@@ -525,20 +526,21 @@ class Station:
 
     # -- RX pipeline: samples -> demod -> sync/FEC -> LinkReceiver -----
     def _symbol_recoverer(self, payload):
-        """Returns recover(modulation, symbol_rate) -> (symbols, snr_db)
-        for this burst. IQ: one fixed-timing symbol stream for every
-        attempt (sps=4, no symbol-rate concept), snr_db None (estimated
-        blind afterwards). Audio: each (modulation, symbol rate) needs its
-        own demodulation - sps, the correlation reference and the drift
-        tracker's decisions all depend on it - cached per pair, with
-        openwave_audio's data-aided snr_db."""
+        """Returns recover(modulation, symbol_rate) -> (symbols, snr_db,
+        marker_index) for this burst. IQ: one fixed-timing symbol stream
+        for every attempt (sps=4, no symbol-rate concept), snr_db and
+        marker_index None (SNR estimated blind afterwards). Audio: each
+        (modulation, symbol rate) needs its own demodulation - sps, the
+        correlation reference and the drift tracker's decisions all depend
+        on it - cached per pair, with openwave_audio's data-aided snr_db
+        and where the frame's marker starts in the symbols."""
         if self.phy == 'iq':
             samples = np.frombuffer(payload, dtype=np.complex64)
             num_symbols = pulse.expected_symbol_count(len(samples))
             filtered = pulse.matched_filter(samples)
             offset = pulse.group_delay()
             symbols = pulse.decimate(filtered, sps=4, offset=offset)[:num_symbols]
-            return lambda modulation, symbol_rate: (symbols, None)
+            return lambda modulation, symbol_rate: (symbols, None, None)
 
         audio = audio_phy.pcm16_to_audio(payload)
         cache = {}
@@ -552,9 +554,50 @@ class Station:
                     pre_symbols=FRAME_LEAD_PAD_BYTES * 8 // bps,
                     constellation=modem._CONSTELLATIONS[modulation])
                 symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
-                cache[(modulation, symbol_rate)] = (symbols, info['snr_db'])
+                cache[(modulation, symbol_rate)] = (symbols, info['snr_db'], info['marker_index'])
             return cache[(modulation, symbol_rate)]
         return recover
+
+    def _burst_quality(self, frames, modulation, symbols, marker_index, symbol_rate,
+                       use_fec, fec_generators, fec_k):
+        """openwave_audio.burst_quality() for a decoded audio burst (average
+        SNR and fading), or None if nothing decoded. A frame that passed
+        CRC can be rebuilt exactly - header, payload, CRC, FEC - so its
+        transmitted symbols are known end to end, and the per-symbol error
+        across the whole burst is exact rather than decision-directed."""
+        decoded = next(((h, p) for status, h, p in frames if status == 'ok'), None)
+        if decoded is None:
+            return None
+        header, payload = decoded
+        frame = link.build_frame(payload, lead_pad=0, end_pad=0,
+                                 **{key: value for key, value in header.items() if key != 'payload_len'})
+        coded = fec.encode_frame(frame, fec_generators, fec_k) if use_fec else frame
+        reference = np.asarray(MODULATORS[modulation](coded), dtype=complex)
+        received = np.asarray(symbols[marker_index:marker_index + len(reference)])
+        if len(received) < len(reference):
+            return None
+        return audio_phy.burst_quality(received, reference, symbol_rate)
+
+    def _fading(self):
+        return bool(self._last_rx_quality and self._last_rx_quality['fading'])
+
+    def _select_mode(self):
+        """(mode_id, fec_preset) for the last burst received: MODE_SNR_TABLE
+        on its SNR, or - if it showed fading - FADING_MODE_SNR_TABLE on its
+        whole-burst average SNR (what that table is calibrated against)."""
+        if self._fading():
+            return link.select_mode_for_snr(self._last_rx_quality['snr_db'],
+                                            max_symbol_rate=self.max_symbol_rate,
+                                            table=link.FADING_MODE_SNR_TABLE)
+        return link.select_mode_for_snr(self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
+
+    def _snr_note(self):
+        """'~X dB', plus a fading note when the last burst showed fading."""
+        note = f"~{self._last_rx_snr_db:.1f}dB"
+        if self._fading():
+            note += (f" (fading: {100 * self._last_rx_quality['fade_fraction']:.0f}% of the burst "
+                     f"in dropouts, burst average ~{self._last_rx_quality['snr_db']:.1f}dB)")
+        return note
 
     def _handle_received_samples(self, payload):
         self.stats['received_air_bytes'] += len(payload)
@@ -579,20 +622,22 @@ class Station:
         matched = None
         fallback = None
         for modulation, symbol_rate, demod_fn, use_fec, fec_generators, fec_k in self._demod_attempts():
-            symbols, snr_db = None, None
+            symbols, snr_db, marker_index = None, None, None
             try:
-                symbols, snr_db = recover(modulation, symbol_rate)
+                symbols, snr_db, marker_index = recover(modulation, symbol_rate)
                 recovered = demod_fn(symbols)
                 candidate = (list(fec.decode_frames(recovered, fec_generators, fec_k)) if use_fec
                              else list(sync.iter_frames_correlated(recovered)))
             except Exception:
                 candidate = []
+            attempt = (candidate, modulation, symbols, snr_db, marker_index,
+                       (symbol_rate, use_fec, fec_generators, fec_k))
             if fallback is None:
-                fallback = (candidate, modulation, symbols, snr_db)
+                fallback = attempt
             if any(status == 'ok' for status, _, _ in candidate):
-                matched = (candidate, modulation, symbols, snr_db)
+                matched = attempt
                 break
-        frames, matched_modulation, symbols, snr_db = matched or fallback
+        frames, matched_modulation, symbols, snr_db, marker_index, phy_params = matched or fallback
 
         if not frames:
             self._log("[rx] no frame found in this burst - link too weak to even find sync "
@@ -603,6 +648,12 @@ class Station:
 
         self._last_rx_snr_db = (snr_db if snr_db is not None
                                 else modem.estimate_snr_db(symbols, matched_modulation))
+        # Whole-burst quality incl. fading detection (audio only) - see
+        # _burst_quality() and _select_mode().
+        self._last_rx_quality = None
+        if marker_index is not None:
+            self._last_rx_quality = self._burst_quality(
+                frames, matched_modulation, symbols, marker_index, *phy_params)
         if self._on_symbols:
             self._on_symbols(symbols, matched_modulation, self._last_rx_snr_db)
         if self.verbose:
@@ -610,7 +661,7 @@ class Station:
             # no pilot symbols) lives once in openwave_modem.py's
             # estimate_snr_db() docstring - repeating it on every burst
             # under --verbose was pure noise.
-            self._log(f"[rx] SNR ~{self._last_rx_snr_db:.1f}dB ({matched_modulation})")
+            self._log(f"[rx] SNR {self._snr_note()} ({matched_modulation})")
 
         for status, header, payload_bytes in frames:
             if status == 'ok':
@@ -690,16 +741,15 @@ class Station:
             # Respects OUR OWN --bandwidth ceiling even though this reply
             # is non-binding, so the logged opinion doesn't suggest a mode
             # this station wouldn't actually be willing to use itself.
-            proposed_mode_id, proposed_fec_preset = link.select_mode_for_snr(
-                self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
+            proposed_mode_id, proposed_fec_preset = self._select_mode()
             grant = link.build_mode_grant_frame(
                 header['seq'], proposed_mode_id, proposed_fec_preset, self._last_rx_snr_db,
                 mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
                 dst_id=self.dst_id.encode(),
             )
             self._transmit_control_frame(grant)
-            self._log(f"[negotiate] {self.dst_id} probed the link (estimated their SNR ~"
-                      f"{self._last_rx_snr_db:.1f}dB) - replied so they can measure us "
+            self._log(f"[negotiate] {self.dst_id} probed the link (estimated their SNR "
+                      f"{self._snr_note()}) - replied so they can measure us "
                       f"(our own, non-authoritative opinion: "
                       f"{link.format_mode(proposed_mode_id)}/{proposed_fec_preset})")
             return
@@ -710,8 +760,8 @@ class Station:
             # self._last_rx_snr_db is OUR OWN measurement of this frame -
             # negotiate() decides from that, not from parsed['mode_id']/
             # fec_preset (the peer's own opinion, logged only).
-            self._log(f"[negotiate] measured {self.dst_id}'s reply at ~"
-                      f"{self._last_rx_snr_db:.1f}dB (their own, non-authoritative opinion: "
+            self._log(f"[negotiate] measured {self.dst_id}'s reply at "
+                      f"{self._snr_note()} (their own, non-authoritative opinion: "
                       f"{link.format_mode(parsed['mode_id'])}/{parsed['fec_preset']})")
             self._negotiation_event.set()
             return
@@ -824,9 +874,8 @@ class Station:
                 return
 
             # -- Decide from OUR OWN measurement, then tell the peer (phase 2) --
-            mode_id, fec_preset = link.select_mode_for_snr(
-                self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
-            self._log(f"[negotiate] measured our own link at ~{self._last_rx_snr_db:.1f}dB - "
+            mode_id, fec_preset = self._select_mode()
+            self._log(f"[negotiate] measured our own link at {self._snr_note()} - "
                       f"setting both directions to {link.format_mode(mode_id)}/{fec_preset}")
             # See the matching comment on the CONTROL_OP_MODE_SET handler -
             # select_mode_for_snr() always returns a real FEC preset, so

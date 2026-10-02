@@ -176,6 +176,37 @@ class PcmTests(unittest.TestCase):
         self.assertEqual(len(audio_phy.pcm16_to_audio(b'\x01\x00\x02')), 1)
 
 
+class BurstQualityTests(unittest.TestCase):
+    def setUp(self):
+        self.reference = np.asarray(MODULATORS['bpsk'](_rng_bytes(300)), dtype=complex)  # 2400 symbols
+        self.rng = np.random.default_rng(9)
+
+    def noisy(self, snr_db, n=None):
+        n = len(self.reference) if n is None else n
+        sigma = np.sqrt(10 ** (-snr_db / 10) / 2)
+        return sigma * (self.rng.normal(size=n) + 1j * self.rng.normal(size=n))
+
+    def test_steady_noise_is_not_fading(self):
+        quality = audio_phy.burst_quality(self.reference + self.noisy(12), self.reference, 1200)
+        self.assertAlmostEqual(quality['snr_db'], 12, delta=0.5)
+        self.assertFalse(quality['fading'])
+        self.assertLess(quality['fade_fraction'], 0.015)
+
+    def test_short_deep_dropouts_are_fading(self):
+        # 6-symbol (5 ms at 1200 baud) dropouts every 50 symbols: ~12% of
+        # the burst, like fast mobile fades dipping below the FM threshold.
+        received = self.reference + self.noisy(20)
+        for start in range(0, len(received) - 6, 50):
+            received[start:start + 6] += self.noisy(-3, 6)
+        quality = audio_phy.burst_quality(received, self.reference, 1200)
+        self.assertTrue(quality['fading'])
+        self.assertGreater(quality['fade_fraction'], 0.06)
+
+    def test_too_short_to_judge(self):
+        quality = audio_phy.burst_quality(self.reference[:4], self.reference[:4], 1200)
+        self.assertFalse(quality['fading'])
+
+
 @unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class FMChannelTests(unittest.TestCase):
     """End to end through ota_sim's FM transceiver model, with FEC, the way
