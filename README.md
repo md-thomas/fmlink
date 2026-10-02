@@ -718,6 +718,11 @@ python3 ota_station.py --station-id W1AW --dst K0MDT --sim-host 127.0.0.1 \
     --phy audio --audio-port mic --auto --ack
 ```
 
+Or let `./fm_test.sh` open all three in their own terminal windows, with
+matching settings. For example, `./fm_test.sh --port data --cnr 10` or
+`./fm_test.sh --fading rayleigh --speed 80 --freq-mhz 440`; see
+`./fm_test.sh --help`.
+
 **Both stations and the simulator must agree.** Use the same port on all
 three, and `--phy audio` with `--channel fm` (or `iq` with `iq`). Nothing
 on the wire says which format a burst is in.
