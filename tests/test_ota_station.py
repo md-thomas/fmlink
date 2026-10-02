@@ -15,7 +15,7 @@ import unittest
 import openwave_link as link
 
 try:
-    from ota_sim import OTALink
+    from ota_sim import FMLink, OTALink
     from ota_sim.simulator import OTASimulator
     OTA_SIM_AVAILABLE = True
 except ImportError:
@@ -678,6 +678,112 @@ class OTAStationIntegrationTests(unittest.TestCase):
                         if link.WAVEFORM_MODES[m]['symbol_rate'] <= 1200]
             self.assertEqual(expected, [0, 1, 2])  # sanity-check the ceiling picked modes 0-2
             self.assertEqual(visited_modes, expected + [1])  # +1 to restore the original mode
+
+        self._run(scenario())
+
+
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
+class AudioPhyStationTests(unittest.TestCase):
+    """--phy audio: stations exchanging real 48 kHz audio through ota_sim's
+    FM transceiver model, where bursts take real airtime."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    @staticmethod
+    def _fm_channel(port='mic', seed=1):
+        return FMLink(port, base_cnr_db=25, latency_s=0.01, jitter_s=0.0, seed=seed)
+
+    def test_message_arrives_over_fm(self):
+        async def scenario():
+            sim = await _create_simulator(self._fm_channel())
+            received = []
+            a = await _create_station('K0MDT', 'W1AW', mode_id=2, use_fec=True,
+                                      phy='audio', audio_port='mic')
+            b = await _create_station('W1AW', 'K0MDT', mode_id=2, use_fec=True,
+                                      phy='audio', audio_port='mic', on_message=received.append)
+            await a.connect(*sim.address)
+            await b.connect(*sim.address)
+            await asyncio.sleep(0.05)
+
+            await a.send_text("over the FM channel")
+            ok = await _wait_for(lambda: received)
+
+            a.close()
+            b.close()
+            sim.close()
+
+            self.assertTrue(ok, "message never arrived within timeout")
+            self.assertEqual(received[0], "over the FM channel")
+            self.assertGreater(b._last_rx_snr_db, 15)
+
+        self._run(scenario())
+
+    def test_ack_waits_out_airtime_instead_of_retrying(self):
+        # Mode 1 bursts air for ~1.4 s each way - longer than the old fixed
+        # 2 s reply timeout in total, which would retry (and collide, on a
+        # half-duplex link) before the ACK could ever arrive.
+        async def scenario():
+            sim = await _create_simulator(self._fm_channel(seed=2))
+            received = []
+            a = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True, use_ack=True,
+                                      phy='audio', audio_port='mic')
+            b = await _create_station('W1AW', 'K0MDT', mode_id=1, use_fec=True, use_ack=True,
+                                      phy='audio', audio_port='mic', on_message=received.append)
+            await a.connect(*sim.address)
+            await b.connect(*sim.address)
+            await asyncio.sleep(0.05)
+            transmissions = []
+            original_transmit = a._transmit_frame
+            a._transmit_frame = lambda *args, **kw: (transmissions.append(1),
+                                                     original_transmit(*args, **kw))
+
+            await asyncio.wait_for(a.send_text("ack me"), timeout=15)
+
+            a.close()
+            b.close()
+            sim.close()
+
+            self.assertEqual(a.receiver.counts['acks_rx'], 1)
+            self.assertEqual(received, ["ack me"])
+            self.assertEqual(len(transmissions), 1, "should not have retried")
+            self.assertGreater(a._last_tx_airtime_s, 1.0)
+
+        self._run(scenario())
+
+    def test_reply_timeout_tracks_airtime(self):
+        iq = Station(station_id='K0MDT', dst_id='W1AW')
+        self.assertEqual(iq._reply_timeout_s(2.0), 2.0)
+        iq._last_tx_airtime_s = 1.5
+        self.assertEqual(iq._reply_timeout_s(2.0), 5.0)
+
+    def test_audio_needs_a_known_port_and_a_mode_that_fits_it(self):
+        with self.assertRaises(ValueError):
+            Station(station_id='K0MDT', dst_id='W1AW', phy='audio')
+        with self.assertRaises(ValueError):
+            Station(station_id='K0MDT', dst_id='W1AW', phy='audio', audio_port='speaker')
+        with self.assertRaises(ValueError):
+            Station(station_id='K0MDT', dst_id='W1AW', mode_id=3, phy='audio', audio_port='mic')
+        Station(station_id='K0MDT', dst_id='W1AW', mode_id=3, phy='audio', audio_port='data')
+
+    def test_port_ceiling_is_hard_and_bandwidth_cannot_lift_it(self):
+        async def scenario():
+            logs = []
+            mic = Station(station_id='K0MDT', dst_id='W1AW', mode_id=2, phy='audio',
+                          audio_port='mic', on_log=logs.append)
+            self.assertEqual(mic.max_symbol_rate, 1200)
+            await _handle_command(mic, '/bandwidth wide')
+            self.assertEqual(mic.max_symbol_rate, 1200)
+            await _handle_command(mic, '/mode 3')
+            self.assertEqual(mic.mode_id, 2)
+            self.assertTrue(any('mic audio port' in line for line in logs), logs)
+
+            data = Station(station_id='K0MDT', dst_id='W1AW', phy='audio', audio_port='data')
+            self.assertEqual(data.max_symbol_rate, 2400)
+            await _handle_command(data, '/bandwidth narrow')
+            self.assertEqual(data.max_symbol_rate, NARROWBAND_MAX_SYMBOL_RATE)
+            await _handle_command(data, '/bandwidth wide')
+            self.assertEqual(data.max_symbol_rate, 2400)
 
         self._run(scenario())
 

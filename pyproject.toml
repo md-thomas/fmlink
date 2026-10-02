@@ -17,4 +17,5 @@ py-modules = [
     "openwave_channel",
     "openwave_sync",
     "openwave_fec",
+    "openwave_audio",
 ]

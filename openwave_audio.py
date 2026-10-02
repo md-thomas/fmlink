@@ -1,0 +1,211 @@
+"""
+OpenWave audio-subcarrier PHY: symbols <-> real audio, for driving a
+radio's audio port (FM transceivers - see ota_sim's FMLink and
+tasklist.txt's Phase 5) instead of exchanging complex baseband IQ.
+
+An audio path has no DC response and only passes a few kHz, so the
+complex baseband signal openwave_pulse.py produces can't go through it
+directly. TX pulse-shapes at the audio sample rate (sps = sample_rate /
+symbol_rate, so each mode's symbol rate must divide it) and mixes the
+result onto an audio carrier inside the radio's passband; RX mixes back
+down and matched-filters, leaving the same symbol stream the IQ path
+produces, for the same demodulators/sync/FEC to consume.
+
+Unlike the IQ path, nothing about the received burst's timing, carrier
+phase or level can be assumed: radio filters add group delay, key-up
+and squelch eat the start of the burst, and the audio chain rotates the
+carrier's phase arbitrarily. demodulate() recovers all three from one
+cross-correlation against the frame's known preamble+sync-word symbols.
+The correlation peak's position is the symbol timing; its complex value
+is the channel gain and phase. That resolves QPSK/16-QAM's rotational
+ambiguity outright - the reference IS the transmitted marker - and it
+gives a data-aided SNR estimate (error vector against known symbols)
+instead of openwave_modem.estimate_snr_db()'s blind one.
+
+After the marker, a decision-directed loop tracks drift. The two ends'
+sound cards never run at exactly the same rate, and even 20 ppm rotates
+the carrier past QPSK's 45 degree tolerance within a few seconds, so a
+one-shot estimate alone fails on long bursts. In an audio modem the
+carrier and the symbol clock both come from the same sample clocks, so
+one clock-offset error eps shows up as BOTH a carrier frequency offset
+(-carrier_hz * eps) and a symbol-timing drift (sps * eps samples per
+symbol). A second-order phase-locked loop tracks the carrier phase, and
+its frequency term is converted back to eps to steer symbol timing too:
+one loop, no separate timing-recovery loop.
+"""
+import numpy as np
+
+import openwave_pulse as pulse
+
+AUDIO_SAMPLE_RATE = 48000
+
+# Where each radio audio connection puts the carrier, and the highest
+# symbol rate whose RRC spectrum (symbol_rate * (1 + alpha) wide) fits its
+# passband (see ota_sim's PORT_PRESETS):
+#   mic:  300-3000 Hz, so 1650 Hz centers 1200 baud at 840-2460 Hz;
+#         2400 baud (3240 Hz wide) can't fit.
+#   data: ~10 Hz-5 kHz flat, so 2000 Hz carries 2400 baud at 380-3620 Hz,
+#         clear of the upper roll-off.
+PORT_PROFILES = {
+    'mic': {'carrier_hz': 1650.0, 'max_symbol_rate': 1200},
+    'data': {'carrier_hz': 2000.0, 'max_symbol_rate': 2400},
+}
+
+# Silence before the burst's first symbol: the receiver loses ~100-300 ms
+# to transmitter key-up (TXDELAY) plus squelch opening, and a frame's own
+# 24-byte lead pad is far shorter than that at audio symbol rates.
+DEFAULT_LEAD_IN_S = 0.25
+# Silence after the last symbol so the TX filters' ringing finishes
+# before the transmitter unkeys.
+DEFAULT_TAIL_S = 0.02
+# Peak audio level, sound-card full scale = 1.0. FM converts level to
+# deviation; this leaves headroom below the radio's limiter even after
+# the mic path's pre-emphasis lifts the upper half of the signal.
+DEFAULT_LEVEL = 0.7
+
+ALPHA = 0.35
+SPAN_SYMBOLS = 11
+
+# Tracking loop: normalized noise bandwidth (per symbol) and damping of
+# the second-order phase-locked loop. Narrow enough that noise and
+# decision errors barely move it; wide enough to follow a few hundred ppm
+# of clock offset.
+LOOP_BANDWIDTH = 0.005
+LOOP_DAMPING = 0.707
+
+
+def samples_per_symbol(symbol_rate, sample_rate=AUDIO_SAMPLE_RATE):
+    sps = sample_rate / symbol_rate
+    if sps != int(sps) or sps < 2:
+        raise ValueError(f"{symbol_rate} sym/s doesn't divide {sample_rate} Hz into a whole "
+                         f"number (>= 2) of samples per symbol")
+    return int(sps)
+
+
+def modulate(symbols, symbol_rate, carrier_hz, sample_rate=AUDIO_SAMPLE_RATE,
+             lead_in_s=DEFAULT_LEAD_IN_S, tail_s=DEFAULT_TAIL_S, level=DEFAULT_LEVEL):
+    """Complex symbols -> real audio samples in [-level, level]: lead-in
+    silence, RRC-shaped symbols on carrier_hz, tail silence."""
+    sps = samples_per_symbol(symbol_rate, sample_rate)
+    baseband = pulse.pulse_shape(np.asarray(symbols, dtype=complex), alpha=ALPHA, sps=sps,
+                                 span_symbols=SPAN_SYMBOLS)
+    t = np.arange(len(baseband)) / sample_rate
+    passband = np.real(baseband * np.exp(2j * np.pi * carrier_hz * t))
+    peak = np.max(np.abs(passband)) if len(passband) else 0.0
+    if peak > 0:
+        passband *= level / peak
+    lead = np.zeros(int(round(lead_in_s * sample_rate)))
+    tail = np.zeros(int(round(tail_s * sample_rate)))
+    return np.concatenate([lead, passband, tail])
+
+
+def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
+               constellation=None, sample_rate=AUDIO_SAMPLE_RATE):
+    """Real audio -> (symbols, info), symbols normalized so the known
+    reference lands on its ideal points (unit-energy constellation, zero
+    phase). reference_symbols is the frame's marker as transmitted (e.g.
+    the preamble+sync word modulated with this burst's modulation);
+    symbols start pre_symbols before it (so a frame's lead pad is
+    included, as the IQ path's would be) and run to the end of the audio.
+    constellation (the modulation's ideal points) enables drift tracking
+    past the marker - see the module docstring; without it, every symbol
+    uses the marker's one-shot timing and phase.
+
+    info: 'quality' (normalized correlation peak, 0..1 - near 1 for a
+    clean burst, ~0.1 or less for noise or the wrong mode/rate), 'snr_db'
+    (data-aided, over the reference symbols), 'timing' (sample index of
+    the reference's first symbol in the matched-filter output).
+    Returns (empty array, info with quality 0) if the audio is shorter
+    than the reference."""
+    sps = samples_per_symbol(symbol_rate, sample_rate)
+    ref = np.asarray(reference_symbols, dtype=complex)
+    empty = (np.zeros(0, dtype=complex), {'quality': 0.0, 'snr_db': float('-inf'), 'timing': None})
+
+    audio = np.asarray(audio, dtype=float)
+    t = np.arange(len(audio)) / sample_rate
+    # sqrt(2) undoes the real-part's halving of the passband amplitude.
+    mixed = np.sqrt(2) * audio * np.exp(-2j * np.pi * carrier_hz * t)
+    y = pulse.matched_filter(mixed, alpha=ALPHA, sps=sps, span_symbols=SPAN_SYMBOLS)
+
+    template = np.zeros(len(ref) * sps - (sps - 1), dtype=complex)
+    template[::sps] = ref
+    n_valid = len(y) - len(template) + 1
+    if len(ref) == 0 or n_valid <= 0:
+        return empty
+    n_fft = 1 << int(np.ceil(np.log2(len(y) + len(template))))
+    corr = np.fft.ifft(np.fft.fft(y, n_fft) * np.conj(np.fft.fft(template, n_fft)))[:n_valid]
+
+    # Normalized correlation: |sum(y*conj(ref))| / sqrt(sum|ref|^2 * sum|y|^2)
+    # over the same samples, so a loud noise burst can't out-score a
+    # quieter real signal.
+    # Energy at the template's nonzero taps only (every sps-th sample).
+    mask = (template != 0).astype(float)
+    window_energy = np.fft.irfft(np.fft.rfft(np.abs(y) ** 2, n_fft) *
+                                 np.conj(np.fft.rfft(mask, n_fft)), n_fft)[:n_valid]
+    ref_energy = np.sum(np.abs(ref) ** 2)
+    floor = 1e-9 * max(np.max(window_energy), 1e-30)
+    quality = np.abs(corr) / np.sqrt(ref_energy * np.maximum(window_energy, floor))
+    timing = int(np.argmax(quality))
+
+    gain = corr[timing] / ref_energy  # complex channel gain (level + carrier phase)
+    if abs(gain) < 1e-12:
+        return empty
+    # Symbols before the marker (the frame's lead pad) at the marker's
+    # one-shot timing/phase - only a few dozen, so drift is negligible.
+    n_pre = min(pre_symbols, timing // sps)
+    before = y[timing - n_pre * sps:timing:sps] / gain
+
+    marker = y[timing:timing + len(ref) * sps:sps] / gain
+    noise = np.mean(np.abs(marker - ref) ** 2)
+    signal = np.mean(np.abs(ref) ** 2)
+    snr_db = float(10 * np.log10(signal / max(noise, 1e-12)))
+
+    if constellation is None:
+        after = y[timing::sps] / gain
+    else:
+        after = _track(y / gain, timing, sps, ref, np.asarray(list(constellation), dtype=complex),
+                       -symbol_rate / (2 * np.pi * carrier_hz))
+    symbols = np.concatenate([before, after])
+    return symbols, {'quality': float(quality[timing]), 'snr_db': snr_db, 'timing': timing}
+
+
+def _track(y, timing, sps, ref, points, eps_per_rad):
+    """Second-order decision-directed PLL over the symbol stream from the
+    marker onward (data-aided on the marker itself, where the transmitted
+    symbols are known). The loop keeps running past the frame's end into
+    whatever follows (squelch-tail noise), so its final state says nothing
+    reliable - only the symbols are returned. eps_per_rad converts the loop's frequency term (radians/symbol) to
+    the clock-offset fraction eps that also drives the sampling position."""
+    theta_n = LOOP_BANDWIDTH / (LOOP_DAMPING + 1 / (4 * LOOP_DAMPING))
+    denom = 1 + 2 * LOOP_DAMPING * theta_n + theta_n ** 2
+    k_p = 4 * LOOP_DAMPING * theta_n / denom
+    k_i = 4 * theta_n ** 2 / denom
+
+    phase, freq = 0.0, 0.0
+    pos = float(timing)
+    out = []
+    while True:
+        idx = int(round(pos))
+        if idx >= len(y):
+            break
+        z = y[idx] * np.exp(-1j * phase)
+        n = len(out)
+        decision = ref[n] if n < len(ref) else points[np.argmin(np.abs(points - z))]
+        out.append(z)
+        error = np.angle(z * np.conj(decision)) if decision != 0 else 0.0
+        freq += k_i * error
+        phase += freq + k_p * error
+        pos += sps * (1 + freq * eps_per_rad)
+    return np.asarray(out, dtype=complex)
+
+
+def audio_to_pcm16(audio):
+    """Float audio in [-1, 1] -> mono 16-bit little-endian PCM bytes (the
+    ota_sim FM channel's wire format)."""
+    return np.clip(np.round(np.asarray(audio) * 32767.0), -32768, 32767).astype('<i2').tobytes()
+
+
+def pcm16_to_audio(data):
+    """Inverse of audio_to_pcm16()."""
+    data = data[:len(data) - len(data) % 2]
+    return np.frombuffer(data, dtype='<i2').astype(float) / 32768.0

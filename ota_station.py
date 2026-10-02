@@ -14,6 +14,12 @@ a full simulated link. All three processes can run on one machine, or be
 split across two or three separate machines - each just needs to be told
 the others' network addresses (--sim-host/--sim-port).
 
+By default stations exchange complex baseband IQ. With --phy audio they
+exchange real 48 kHz audio on a carrier tone instead (openwave_audio.py),
+for a radio's audio port, through the simulator's --channel fm FM
+transceiver model. --audio-port mic|data picks the radio connection and
+caps the usable modes to what its passband carries.
+
 Requires `ota_sim` installed: from this repo, `pip install -e ../ota_sim`.
 
 Known v1 limitations:
@@ -79,6 +85,7 @@ except ImportError:
 
 import numpy as np
 
+import openwave_audio as audio_phy
 import openwave_fec as fec
 import openwave_link as link
 import openwave_modem as modem
@@ -94,6 +101,13 @@ except ImportError:
              "from this repo (see /data/Projects/ota_sim/README.md)")
 
 RETRY_POLL_INTERVAL_S = 0.2
+
+# --phy audio: bits per symbol (to trim a recovered symbol stream to whole
+# bytes) and the frame's lead pad (openwave_link.build_frame()'s default),
+# which the audio demodulator includes ahead of the correlated marker so
+# the symbol stream starts where the IQ path's would.
+BITS_PER_SYMBOL = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
+FRAME_LEAD_PAD_BYTES = 24
 DEFAULT_FEC_PRESET = 'r1_4_k7'
 # --auto's mode-negotiation handshake always runs at this fixed mode/FEC,
 # regardless of whatever data mode is currently active - see Station's
@@ -307,7 +321,8 @@ class Station:
 
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
-                 on_message=None, verbose=False, on_log=None, on_symbols=None):
+                 on_message=None, verbose=False, on_log=None, on_symbols=None,
+                 phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S):
         self.station_id = station_id
         self.dst_id = dst_id
         self.use_fec = use_fec
@@ -326,7 +341,31 @@ class Station:
         # behavior before this parameter existed. Manual --mode/--fec and
         # /ping survey are NOT constrained by this - it only limits what
         # negotiate() will automatically choose.
-        self.max_symbol_rate = NARROWBAND_MAX_SYMBOL_RATE if bandwidth == 'narrow' else None
+        #
+        # phy='audio' (a radio's audio port, through ota_sim's FM channel)
+        # adds a second, HARD ceiling: the port's passband simply can't
+        # carry faster symbol rates (see openwave_audio.PORT_PROFILES), so
+        # it caps manual /mode and /ping survey too, and /bandwidth wide
+        # can't lift it.
+        if phy not in ('iq', 'audio'):
+            raise ValueError(f"phy must be 'iq' or 'audio', not {phy!r}")
+        self.phy = phy
+        self.audio_port = audio_port
+        self.lead_in_s = lead_in_s
+        self._phy_max_symbol_rate = None
+        if phy == 'audio':
+            if audio_port not in audio_phy.PORT_PROFILES:
+                raise ValueError(f"phy='audio' needs audio_port, one of {sorted(audio_phy.PORT_PROFILES)}")
+            self._carrier_hz = audio_phy.PORT_PROFILES[audio_port]['carrier_hz']
+            self._phy_max_symbol_rate = audio_phy.PORT_PROFILES[audio_port]['max_symbol_rate']
+            if link.WAVEFORM_MODES[mode_id]['symbol_rate'] > self._phy_max_symbol_rate:
+                raise ValueError(f"{link.format_mode(mode_id)} doesn't fit the {audio_port} audio port "
+                                 f"(max {self._phy_max_symbol_rate} sym/s)")
+        self.bandwidth = bandwidth
+        self.max_symbol_rate = self._ceiling_for(bandwidth)
+        # Airtime of the last burst sent (0 for IQ, which has no sample
+        # rate) - reply timeouts stretch by it, see _reply_timeout_s().
+        self._last_tx_airtime_s = 0.0
         self.verbose = verbose
         self._on_message = on_message
         # negotiate() runs lazily, at most once, on this station's own
@@ -393,6 +432,7 @@ class Station:
         mode_info = link.WAVEFORM_MODES[mode_id]
         self.mode_id = mode_id
         self.modulation = mode_info['modulation']
+        self._symbol_rate = mode_info['symbol_rate']
         self._modulate = MODULATORS[self.modulation]
         self._demodulate = DEMODULATORS[self.modulation]
         # fec_preset defaults to the mode's own WAVEFORM_MODES entry, but can
@@ -426,6 +466,25 @@ class Station:
         else:
             print(msg, file=sys.stderr)
 
+    def _ceiling_for(self, bandwidth):
+        """Effective max symbol rate for a --bandwidth setting: the
+        narrowband ceiling (if narrow) and the audio port's (if any),
+        whichever is lower; None means unlimited."""
+        limits = [r for r in (NARROWBAND_MAX_SYMBOL_RATE if bandwidth == 'narrow' else None,
+                              self._phy_max_symbol_rate) if r is not None]
+        return min(limits) if limits else None
+
+    def _ceiling_reason(self):
+        if self._phy_max_symbol_rate is not None and self.max_symbol_rate == self._phy_max_symbol_rate:
+            return f"{self.audio_port} audio port"
+        return "bandwidth=narrow"
+
+    def _reply_timeout_s(self, base_s):
+        """How long to wait for a reply to the burst just sent: base_s
+        plus twice its airtime - once for it to finish airing, once for a
+        similar-sized reply to air back. Equals base_s for IQ."""
+        return base_s + 2 * self._last_tx_airtime_s
+
     # -- simulator connection -----------------------------------------
     async def connect(self, sim_host, sim_port):
         """Connect to an ota_sim simulator. Registers this station's
@@ -453,23 +512,53 @@ class Station:
         Skipped entirely when they're already identical (e.g. before any
         negotiation has happened, mode 0 usually already IS the control
         mode)."""
-        attempts = [(self.modulation, self._demodulate, self.use_fec,
+        attempts = [(self.modulation, self._symbol_rate, self._demodulate, self.use_fec,
                      self._fec_generators, self._fec_k)]
-        if (self.modulation, self._fec_generators, self._fec_k) != \
-                (self._control_modulation, self._control_fec_generators, self._control_fec_k) \
+        control_rate = link.WAVEFORM_MODES[CONTROL_MODE_ID]['symbol_rate']
+        if (self.modulation, self._symbol_rate, self._fec_generators, self._fec_k) != \
+                (self._control_modulation, control_rate, self._control_fec_generators,
+                 self._control_fec_k) \
                 or not self.use_fec:
-            attempts.append((self._control_modulation, self._control_demodulate, True,
+            attempts.append((self._control_modulation, control_rate, self._control_demodulate, True,
                               self._control_fec_generators, self._control_fec_k))
         return attempts
 
     # -- RX pipeline: samples -> demod -> sync/FEC -> LinkReceiver -----
+    def _symbol_recoverer(self, payload):
+        """Returns recover(modulation, symbol_rate) -> (symbols, snr_db)
+        for this burst. IQ: one fixed-timing symbol stream for every
+        attempt (sps=4, no symbol-rate concept), snr_db None (estimated
+        blind afterwards). Audio: each (modulation, symbol rate) needs its
+        own demodulation - sps, the correlation reference and the drift
+        tracker's decisions all depend on it - cached per pair, with
+        openwave_audio's data-aided snr_db."""
+        if self.phy == 'iq':
+            samples = np.frombuffer(payload, dtype=np.complex64)
+            num_symbols = pulse.expected_symbol_count(len(samples))
+            filtered = pulse.matched_filter(samples)
+            offset = pulse.group_delay()
+            symbols = pulse.decimate(filtered, sps=4, offset=offset)[:num_symbols]
+            return lambda modulation, symbol_rate: (symbols, None)
+
+        audio = audio_phy.pcm16_to_audio(payload)
+        cache = {}
+
+        def recover(modulation, symbol_rate):
+            if (modulation, symbol_rate) not in cache:
+                bps = BITS_PER_SYMBOL[modulation]
+                symbols, info = audio_phy.demodulate(
+                    audio, symbol_rate, self._carrier_hz,
+                    MODULATORS[modulation](link.PREAMBLE + link.SYNC_WORD),
+                    pre_symbols=FRAME_LEAD_PAD_BYTES * 8 // bps,
+                    constellation=modem._CONSTELLATIONS[modulation])
+                symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
+                cache[(modulation, symbol_rate)] = (symbols, info['snr_db'])
+            return cache[(modulation, symbol_rate)]
+        return recover
+
     def _handle_received_samples(self, payload):
         self.stats['received_air_bytes'] += len(payload)
-        samples = np.frombuffer(payload, dtype=np.complex64)
-        num_symbols = pulse.expected_symbol_count(len(samples))
-        filtered = pulse.matched_filter(samples)
-        offset = pulse.group_delay()
-        symbols = pulse.decimate(filtered, sps=4, offset=offset)[:num_symbols]
+        recover = self._symbol_recoverer(payload)
 
         # Try each candidate mode until one yields an actual 'ok' frame -
         # NOT just "yields anything", since a wrong-mode demod attempt can
@@ -487,22 +576,23 @@ class Station:
         # candidate is a bad fit (exactly as informative as a clean
         # crc_fail would have been), not a reason to give up on the burst
         # entirely before ever trying the mode that actually matches.
-        frames, matched_modulation = [], None
-        fallback_frames, fallback_modulation = None, None
-        for modulation, demod_fn, use_fec, fec_generators, fec_k in self._demod_attempts():
+        matched = None
+        fallback = None
+        for modulation, symbol_rate, demod_fn, use_fec, fec_generators, fec_k in self._demod_attempts():
+            symbols, snr_db = None, None
             try:
+                symbols, snr_db = recover(modulation, symbol_rate)
                 recovered = demod_fn(symbols)
                 candidate = (list(fec.decode_frames(recovered, fec_generators, fec_k)) if use_fec
                              else list(sync.iter_frames_correlated(recovered)))
             except Exception:
                 candidate = []
-            if fallback_frames is None:
-                fallback_frames, fallback_modulation = candidate, modulation
+            if fallback is None:
+                fallback = (candidate, modulation, symbols, snr_db)
             if any(status == 'ok' for status, _, _ in candidate):
-                frames, matched_modulation = candidate, modulation
+                matched = (candidate, modulation, symbols, snr_db)
                 break
-        if not frames:
-            frames, matched_modulation = fallback_frames, fallback_modulation
+        frames, matched_modulation, symbols, snr_db = matched or fallback
 
         if not frames:
             self._log("[rx] no frame found in this burst - link too weak to even find sync "
@@ -511,7 +601,8 @@ class Station:
                 self._ping_last_rx_status = 'no_sync'
             return
 
-        self._last_rx_snr_db = modem.estimate_snr_db(symbols, matched_modulation)
+        self._last_rx_snr_db = (snr_db if snr_db is not None
+                                else modem.estimate_snr_db(symbols, matched_modulation))
         if self._on_symbols:
             self._on_symbols(symbols, matched_modulation, self._last_rx_snr_db)
         if self.verbose:
@@ -715,7 +806,7 @@ class Station:
                 self._transmit_control_frame(request)
                 try:
                     await asyncio.wait_for(self._negotiation_event.wait(),
-                                            timeout=RETRY_POLL_INTERVAL_S * 10)
+                                            timeout=self._reply_timeout_s(RETRY_POLL_INTERVAL_S * 10))
                     probed = True
                     break
                 except asyncio.TimeoutError:
@@ -778,7 +869,7 @@ class Station:
             self._transmit_control_frame(set_frame)
             try:
                 await asyncio.wait_for(self._mode_set_event.wait(),
-                                        timeout=RETRY_POLL_INTERVAL_S * 10)
+                                        timeout=self._reply_timeout_s(RETRY_POLL_INTERVAL_S * 10))
                 confirmed = True
                 break
             except asyncio.TimeoutError:
@@ -840,7 +931,8 @@ class Station:
             self._transmit_frame(ping_frame)
             burst_bytes = self.stats['sent_air_bytes'] - air_bytes_before
             try:
-                await asyncio.wait_for(self._ping_event.wait(), timeout=PING_TIMEOUT_S)
+                await asyncio.wait_for(self._ping_event.wait(),
+                                       timeout=self._reply_timeout_s(PING_TIMEOUT_S))
                 rtt_s = time.monotonic() - started_at
                 snr_db = self._last_rx_snr_db
                 evm_percent = _snr_db_to_evm_percent(snr_db)
@@ -945,30 +1037,40 @@ class Station:
 
     # -- TX pipeline: frame bytes -> FEC -> modulate -> pulse-shape -----
     def _transmit_frame(self, frame_bytes, modulate_fn=None, use_fec=None,
-                         fec_generators=None, fec_k=None):
+                         fec_generators=None, fec_k=None, symbol_rate=None):
         """Defaults to the station's current DATA mode/FEC. Control frames
         (see _transmit_control_frame) pass the fixed control-channel
-        modulate/FEC instead, reusing this same send/stats logic rather
-        than duplicating it."""
+        modulate/FEC/symbol rate instead, reusing this same send/stats
+        logic rather than duplicating it."""
         modulate_fn = modulate_fn or self._modulate
+        symbol_rate = symbol_rate or self._symbol_rate
         use_fec = self.use_fec if use_fec is None else use_fec
         fec_generators = self._fec_generators if fec_generators is None else fec_generators
         fec_k = self._fec_k if fec_k is None else fec_k
 
         encoded = fec.encode_frame(frame_bytes, fec_generators, fec_k) if use_fec else frame_bytes
         symbols = modulate_fn(encoded)
-        samples = pulse.pulse_shape(symbols)
-        out = samples.astype(np.complex64).tobytes()
+        if self.phy == 'audio':
+            samples = audio_phy.modulate(symbols, symbol_rate, self._carrier_hz,
+                                         lead_in_s=self.lead_in_s)
+            out = audio_phy.audio_to_pcm16(samples)
+            airtime_s = len(samples) / audio_phy.AUDIO_SAMPLE_RATE
+        else:
+            samples = pulse.pulse_shape(symbols)
+            out = samples.astype(np.complex64).tobytes()
+            airtime_s = 0.0
         if self._sim is None or not self._sim.connected:
             self._log("[tx error] not connected to the simulator - burst NOT sent")
             return
         self._sim.send(out)
+        self._last_tx_airtime_s = airtime_s
         self.stats['sent_air_bytes'] += len(out)
 
     def _transmit_control_frame(self, frame_bytes):
         self._transmit_frame(frame_bytes, modulate_fn=self._control_modulate, use_fec=True,
                               fec_generators=self._control_fec_generators,
-                              fec_k=self._control_fec_k)
+                              fec_k=self._control_fec_k,
+                              symbol_rate=link.WAVEFORM_MODES[CONTROL_MODE_ID]['symbol_rate'])
 
     async def send_text(self, text):
         """Build, FEC-encode (if enabled), modulate, pulse-shape, and
@@ -1073,19 +1175,24 @@ class Station:
         # doesn't matter in practice - but marking "pending" first, before
         # anything could possibly race it, costs nothing and removes the
         # assumption entirely.
+        base_timeout_s = self.retry_mgr.timeout_s
         self.retry_mgr.note_sent(seq)
         self._transmit_frame(frame_bytes)
+        self.retry_mgr.timeout_s = self._reply_timeout_s(base_timeout_s)
         while True:
             await asyncio.sleep(RETRY_POLL_INTERVAL_S)
             state = self.retry_mgr.poll()
             if state == 'idle':
+                self.retry_mgr.timeout_s = base_timeout_s
                 return True
             if state == 'retry':
                 if self.verbose:
                     self._log(f"[ack] seq {seq} timed out, retrying")
                 self.retry_mgr.note_sent(seq)
                 self._transmit_frame(frame_bytes)
+                self.retry_mgr.timeout_s = self._reply_timeout_s(base_timeout_s)
             elif state == 'give_up':
+                self.retry_mgr.timeout_s = base_timeout_s
                 return False
 
     def stats_summary(self):
@@ -1200,10 +1307,11 @@ async def _handle_command(station, line):
         # be trivially bypassable by hand.
         symbol_rate = link.WAVEFORM_MODES[mode_id]['symbol_rate']
         if station.max_symbol_rate is not None and symbol_rate > station.max_symbol_rate:
+            reason = station._ceiling_reason()
+            hint = (" - use /bandwidth wide first if you really want this mode"
+                    if reason == 'bandwidth=narrow' else " - that port's passband can't carry it")
             station._log(f"[cmd] /mode: {link.format_mode(mode_id)} needs {symbol_rate} sym/s, "
-                         f"over the current bandwidth=narrow ceiling of "
-                         f"{station.max_symbol_rate} sym/s - use /bandwidth wide first if you "
-                         f"really want this mode")
+                         f"over the {reason} ceiling of {station.max_symbol_rate} sym/s{hint}")
             return True
         await station._announce_mode(mode_id)
         station._auto_negotiate_done = True
@@ -1230,8 +1338,11 @@ async def _handle_command(station, line):
 
     elif cmd == 'bandwidth':
         if len(parts) < 2:
-            current = 'narrow' if station.max_symbol_rate is not None else 'wide'
-            station._log(f"[cmd] current bandwidth: {current} - usage: /bandwidth {{narrow,wide}}")
+            port_note = (f" (the {station.audio_port} audio port caps it at "
+                         f"{station._phy_max_symbol_rate} sym/s either way)"
+                         if station._phy_max_symbol_rate is not None else "")
+            station._log(f"[cmd] current bandwidth: {station.bandwidth}{port_note} - "
+                         f"usage: /bandwidth {{narrow,wide}}")
             return True
         value = parts[1].lower()
         if value not in ('narrow', 'wide'):
@@ -1243,7 +1354,8 @@ async def _handle_command(station, line):
         # the currently active mode or re-negotiate on its own; the
         # ceiling only takes effect the next time something picks a mode
         # automatically.
-        station.max_symbol_rate = NARROWBAND_MAX_SYMBOL_RATE if value == 'narrow' else None
+        station.bandwidth = value
+        station.max_symbol_rate = station._ceiling_for(value)
         station._log(f"[cmd] bandwidth set to {value} - doesn't change the current mode by "
                      f"itself; use /renegotiate (or /mode) to actually apply it")
 
@@ -1277,6 +1389,7 @@ async def run(args):
         station_id=args.station_id, dst_id=args.dst, mode_id=args.mode,
         use_fec=args.fec or args.auto, fec_preset=args.fec_preset, use_ack=args.ack,
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
+        phy=args.phy, audio_port=args.audio_port, lead_in_s=args.lead_in_ms / 1000,
     )
     try:
         await station.connect(args.sim_host, args.sim_port)
@@ -1284,8 +1397,11 @@ async def run(args):
         sys.exit(f"error: can't reach the ota_sim simulator at {args.sim_host}:{args.sim_port} "
                  f"({exc}) - is `python3 -m ota_sim.simulator` running?")
     bandwidth_note = f" bandwidth={args.bandwidth}" if args.auto else ""
-    print(f"[{args.station_id}] ack={'on' if args.ack else 'off'} auto={'on' if args.auto else 'off'}"
-          f"{bandwidth_note} - connected, relaying via "
+    phy_note = (f"phy=audio ({args.audio_port} port, "
+                f"{audio_phy.PORT_PROFILES[args.audio_port]['carrier_hz']:g} Hz carrier)"
+                if args.phy == 'audio' else "phy=iq")
+    print(f"[{args.station_id}] {phy_note} ack={'on' if args.ack else 'off'} "
+          f"auto={'on' if args.auto else 'off'}{bandwidth_note} - connected, relaying via "
           f"{args.sim_host}:{args.sim_port}.", file=sys.stderr)
     print(_mode_banner(args.station_id, station), file=sys.stderr)
 
@@ -1353,12 +1469,32 @@ def main():
                               'rate no matter how good its SNR is (this simulator\'s own channel '
                               'model has no such limit on its own). Does not affect manual '
                               '--mode/--fec or /ping survey, only automatic selection.')
+    parser.add_argument('--phy', choices=('iq', 'audio'), default='iq',
+                         help="iq (default): complex baseband IQ, for ota_sim's default --channel "
+                              "iq. audio: real 48 kHz audio on a carrier tone, for a radio's audio "
+                              "port - run ota_sim with --channel fm and the matching --port. Both "
+                              "stations and the simulator must agree.")
+    parser.add_argument('--audio-port', choices=sorted(audio_phy.PORT_PROFILES),
+                         help="with --phy audio: which radio connection - mic (300-3000 Hz, "
+                              "modes up to 1200 sym/s) or data (flat 6-pin data port, up to "
+                              "2400 sym/s). A hard mode ceiling, unlike --bandwidth.")
+    parser.add_argument('--lead-in-ms', type=float, default=audio_phy.DEFAULT_LEAD_IN_S * 1000,
+                         help='with --phy audio: silence before each burst so the far radio\'s '
+                              'squelch is open before the frame starts - must exceed TX key-up '
+                              f'plus squelch opening time (default: {audio_phy.DEFAULT_LEAD_IN_S * 1000:g})')
     parser.add_argument('--verbose', '-v', action='store_true',
                          help='Print per-message stats as they happen (size, fragment count, '
                               'timing/throughput, LinkReceiver counters). A session summary '
                               '(bytes/messages sent+received, elapsed time) always prints on exit '
                               'regardless of this flag.')
     args = parser.parse_args()
+    if args.phy == 'audio':
+        if args.audio_port is None:
+            parser.error("--phy audio needs --audio-port mic or --audio-port data")
+        port_max = audio_phy.PORT_PROFILES[args.audio_port]['max_symbol_rate']
+        if link.WAVEFORM_MODES[args.mode]['symbol_rate'] > port_max:
+            parser.error(f"--mode {args.mode} needs {link.WAVEFORM_MODES[args.mode]['symbol_rate']} "
+                         f"sym/s; the {args.audio_port} audio port carries at most {port_max}")
 
     # _stdin_lines() reads via input() on a background thread (see its own
     # docstring) so readline can give free history/line-editing. That's a

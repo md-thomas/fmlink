@@ -36,7 +36,7 @@ duplicated between the file-based and live-station code paths.
 
 ## 2. Public API / module map
 
-Only six modules are actually installed as importable Python packages
+Only seven modules are actually installed as importable Python packages
 (`pyproject.toml`'s `py-modules`); everything else in this repo is a CLI
 script or test, run directly rather than imported.
 
@@ -49,6 +49,7 @@ script or test, run directly rather than imported.
 | `openwave_pulse.py` | RRC pulse shaping: `rrc_taps`, `pulse_shape` (symbols → oversampled samples), `matched_filter` (samples → symbols), `decimate`, `group_delay`, `expected_symbol_count`. Needs numpy — the first stage where a real DSP dependency becomes unavoidable. |
 | `openwave_channel.py` | AWGN channel simulation: `add_awgn` (direct noise voltage), `snr_db_to_noise_voltage` (target-SNR convenience). |
 | `openwave_sync.py` | Tolerant frame synchronization: `find_sync_offsets`/`best_sync_offset` (sliding Hamming-distance correlator for the preamble+sync-word, not an exact-byte match), `iter_frames_correlated`/`describe_frames_correlated`, `extract_frame_at`. |
+| `openwave_audio.py` | Audio-subcarrier PHY for a radio's audio port: `modulate` (symbols → real 48 kHz audio on a carrier, with lead-in), `demodulate` (preamble correlation for timing/phase/level, PLL drift tracking, data-aided SNR), `PORT_PROFILES` (carrier and max symbol rate per radio connection), PCM16 helpers. |
 | `openwave_fec.py` | Forward error correction: `convolutional_encode`/`viterbi_decode` (numpy-vectorized, parameterized by generator polynomials/constraint length K, not hardcoded to one scheme), `encode_frame`/`decode_frames` (frame-level wrappers used by the CLI), `free_distance`/`find_generators` (principled, Dijkstra-based preset selection), `PRESETS` (13 named rate-1/N configurations, `r1_2_k3` through `r1_6_k9`, plus an empirically-measured SNR-to-preset reference table). |
 
 **CLI-only (not pip-installed as a library, run as scripts):**
@@ -78,9 +79,10 @@ long-running interactive process, not a one-shot pipeline stage.
   OpenWave-specific code) — a small TCP relay that models path loss,
   Rayleigh fading, AWGN, and configurable latency between two peers
   exchanging raw IQ samples. Its `--channel fm` mode instead models an FM
-  transceiver pair's audio path, carrying PCM audio; the station doesn't
-  speak that yet. Each peer identifies itself by callsign on connect; no
-  static address configuration.
+  transceiver pair's audio path, carrying PCM audio, which the station
+  speaks with `--phy audio --audio-port mic|data` (`openwave_audio.py`).
+  Each peer identifies itself by callsign on connect; no static address
+  configuration.
 - **Mode/FEC negotiation** (`--auto`): initiator-driven and symmetric —
   whichever station gets a message to send first measures the link
   itself and picks ONE mode/FEC both directions use, via a two-phase

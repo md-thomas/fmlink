@@ -63,6 +63,15 @@ AWGN channel simulation - add noise to a sample file, either by direct
 signal power. Sample-level, same reasoning as `openwave_pulse.py` for why
 this only makes sense after pulse shaping, not before.
 
+**`openwave_audio.py`**
+Audio-subcarrier PHY: symbols <-> real 48 kHz audio on a carrier tone, for
+driving a radio's audio port instead of exchanging complex baseband IQ.
+The receiver recovers timing, carrier phase and level by correlating
+against the frame's known preamble and sync word, then a phase-locked
+loop tracks sound-card clock drift. It also gives a data-aided SNR
+estimate. Used by `ota_station.py --phy audio`; see "Audio PHY over a
+simulated FM radio" below.
+
 **`modulate.py` / `pulseshape.py` / `channel.py` / `matchedfilter.py` / `demodulate.py` / `plot_constellation.py`**
 CLI stages built on the modules above, chained together into a full bits ->
 symbols -> RRC samples -> (optionally noisy) -> symbols -> bits pipeline
@@ -677,14 +686,91 @@ down to 5 characters per burst.)
 `--base-snr-db`, `--no-fading`, `--drop-prob`, `--latency-ms`,
 `--jitter-ms`, `--seed`) are documented in `../ota_sim/README.md` and
 `python3 -m ota_sim.simulator -h`. Its `--channel fm` mode (an FM
-transceiver audio-path model) carries 16-bit PCM audio rather than IQ, so
-`ota_station.py` can't use it until the modem has an audio-subcarrier
-path.
+transceiver audio-path model) carries audio rather than IQ - see the next
+section.
 A tighter/noisier link is a good way to see the real link layer at work:
 higher `--drop-prob` or lower `--base-snr-db` should never produce garbled
 text (CRC-verified frames only), just gaps or delivery failures - the same
 "solid link layer" property `tests/test_ota_station.py` and the archived
 `test_phy_loopback.py`'s noisy-channel test both check for.
+
+### Audio PHY over a simulated FM radio (`--phy audio`)
+
+The real deployment target is VHF/UHF FM transceivers driven through
+their audio ports. `--phy audio` makes a station send real 48 kHz audio
+instead of IQ:
+
+- **TX:** each burst is RRC-shaped symbols on a carrier tone inside the
+  radio's passband (`openwave_audio.py`), preceded by a lead-in of silence
+  (`--lead-in-ms`, default 250) that covers transmitter key-up and the far
+  radio's squelch opening.
+- **The channel:** pair it with `ota_sim`'s `--channel fm`, which models
+  the two radios' whole audio-to-audio path: filters, emphasis, deviation
+  limiter, FM threshold and clicks, fading, squelch, sound-card clock
+  offset, and half-duplex airtime.
+
+```bash
+python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
+
+python3 ota_station.py --station-id K0MDT --dst W1AW --sim-host 127.0.0.1 \
+    --phy audio --audio-port mic --auto --ack
+python3 ota_station.py --station-id W1AW --dst K0MDT --sim-host 127.0.0.1 \
+    --phy audio --audio-port mic --auto --ack
+```
+
+**Both stations and the simulator must agree.** Use the same port on all
+three, and `--phy audio` with `--channel fm` (or `iq` with `iq`). Nothing
+on the wire says which format a burst is in.
+
+`--audio-port` picks the radio connection, and is a **hard** ceiling on
+which modes can be used (unlike `--bandwidth`, which only steers
+`--auto`):
+
+| Port | Carrier | Max symbol rate | Usable modes |
+|---|---|---|---|
+| `mic` (speaker/mic, 300-3000 Hz, emphasis) | 1650 Hz | 1200 | 0, 1, 2 |
+| `data` (6-pin data port, flat to ~5 kHz) | 2000 Hz | 2400 | 0, 1, 2, 3 |
+
+Modes 4 and 5 (4800/9600 sym/s) don't fit any FM radio's audio passband.
+
+**Measured through the FM model** (narrow channel, r1_2_k7, 10 bursts
+per point, % delivered):
+
+| Port | Mode | Airtime | 30 dB CNR | 15 dB | 10 dB | 8 dB |
+|---|---|---|---|---|---|---|
+| mic | 0, 1, 2 | 5.0 / 2.6 / 1.5 s | 100% | 100% | 100% | 100% |
+| data | 0, 1 | 5.0 / 2.6 s | 100% | 100% | 100% | 100% |
+| data | 2 | 1.5 s | 100% | 100% | 100% | 60% |
+| data | 3 | 0.9 s | 100% | 100% | 30% | 0% |
+
+Below about 6 dB CNR the radio's squelch closes, so nothing gets through
+on either port. The mic path holds up better at the fringe than the data
+port, because de-emphasis and the voice band filter out much of FM's
+high-frequency noise. The data port's advantage is mode 3's extra speed
+on a strong link.
+
+The receiver recovers each burst's timing, carrier phase and level by
+correlating against the frame's known preamble and sync word. That also
+resolves QPSK's phase ambiguity and gives `--auto` a data-aided SNR
+estimate. A phase-locked loop then tracks the sound cards' clock offset
+across the burst; without it, about 20 ppm breaks a multi-second QPSK
+burst. With it, tested up to 300 ppm.
+
+`--auto` uses the same `MODE_SNR_TABLE` as the IQ path: the data-aided
+estimate measures the received symbols' SNR, the same quantity the
+table's thresholds are about.
+
+Bursts now take real airtime: seconds per burst at modes 0-1. The ACK,
+`/ping` and negotiation reply timeouts stretch by twice the last burst's
+airtime, so a station waits for the reply to finish airing instead of
+retrying into it on the half-duplex channel.
+
+Not yet handled on the audio path:
+
+- **Mobile fading** loses 10-60% of bursts at 20 dB average CNR. Fades
+  cause clicks and squelch dropouts mid-burst, and convolutional FEC
+  can't repair long error bursts without an interleaver (TODO 3.2).
+- **The GUI** (`open_wave_ui`) has no `--phy audio` option yet.
 
 ### Known limitations
 

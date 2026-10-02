@@ -11,14 +11,20 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Open (actively relevant — pluggable-PHY / OTA track)
 
-- [ ] **Phase 5 — audio-interfaced radio deployment (NOT STARTED).** The
-      actual eventual deployment target: driving real VHF/UHF
-      transceivers through their audio ports (not SDR hardware). Needs
-      real-time audio I/O without buffer underruns (5.1), PTT control to
-      key the transceiver (5.2, e.g. CAT/serial RTS-DTR/VOX), handling a
-      real radio's audio passband/deviation characteristics vs. Pluto/
-      RTL-SDR's direct complex baseband (5.3), and an actual over-the-air
-      test between two audio-interfaced radios (5.4).
+- [ ] **Phase 5 — audio-interfaced radio deployment (5.3 done in
+      simulation).** The actual eventual deployment target: driving real
+      VHF/UHF FM transceivers through their audio ports (not SDR
+      hardware). 5.3 (a real radio's audio passband/deviation vs. direct
+      complex baseband) is handled in simulation as of 2026-10-02:
+      - `openwave_audio.py` puts symbols on an audio carrier, with
+        preamble-correlation sync and PLL drift tracking.
+      - `ota_station.py --phy audio --audio-port mic|data` uses it.
+      - `ota_sim`'s FM transceiver model (`--channel fm`) is the channel.
+      
+      Still needed: real-time audio I/O without buffer underruns (5.1),
+      PTT control to key the transceiver (5.2, e.g. CAT/serial
+      RTS-DTR/VOX), and an actual over-the-air test between two radios
+      (5.4).
 - [ ] **6.3 — design an OFDM mode.** A bigger lift than the existing
       constellation-dict approach — needs new sync/framing, not a
       drop-in replacement for the single-carrier chain.
@@ -34,7 +40,10 @@ far more frequently and carries the full reasoning behind each item.
       choices from the Waveform Mode ID table — either wire Mode ID into
       their defaults (with explicit override still allowed) or decide to
       keep them permanently independent.
-- [ ] **3.2 — bit interleaver/de-interleaver not built.** Current FEC
+- [ ] **3.2 — bit interleaver/de-interleaver not built.** Now the
+      main fringe weakness on the FM audio path: mobile Rayleigh fading
+      at 20 dB average CNR loses 10-60% of bursts to mid-burst clicks
+      and squelch dropouts, which arrive as long error bursts. Current FEC
       handles scattered bit errors within a fragment; a burst that takes
       out a large contiguous run within one fragment's coded block is a
       different, unaddressed failure mode.
@@ -45,6 +54,10 @@ far more frequently and carries the full reasoning behind each item.
       BER, BPSK only ±90°. A real fix (differential encoding, or a
       pilot/training sequence for the non-BPSK modes) is still open; the
       OTA simulator is the natural place to verify it once built.
+      **Solved on the audio path (2026-10-02):** `openwave_audio.py`
+      takes phase from the preamble correlation (no ambiguity) and tracks
+      drift with a PLL. Still open for the IQ path, where `ota_sim`'s IQ
+      channel deliberately applies no phase rotation.
 - [x] **UDP ~65KB single-datagram ceiling on `ota_station.py` (found via
       8.6).** Resolved 2026-10-02: the `ota_sim` relay is now TCP with
       length-prefixed messages, so there is no per-burst ceiling and
