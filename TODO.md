@@ -25,11 +25,23 @@ simulator's window. Done most recently:
 - Live simulator `/commands`, plus station `/ack`, `/auto`, `/lead-in`.
 - Spec brought up to date: worked example, Control payloads, audio PHY.
 
+First real-radio steps (2026-10-03), with an HT on an AIOC adapter
+(USB audio `hw:AllInOneCable,0`, PTT = DTR on `/dev/ttyACM0`):
+
+- `audio_wav_test.py gen|decode` makes a burst WAV and decodes a
+  recording, offline. A software loopback decodes fine.
+- A mode 0 burst keyed out through the AIOC sounded clean on a second
+  (listen-only) radio. Not yet confirmed: that a received burst decodes.
+- Blocked on a second AIOC + USB cable, so one radio can transmit and the
+  other record. Then: `gen` on one, `arecord` + `decode` on the other,
+  then modes 1 and 2.
+
 Next, roughly in order (pending: are radios + an audio/PTT interface
 available?):
 
-1. **Phase 5 on real radios** (sound-card I/O, PTT, over-the-air test),
-   if hardware is ready.
+1. **Phase 5 on real radios** (sound-card I/O, PTT, over-the-air test).
+   Next is the two-AIOC reception test above, then real-time audio I/O
+   and PTT in `ota_station.py`.
 2. **Automatic re-negotiation mid-session.** Stations pick a mode once;
    they should adapt as the link changes (pairs with live control).
 3. **Soft-decision Viterbi** (~2 dB at the fringe).
