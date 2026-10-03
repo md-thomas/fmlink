@@ -321,6 +321,9 @@ def _help_text():
         "  /modes                      list the Waveform Modes table",
         "  /fec [PRESET]               show the current FEC preset, or switch it (keeps the mode, tells the peer)",
         "  /bandwidth [narrow|wide]    show or set the ceiling on automatic mode selection",
+        "  /ack [on|off]               show or set whether this station's messages request ACKs/retries",
+        "  /auto [on|off]              show or set automatic mode negotiation (on: negotiates on next send)",
+        "  /lead-in [MS]               --phy audio: show or set the silence before each burst",
         "  /help (or /?)               show this list",
         "  /quit (or /exit)            close this station",
     ])
@@ -1340,8 +1343,15 @@ async def _handle_command(station, line):
     /?) prints the full command reference (_help_text()) - the one-line
     startup hint just points here rather than listing every command.
 
+    /ack, /auto and /lead-in change this station's own --ack, --auto and
+    --lead-in-ms settings live. /ack only affects this station's sends -
+    a receiver always acknowledges frames that ask for it, so the peer
+    needn't change anything. /auto on re-arms negotiation for this
+    station's next send, even if the session already negotiated once.
+
     Unrecognized commands, an out-of-range mode, an unknown FEC preset, or
-    an invalid /bandwidth value just log an error - not fatal.
+    an invalid /bandwidth, /ack, /auto or /lead-in value just log an error
+    - not fatal.
 
     Returns True to keep the session running, False if the command was
     /quit or /exit and run()'s stdin loop should stop."""
@@ -1428,6 +1438,50 @@ async def _handle_command(station, line):
         station.max_symbol_rate = station._ceiling_for(value)
         station._log(f"[cmd] bandwidth set to {value} - doesn't change the current mode by "
                      f"itself; use /renegotiate (or /mode) to actually apply it")
+
+    elif cmd in ('ack', 'auto'):
+        current = station.use_ack if cmd == 'ack' else station.auto
+        if len(parts) < 2:
+            station._log(f"[cmd] {cmd}: {'on' if current else 'off'} - usage: /{cmd} on|off")
+            return True
+        value = parts[1].lower()
+        if value not in ('on', 'off'):
+            station._log(f"[cmd] /{cmd}: {parts[1]!r} must be 'on' or 'off'")
+            return True
+        enabled = value == 'on'
+        if cmd == 'ack':
+            station.use_ack = enabled
+            if enabled and station.retry_mgr is None:
+                station.retry_mgr = link.RetryManager()
+            station._log(f"[cmd] ack {value} - " + (
+                "messages now request ACKs and retry if none comes back"
+                if enabled else "messages are now sent once, without delivery confirmation"))
+        else:
+            station.auto = enabled
+            if enabled:
+                station._auto_negotiate_done = False
+            station._log(f"[cmd] auto {value} - " + (
+                f"will negotiate mode/FEC with {station.dst_id} on the next send"
+                if enabled else "keeping the current mode; no automatic negotiation"))
+
+    elif cmd == 'lead-in':
+        if station.phy != 'audio':
+            station._log("[cmd] /lead-in only applies with --phy audio")
+            return True
+        if len(parts) < 2:
+            station._log(f"[cmd] lead-in: {station.lead_in_s * 1000:g} ms - usage: /lead-in MS")
+            return True
+        try:
+            ms = float(parts[1])
+        except ValueError:
+            ms = -1.0
+        if ms < 0:
+            station._log(f"[cmd] /lead-in: {parts[1]!r} must be a number of milliseconds, 0 or more")
+            return True
+        before = station.lead_in_s * 1000
+        station.lead_in_s = ms / 1000
+        station._log(f"[cmd] lead-in: {before:g} -> {ms:g} ms (must cover the transmitter's key-up "
+                     f"plus the far squelch's opening time)")
 
     elif cmd in ('help', '?'):
         station._log(_help_text())

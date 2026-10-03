@@ -662,6 +662,14 @@ message):
   touch the currently active mode or send anything to the peer by itself
   - it only affects *future* automatic selection, so follow it with
   `/renegotiate` (or `/mode`) to actually apply it.
+- **`/ack [on|off]`**, **`/auto [on|off]`**, **`/lead-in [MS]`** - change
+  this station's `--ack`, `--auto` and `--lead-in-ms` live (no argument
+  shows the current value):
+  - `/ack` only affects this station's own sends; a receiver always
+    acknowledges frames that ask for it.
+  - `/auto on` re-arms negotiation for the next send, even if the
+    session already negotiated.
+  - `/lead-in` applies to `--phy audio` only.
 - **`/help`** (or `/?`) - prints the full command reference.
 - **`/quit`** (or `/exit`) - closes this station cleanly, same as EOF/Ctrl+C
   (still prints the session summary on the way out).
@@ -797,6 +805,10 @@ Or let `./fm_test.sh` open all three in their own terminal windows, with
 matching settings. For example, `./fm_test.sh --port data --cnr 10` or
 `./fm_test.sh --fading rayleigh --speed 80 --freq-mhz 440`; see
 `./fm_test.sh --help`.
+
+Once it's running, the channel can be changed without restarting
+anything: type commands like `/cnr 10`, `/fading rayleigh 80` or `/show`
+into the simulator's window (see `../ota_sim/README.md`).
 
 **Both stations and the simulator must agree.** Use the same port on all
 three, and `--phy audio` with `--channel fm` (or `iq` with `iq`). Nothing

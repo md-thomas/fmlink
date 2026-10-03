@@ -360,7 +360,7 @@ class OTAStationIntegrationTests(unittest.TestCase):
 
             self.assertEqual(len(logged), 1)
             for name in ('/ping', '/renegotiate', '/mode', '/modes', '/fec', '/bandwidth',
-                         '/help', '/quit'):
+                         '/ack', '/auto', '/lead-in', '/help', '/quit'):
                 self.assertIn(name, logged[0])
 
         self._run(scenario())
@@ -818,6 +818,63 @@ class AudioPhyStationTests(unittest.TestCase):
         padded_s = len(audio_phy.modulate(station._modulate(padded), 600, 1650)) / audio_phy.AUDIO_SAMPLE_RATE
         self.assertAlmostEqual(padded_s - sent_s, 0.64, delta=0.01)
         self.assertAlmostEqual(station._last_tx_airtime_s, sent_s, places=6)
+
+    def test_ack_auto_and_lead_in_commands(self):
+        async def scenario():
+            logs = []
+            a = Station(station_id='K0MDT', dst_id='W1AW', phy='audio', audio_port='mic',
+                        on_log=logs.append)
+            self.assertFalse(a.use_ack)
+            self.assertIsNone(a.retry_mgr)
+            await _handle_command(a, '/ack on')
+            self.assertTrue(a.use_ack)
+            self.assertIsNotNone(a.retry_mgr)
+            await _handle_command(a, '/ack off')
+            self.assertFalse(a.use_ack)
+
+            a._auto_negotiate_done = True  # e.g. after a manual /mode
+            await _handle_command(a, '/auto on')
+            self.assertTrue(a.auto)
+            self.assertFalse(a._auto_negotiate_done, "on must re-arm negotiation for the next send")
+            await _handle_command(a, '/auto off')
+            self.assertFalse(a.auto)
+
+            await _handle_command(a, '/lead-in 400')
+            self.assertAlmostEqual(a.lead_in_s, 0.4)
+            for bad in ('/lead-in -5', '/lead-in soon', '/ack maybe', '/auto 1'):
+                await _handle_command(a, bad)
+            self.assertAlmostEqual(a.lead_in_s, 0.4)
+            self.assertFalse(a.use_ack)
+            self.assertFalse(a.auto)
+
+            iq = Station(station_id='K0MDT', dst_id='W1AW', on_log=logs.append)
+            await _handle_command(iq, '/lead-in 400')
+            self.assertIn('only applies with --phy audio', logs[-1])
+
+        self._run(scenario())
+
+    def test_lead_in_change_reaches_the_next_burst(self):
+        class _Recorder:
+            connected = True
+
+            def __init__(self):
+                self.sent = []
+
+            def send(self, payload):
+                self.sent.append(payload)
+
+        async def scenario():
+            a = Station(station_id='K0MDT', dst_id='W1AW', mode_id=2, phy='audio', audio_port='mic',
+                        on_log=lambda msg: None)
+            a._sim = _Recorder()
+            frame = link.build_frame(b'x', seq=1, mode_id=2)
+            a._transmit_frame(frame)
+            await _handle_command(a, '/lead-in 750')
+            a._transmit_frame(frame)
+            first, second = (len(p) / 2 / audio_phy.AUDIO_SAMPLE_RATE for p in a._sim.sent)
+            self.assertAlmostEqual(second - first, 0.5, places=3)
+
+        self._run(scenario())
 
     def test_reply_timeout_tracks_airtime(self):
         iq = Station(station_id='K0MDT', dst_id='W1AW')
