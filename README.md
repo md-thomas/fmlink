@@ -434,6 +434,67 @@ either way (that's real information loss, not a bookkeeping problem), but
 a gap is now always visible in `fec_decode.py`'s per-fragment status
 output instead of an unexplained "attachment doesn't match" at the end.
 
+## Processing Gain: How a Weak Signal Is Still Recovered
+
+A single received symbol can be badly corrupted by noise, but the
+receiver never decides anything from a single sample or a single bit. It
+gathers a signal's energy from many places that are all known to belong
+together, and the noise in those places doesn't line up the way the
+signal does. Combining N samples, symbols or coded bits adds the signal
+up N times over, but the noise only about sqrt(N) times. That improvement
+is the processing gain, 10*log10(N) dB. OpenWave stacks several stages
+of it:
+
+- **The matched filter** combines the samples within each symbol. With
+  4 samples per symbol on the IQ path that's 6 dB.
+- **FEC** sends each information bit as N coded bits at rate 1/N. The
+  Viterbi decoder weighs all of them, plus the code's structure across
+  neighbouring bits. r1_4_k9 gives each bit 4 times the energy (6 dB)
+  before the coding gain itself.
+- **Finding the frame** correlates against the 288 known preamble and
+  sync-word symbols at once, about 24.6 dB of gain. So the receiver
+  locks on even when individual bits are coming out wrong.
+
+The same idea, seen from the bandwidth side: what counts is energy per
+information bit, Eb/N0 = SNR + 10*log10(B / bit rate). Sending fewer bits
+per second through the same bandwidth B gives each bit more energy.
+
+A worked example: mode 0 with r1_4_k9 carries 150 bit/s of information
+through the mic port's ~2.7 kHz passband, a ratio of 18, or 12.6 dB. If
+the audio arriving from the radio had 0 dB SNR across that whole
+passband, each information bit would still arrive at about 12.6 dB
+Eb/N0. The decoder needs about 4-6 dB in our measurements. Mode 2 with
+r1_2_k7 (1200 bit/s) has only 3.5 dB of that headroom. That's why the
+slow, strongly coded modes survive conditions the fast ones can't, and
+why `--auto` steps down to them as the link degrades.
+
+Measured examples:
+
+| Situation | Result |
+|---|---|
+| IQ path, BPSK + r1_4_k9, at -6 dB SNR per sample (noise louder than the signal) | 7.7% of raw bits wrong, but 100% of frames decoded |
+| Same, at -8 dB per sample | ~13% raw bit errors, 88% of frames decoded |
+| FM mic port at 8 dB CNR (audio SINAD ~14.5 dB) | every mode 0-2 delivered 100% |
+| FM bursts carrying 114-286 FM threshold "clicks" each (15 dB CNR, 80 km/h fading) | all decoded first time |
+| A 30% (IQ bits) or 40% (audio) wiped-out marker | frame still decoded, because the correlation finds it anyway |
+
+Two limits on all this:
+
+- **Gain against burst errors needs interleaving.** Processing gain
+  assumes the noise is spread out. A fade that knocks out a run of
+  consecutive bits concentrates the damage where the code can't reach
+  it. The interleaver spreads those bursts back out: under mobile fading,
+  mode 2 at 15 dB CNR went from 38% of frames delivered to 100%.
+- **Over FM there is a hard floor before the modem ever sees the
+  signal.** An FM receiver's discriminator stops working below roughly
+  6-10 dB carrier-to-noise. The audio falls apart into clicks and noise,
+  and the squelch closes (about 6 dB here). Processing gain applies to
+  the audio that comes out of the radio, so it can't recover a signal the
+  radio itself has lost. On FM, OpenWave's gain goes into surviving
+  fades, clicks and interference near that floor, not into going below
+  it. Getting far below the noise, as FT8 or WSPR do, needs an SSB
+  (linear) radio path.
+
 ## Over-The-Air (OTA) Simulator
 
 Everything above is a one-shot, file-based, single-process pipeline.
