@@ -89,7 +89,12 @@ scheme. `PRESETS` holds 13 named configurations (`r1_2_k3` through
 `free_distance()`/`find_generators()` are how the presets were chosen
 (Dijkstra over the trellis, not hand-picked - see the module docstring for
 why that replaced an earlier hand-picked preset that had
-silently-truncated, out-of-range generator values).
+silently-truncated, out-of-range generator values). Each FEC block's
+coded bits are interleaved (`DEFAULT_INTERLEAVER = 'golden'`; the exact
+rule is in the spec's FEC section), so a burst of channel errors such as
+an FM fade reaches the decoder as scattered errors it can correct.
+`fec_encode.py`/`fec_decode.py` take `--interleaver none|block|golden`
+for comparisons; both ends must match.
 
 **`fec_encode.py` / `fec_decode.py`**
 CLI wrappers around `openwave_fec.py`: encode a built frame (or a whole
@@ -776,14 +781,25 @@ To catch this:
 2. If more than 3% of the burst's 5 ms stretches sit 6 dB or more below
    its median, the link is treated as fading.
 3. `--auto` then picks from `FADING_MODE_SNR_TABLE` instead: K=7/K=9
-   codes and higher thresholds.
+   codes, chosen by the probe's whole-burst average SNR.
 
 The negotiation log shows it, e.g. `measured our own link at ~12.0dB
 (fading: 17% of the burst in dropouts, ...)`.
 
-At 15 dB CNR, 80 km/h on 440 MHz, this moves `--auto` from mode 2/r1_2_k3
-(about 6% of bursts delivered) to mode 0/r1_4_k9 (100%). Across a study
-of 5-80 km/h at 15-35 dB, average delivery rose from 79% to 97%.
+This works together with the FEC interleaver, which turns each fade's
+burst of errors into scattered ones. At 15 dB CNR, 80 km/h on 440 MHz,
+mode 2 went from about 6% of bursts delivered (r1_2_k3, no interleaving)
+to 100% (r1_2_k7, interleaved). Fading-table rows, measured at 30 and
+80 km/h with interleaving:
+
+| Probe burst average SNR | Pick | Delivered |
+|---|---|---|
+| below 7 dB | mode 0 / r1_4_k9 | 100% down to 8 dB CNR |
+| 7-9.5 dB | mode 1 / r1_2_k7 | 100% |
+| 9.5 dB and up | mode 2 / r1_2_k7 | 100% |
+
+That's about 660 bps of goodput, against 240 bps for the
+pre-interleaving fading table at the same 100% delivery.
 
 Bursts now take real airtime: seconds per burst at modes 0-1. The ACK,
 `/ping` and negotiation reply timeouts stretch by twice the last burst's
@@ -792,12 +808,11 @@ retrying into it on the half-duplex channel.
 
 Not yet handled on the audio path:
 
-- **Mobile fading costs throughput.** `--auto` now falls back to
-  slower, stronger modes on a fading link rather than losing bursts (see
-  above). An interleaver (TODO 3.2) would let faster modes survive the
-  same dropouts.
-- **Slow fading (walking speed)** fades are long enough to take out whole
-  bursts no matter the mode. ACK retries are the only defence.
+- **Slow fading (walking speed).** Fades last ~100 ms, long enough to
+  wipe out large parts of a burst even with interleaving: about half of
+  bursts get through at 8-20 dB. ACK retries carry it, and the fading
+  table still gives more throughput there than a slow-fading-safe one
+  would.
 - **The fading table stops at mode 2.** It was measured on the mic port
   only, so the data port's mode 3 is never picked on a fading link.
 - **The GUI** (`open_wave_ui`) has no `--phy audio` option yet.

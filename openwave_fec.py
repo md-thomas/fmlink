@@ -25,6 +25,11 @@ all that actually matters - see tests/test_openwave_fec.py for round-trip
 and error-correction verification rather than relying on the convention
 matching a textbook's exact bit order.
 
+Each block's coded bits are then interleaved (DEFAULT_INTERLEAVER - see
+interleave_permutation()) before byte padding, so a burst of consecutive
+channel errors, e.g. an FM fade, reaches the Viterbi decoder as scattered
+errors it can correct rather than one run it can't.
+
 Each block is flushed with K-1 zero tail bits so the decoder can rely on
 the trellis ending at state 0 - this adds redundancy per block (worse for
 small blocks), which is part of why the header and payload+CRC are each
@@ -319,13 +324,68 @@ def _pad_to_byte(bits):
     return bits if remainder == 0 else bits + [0] * (8 - remainder)
 
 
+# -- interleaving ------------------------------------------------------------
+# Reorders each FEC block's coded bits (before byte padding) so a burst of
+# consecutive channel errors - an FM fade, a click - lands on coded bits
+# spread far apart in the code's own order, where Viterbi sees scattered,
+# correctable errors instead of one uncorrectable run.
+INTERLEAVERS = ('none', 'block', 'golden')
+# What encode_frame()/decode_frames() use unless told otherwise - see the
+# FEC section of OpenWave_Specification.txt. Under mobile FM fading, golden
+# took mode 2/r1_2_k7 at 15 dB CNR, 80 km/h from 38% of frames delivered
+# (no interleaving) to 100%; block interleaving did nearly as well (it left
+# slightly more failures), and golden is a one-line rule to specify.
+DEFAULT_INTERLEAVER = 'golden'
+
+
+@functools.lru_cache(maxsize=256)
+def interleave_permutation(n, scheme):
+    """perm such that interleaved[j] = coded[perm[j]], for an n-bit block.
+    'block': write row by row into ceil(sqrt(n)) columns, read column by
+    column (pruned at n). 'golden': perm[j] = (j * s) mod n, s the integer
+    nearest n*(sqrt(5)-1)/2 that is coprime with n - consecutive channel
+    bits come from code positions s apart, and any run of them is spread
+    near-evenly across the block."""
+    if scheme == 'none' or n <= 1:
+        return np.arange(n)
+    if scheme == 'block':
+        cols = int(np.ceil(np.sqrt(n)))
+        rows = -(-n // cols)
+        grid = np.arange(rows * cols).reshape(rows, cols)
+        order = grid.T.ravel()
+        return order[order < n]
+    if scheme == 'golden':
+        target = n * (np.sqrt(5) - 1) / 2
+        s = int(round(target))
+        offset = 0
+        while True:
+            for candidate in (s + offset, s - offset):
+                if 0 < candidate < n and np.gcd(candidate, n) == 1:
+                    return (np.arange(n) * candidate) % n
+            offset += 1
+    raise ValueError(f"unknown interleaver {scheme!r} (one of {INTERLEAVERS})")
+
+
+def interleave_bits(bits, scheme):
+    """Coded bits (code order) -> channel order. Returns a list of ints."""
+    return np.asarray(bits)[interleave_permutation(len(bits), scheme)].tolist()
+
+
+def deinterleave_bits(bits, scheme):
+    """Inverse of interleave_bits(): channel order -> code order."""
+    bits = np.asarray(bits)
+    out = np.empty_like(bits)
+    out[interleave_permutation(len(bits), scheme)] = bits
+    return out.tolist()
+
+
 def _coded_byte_length(num_input_bits, generators, k):
     """Byte length of an independently-flushed, byte-padded FEC block
     encoding num_input_bits input bits - see encode_frame()."""
     return (coded_bit_length(num_input_bits, generators, k) + 7) // 8
 
 
-def encode_frame(data, generators, k):
+def encode_frame(data, generators, k, interleaver=DEFAULT_INTERLEAVER):
     """FEC-encode one or more frames produced by openwave_link.build_frame()
     or build_fragmented_frames() - each frame found is processed
     independently and in order (matching how build_fragmented_frames()
@@ -375,8 +435,9 @@ def encode_frame(data, generators, k):
         result += marker  # preamble+sync word stay raw
         header_bits = modem.bytes_to_bits(header_bytes)
         payload_crc_bits = modem.bytes_to_bits(payload_crc_bytes)
-        result += modem.bits_to_bytes(_pad_to_byte(convolutional_encode(header_bits, generators, k)))
-        result += modem.bits_to_bytes(_pad_to_byte(convolutional_encode(payload_crc_bits, generators, k)))
+        for block_bits in (header_bits, payload_crc_bits):
+            coded = interleave_bits(convolutional_encode(block_bits, generators, k), interleaver)
+            result += modem.bits_to_bytes(_pad_to_byte(coded))
 
         pos = payload_start + payload_crc_len  # continue right after this frame's CRC
 
@@ -385,7 +446,8 @@ def encode_frame(data, generators, k):
     return bytes(result)
 
 
-def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR_FRACTION):
+def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR_FRACTION,
+                  interleaver=DEFAULT_INTERLEAVER):
     """Find and decode every frame in possibly-corrupted data (via
     openwave_sync's tolerant correlator - the prefix/preamble/sync-word
     were never FEC-coded, so this is the same sync step as the uncoded
@@ -472,7 +534,8 @@ def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR
             return
 
         coded_header_len = coded_bit_length(header_input_bits, generators, k)
-        header_bits = viterbi_decode(header_block_bits[:coded_header_len], generators, k, header_input_bits)
+        header_bits = viterbi_decode(deinterleave_bits(header_block_bits[:coded_header_len], interleaver),
+                                     generators, k, header_input_bits)
         header_bytes = modem.bits_to_bytes(header_bits)
         header = link.parse_header(header_bytes)
 
@@ -490,7 +553,8 @@ def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR
             return
 
         coded_payload_len = coded_bit_length(payload_input_bits, generators, k)
-        payload_crc_bits = viterbi_decode(payload_block_bits[:coded_payload_len], generators, k, payload_input_bits)
+        payload_crc_bits = viterbi_decode(deinterleave_bits(payload_block_bits[:coded_payload_len], interleaver),
+                                          generators, k, payload_input_bits)
         payload_crc_bytes = modem.bits_to_bytes(payload_crc_bits)
         payload = payload_crc_bytes[:header['payload_len']]
         crc_bytes = payload_crc_bytes[header['payload_len']:]

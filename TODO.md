@@ -40,16 +40,31 @@ far more frequently and carries the full reasoning behind each item.
       choices from the Waveform Mode ID table — either wire Mode ID into
       their defaults (with explicit override still allowed) or decide to
       keep them permanently independent.
-- [ ] **3.2 — bit interleaver/de-interleaver not built.** Now the
-      main fringe weakness on the FM audio path. Mobile Rayleigh fading
-      produces mid-burst clicks and squelch dropouts, which arrive as
-      long error bursts. Since 2026-10-02 `--auto` detects fading and
-      falls back to slower, stronger modes (`FADING_MODE_SNR_TABLE`), so
-      bursts get through; an interleaver would win back the throughput
-      that fallback costs. Current FEC
+- [x] **3.2 — bit interleaver/de-interleaver.** Done 2026-10-02:
+      `openwave_fec.py` interleaves each FEC block's coded bits with a
+      golden-ratio permutation by default (`DEFAULT_INTERLEAVER`,
+      specified in OpenWave_Specification.txt's FEC section).
+      - Under mobile FM fading at 15 dB CNR, mode 2/r1_2_k7 went from 38%
+        to 100% of frames delivered.
+      - `FADING_MODE_SNR_TABLE` was recalibrated around it: about 2.75x
+        the goodput of the pre-interleaving table at 30 and 80 km/h.
+      - Slow fading (5 km/h, ~100 ms fades) still loses about half of
+        bursts; ARQ carries it.
+      
+      Original note: Current FEC
       handles scattered bit errors within a fragment; a burst that takes
       out a large contiguous run within one fragment's coded block is a
       different, unaddressed failure mode.
+- [ ] **Audio path re-finds sync in hard bits.** `openwave_audio.demodulate()`
+      already locates the marker by sample-domain correlation, but
+      `fec.decode_frames()` then searches for it again in demodulated
+      bits and rejects any candidate with more than 15% of the marker's
+      bits wrong (`DEFAULT_MAX_ERROR_FRACTION`). A fade landing on the
+      marker can fail a frame whose header and payload would have
+      decoded. Measured as ~1% of frames under mobile fading (8 of 800,
+      the same with or without interleaving), about a third of the
+      failures left once interleaving is on. Fix: pass the correlation's
+      marker position into the decoder instead of re-searching.
 - [ ] **No carrier phase recovery for QPSK/16-QAM (found via 8.10).**
       `openwave_modem.py`'s demodulators do plain per-axis hard-decision
       slicing with no Costas loop/differential encoding — measured

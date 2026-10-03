@@ -769,12 +769,17 @@ class AudioPhyStationTests(unittest.TestCase):
 
     def test_mobile_fading_selects_from_the_fading_table(self):
         # The case that motivated FADING_MODE_SNR_TABLE: 15 dB CNR, 80 km/h
-        # at 440 MHz. The plain table picked mode 2/r1_2_k3 here, which
-        # delivered ~6% of bursts; the fading table's choice delivered 100%.
+        # at 440 MHz. The plain table's pick (r1_2_k3) can't ride out the
+        # dropouts; the fading table goes by the whole-burst average and
+        # uses K=7/K=9 codes.
         station = self._probe_through_fm(base_cnr_db=15, fading='rayleigh', speed_kmh=80, seed=4)
         self.assertIsNotNone(station._last_rx_quality, "probe should have decoded")
         self.assertTrue(station._fading())
-        self.assertEqual(station._select_mode(), (0, 'r1_4_k9'))
+        expected = link.select_mode_for_snr(station._last_rx_quality['snr_db'],
+                                            max_symbol_rate=station.max_symbol_rate,
+                                            table=link.FADING_MODE_SNR_TABLE)
+        self.assertEqual(station._select_mode(), expected)
+        self.assertNotEqual(expected[1], 'r1_2_k3')
 
     def test_no_fading_keeps_the_regular_table(self):
         station = self._probe_through_fm(base_cnr_db=15, seed=4)

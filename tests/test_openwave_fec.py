@@ -224,6 +224,74 @@ class ErrorCorrectionTests(unittest.TestCase):
         self.assertNotEqual(decoded, bits)
 
 
+class InterleaverTests(unittest.TestCase):
+    def test_every_scheme_is_a_permutation(self):
+        for scheme in fec.INTERLEAVERS:
+            for n in (0, 1, 2, 7, 64, 524, 1000, 1023, 4104, 16392):
+                with self.subTest(scheme=scheme, n=n):
+                    perm = fec.interleave_permutation(n, scheme)
+                    self.assertEqual(sorted(perm.tolist()), list(range(n)))
+
+    def test_none_is_identity_and_unknown_rejected(self):
+        self.assertEqual(fec.interleave_permutation(10, 'none').tolist(), list(range(10)))
+        with self.assertRaises(ValueError):
+            fec.interleave_permutation(10, 'random')
+
+    def test_round_trip(self):
+        bits = np.random.default_rng(3).integers(0, 2, 1501).tolist()
+        for scheme in fec.INTERLEAVERS:
+            with self.subTest(scheme=scheme):
+                self.assertEqual(fec.deinterleave_bits(fec.interleave_bits(bits, scheme), scheme), bits)
+
+    def test_golden_spreads_channel_bursts(self):
+        # Any 8 consecutive channel bits come from code positions far apart -
+        # here at least 25 for frame-sized blocks (a K=7 code's memory spans
+        # ~14 coded bits at rate 1/2).
+        for n in (524, 1032, 4104):
+            perm = fec.interleave_permutation(n, 'golden')
+            spacing = min(abs(int(perm[j + a]) - int(perm[j + b]))
+                          for j in range(n - 8) for a in range(8) for b in range(a + 1, 8))
+            self.assertGreaterEqual(spacing, 25, n)
+
+    def _burst_frame(self, interleaver, burst_bits=48):
+        """Encode a frame, then flip a contiguous run of burst_bits channel
+        bits in the middle of its payload block - an FM fade's worth."""
+        generators, k = fec.PRESETS['r1_2_k7']
+        payload = bytes(range(64))
+        frame = link.build_frame(payload, seq=4)
+        encoded = fec.encode_frame(frame, generators, k, interleaver=interleaver)
+        bits = modem.bytes_to_bits(encoded)
+        prefix_bits = (24 + len(link.PREAMBLE) + len(link.SYNC_WORD)) * 8
+        header_block_bits = fec._coded_byte_length(link.HEADER_LEN * 8, generators, k) * 8
+        start = prefix_bits + header_block_bits + 200
+        for i in range(start, start + burst_bits):
+            bits[i] ^= 1
+        return modem.bits_to_bytes(bits), generators, k, payload
+
+    def test_golden_corrects_a_burst_that_defeats_no_interleaving(self):
+        corrupted, generators, k, payload = self._burst_frame('golden')
+        status, _, decoded = _decode_first(corrupted, generators, k, interleaver='golden')
+        self.assertEqual((status, decoded), ('ok', payload))
+
+        corrupted, generators, k, _ = self._burst_frame('none')
+        status, _, _ = _decode_first(corrupted, generators, k, interleaver='none')
+        self.assertEqual(status, 'crc_fail')
+
+    def test_mismatched_interleaver_fails_cleanly(self):
+        generators, k = fec.PRESETS['r1_2_k7']
+        frame = link.build_frame(b'mismatch', seq=1)
+        encoded = fec.encode_frame(frame, generators, k, interleaver='golden')
+        status, _, _ = _decode_first(encoded, generators, k, interleaver='none')
+        self.assertNotEqual(status, 'ok')
+
+    def test_golden_is_the_default(self):
+        self.assertEqual(fec.DEFAULT_INTERLEAVER, 'golden')
+        generators, k = fec.PRESETS['r1_2_k7']
+        frame = link.build_frame(b'default', seq=1)
+        self.assertEqual(fec.encode_frame(frame, generators, k),
+                         fec.encode_frame(frame, generators, k, interleaver='golden'))
+
+
 class BitErrorCountTests(unittest.TestCase):
     def test_identical_is_zero(self):
         self.assertEqual(fec.bit_error_count([1, 0, 1], [1, 0, 1]), 0)

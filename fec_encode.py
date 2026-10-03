@@ -44,6 +44,9 @@ def main():
                               'overrides --preset')
     parser.add_argument('--k', type=int, default=None,
                          help='Constraint length, required with --generators')
+    parser.add_argument('--interleaver', choices=fec.INTERLEAVERS, default=fec.DEFAULT_INTERLEAVER,
+                         help='Coded-bit interleaving within each FEC block - fec_decode.py must '
+                              f'use the same (default: {fec.DEFAULT_INTERLEAVER})')
     args = parser.parse_args()
 
     generators, k = _resolve_config(args)
@@ -51,14 +54,14 @@ def main():
     with open(args.input, 'rb') as f:
         data = f.read()
 
-    encoded = fec.encode_frame(data, generators, k)
+    encoded = fec.encode_frame(data, generators, k, interleaver=args.interleaver)
 
     with open(args.output, 'wb') as f:
         f.write(encoded)
 
     rate = f'1/{len(generators)}'
     print(f"FEC-encoded {len(data)} bytes -> {len(encoded)} bytes "
-          f"(rate {rate}, K={k}) -> {args.output}", file=sys.stderr)
+          f"(rate {rate}, K={k}, {args.interleaver} interleaving) -> {args.output}", file=sys.stderr)
 
 
 if __name__ == '__main__':

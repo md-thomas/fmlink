@@ -839,19 +839,25 @@ MODE_SNR_TABLE = (
 # ota_sim's FM model (mic port), mode 2/r1_2_k3 delivered 6% at 15 dB CNR
 # and 80 km/h - where MODE_SNR_TABLE picks it - while mode 0/r1_4_k9
 # delivered 100%. A stronger K=7 code holds up far better under fading at
-# the same rate, so this table uses r1_2_k7 and much higher thresholds.
+# the same rate, so this table uses r1_2_k7 throughout.
 #
 # Thresholds are the burst's AVERAGE data-aided SNR over the whole probe
-# (not the marker-only estimate MODE_SNR_TABLE uses), from a study of
-# 16-24 bursts per point across 5/30/80 km/h at 440 MHz and 15-35 dB CNR:
-# each row is the lowest average SNR at which its mode delivered >= 94%
-# at 30 and 80 km/h. Slow fading (5 km/h) is dominated by whole-burst
-# outages that no mode avoids; ARQ is the answer there, not mode choice.
-# Stops at mode 2: faster modes weren't measured under fading.
+# (not the marker-only estimate MODE_SNR_TABLE uses), measured WITH
+# openwave_fec's default golden interleaving - which is what makes fast
+# modes usable on a fading link at all (it turns each fade's error burst
+# into scattered errors). Study: 16 bursts per point at 5/30/80 km/h,
+# 440 MHz, 8-20 dB CNR; each row is the lowest average SNR at which its
+# mode delivered >= 94% at both 30 and 80 km/h (mode 1: ~7.4 dB, mode 2:
+# ~10 dB; at ~7.5 dB mode 2 managed 81-94%). Slow fading (5 km/h) fades
+# last ~100 ms and still take out whole stretches of a burst - per-burst
+# delivery there is lower (about 50% across 8-20 dB) and ARQ retries carry
+# it, but this table still beat a slow-fading-safe one on throughput at
+# every speed tested. Stops at mode 2: faster modes weren't measured under
+# fading.
 FADING_MODE_SNR_TABLE = (
     (-100.0, 0, 'r1_4_k9'),
-    (14.0, 1, 'r1_2_k7'),
-    (19.0, 2, 'r1_2_k7'),
+    (7.0, 1, 'r1_2_k7'),
+    (9.5, 2, 'r1_2_k7'),
 )
 
 

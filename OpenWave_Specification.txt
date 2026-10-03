@@ -50,7 +50,32 @@ Physical Layer (PHY)
     Preamble detection
     Carrier recovery
     Symbol timing recovery
-    Forward Error Correction: 	TBD
+    Forward Error Correction:	Convolutional code, rate 1/N, constraint
+    				    length K, hard-decision Viterbi at the
+    				    receiver (presets: openwave_fec.py's PRESETS).
+    				    The lead pad, preamble and sync word are sent
+    				    uncoded - the receiver finds them by
+    				    correlation, which needs a fixed known
+    				    pattern. The rest of the frame is two
+    				    independent blocks, each encoded separately:
+    				      1. the 32-byte header
+    				      2. payload + CRC32
+    				    Each block is flushed with K-1 zero tail bits,
+    				    then interleaved (below), then zero-padded to
+    				    a whole byte. The end pad stays uncoded.
+    Interleaver:		    Per FEC block, over its N coded bits (tail
+    				    included, padding excluded); bits are numbered
+    				    0..N-1 in encoder output order, MSB-first within
+    				    each byte on the wire. Transmitted bit j is
+    				    coded bit (j * s) mod N.
+    				    s is found from s0 = round(N * (sqrt(5) - 1) / 2):
+    				    for d = 0, 1, 2, ..., try s0 + d, then s0 - d,
+    				    and take the first value with 0 < s < N and
+    				    gcd(s, N) = 1. (N <= 1: no reordering.)
+    				    Consecutive channel bits come from coded bits
+    				    far apart, so a fade's or click's burst of
+    				    errors reaches the Viterbi decoder as scattered,
+    				    correctable errors.
 
 Link layer
 

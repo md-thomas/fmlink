@@ -50,6 +50,8 @@ def main():
                          help='Comma-separated generator polynomials, overrides --preset')
     parser.add_argument('--k', type=int, default=None,
                          help='Constraint length, required with --generators')
+    parser.add_argument('--interleaver', choices=fec.INTERLEAVERS, default=fec.DEFAULT_INTERLEAVER,
+                         help=f'Must match fec_encode.py (default: {fec.DEFAULT_INTERLEAVER})')
     parser.add_argument('--max-error-fraction', type=float, default=None,
                          help='Sync correlator tolerance (default: openwave_sync default)')
     args = parser.parse_args()
@@ -59,7 +61,7 @@ def main():
     with open(args.input, 'rb') as f:
         data = f.read()
 
-    kwargs = {}
+    kwargs = {'interleaver': args.interleaver}
     if args.max_error_fraction is not None:
         kwargs['max_error_fraction'] = args.max_error_fraction
 
