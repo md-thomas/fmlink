@@ -55,7 +55,16 @@ far more frequently and carries the full reasoning behind each item.
       handles scattered bit errors within a fragment; a burst that takes
       out a large contiguous run within one fragment's coded block is a
       different, unaddressed failure mode.
-- [ ] **Audio path re-finds sync in hard bits.** `openwave_audio.demodulate()`
+- [x] **Audio path re-finds sync in hard bits.** Fixed 2026-10-02:
+      `fec.decode_frames(first_marker_bit=...)` decodes at the position
+      the sample-domain correlation found, and `ota_station.py --phy audio`
+      passes it.
+      - Over 1,728 fading trials it rescued 25 of 37 sync failures (the
+        other 12 had header/payload damage too) and broke none.
+      - Mode 0 at 5 km/h and 12 dB went from 41/48 to 48/48.
+      - The uncoded (no-FEC) path still re-searches.
+      
+      Original note: `openwave_audio.demodulate()`
       already locates the marker by sample-domain correlation, but
       `fec.decode_frames()` then searches for it again in demodulated
       bits and rejects any candidate with more than 15% of the marker's

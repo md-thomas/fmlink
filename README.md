@@ -760,7 +760,10 @@ high-frequency noise. The data port's advantage is mode 3's extra speed
 on a strong link.
 
 The receiver recovers each burst's timing, carrier phase and level by
-correlating against the frame's known preamble and sync word. That also
+correlating against the frame's known preamble and sync word, then
+decodes the frame at exactly that position. It doesn't re-find the
+marker in demodulated bits, where a fade across it could fail an
+otherwise decodable frame. That also
 resolves QPSK's phase ambiguity and gives `--auto` a data-aided SNR
 estimate. A phase-locked loop then tracks the sound cards' clock offset
 across the burst; without it, about 20 ppm breaks a multi-second QPSK

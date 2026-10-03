@@ -165,6 +165,33 @@ class DemodulateTests(unittest.TestCase):
         self.assertEqual(info['quality'], 0.0)
 
 
+class MarkerUnderNoiseTests(unittest.TestCase):
+    """A burst of noise over part of the marker (a fade): sample-domain
+    correlation still finds it, and decoding at that position recovers a
+    frame that a hard-bit marker search rejects."""
+
+    def test_correlation_position_rescues_a_faded_marker(self):
+        generators, k = fec.PRESETS['r1_2_k7']
+        payload = b'faded marker'
+        coded = fec.encode_frame(link.build_frame(payload, seq=1), generators, k)
+        lead_in = audio_phy.DEFAULT_LEAD_IN_S
+        audio = audio_phy.modulate(MODULATORS['bpsk'](coded), 1200, 1650, lead_in_s=lead_in)
+        # Noise over the first 40% of the 288-symbol marker (after the
+        # 24-byte lead pad) - a ~100 ms fade at 1200 baud.
+        sps = audio_phy.samples_per_symbol(1200)
+        start = int(lead_in * FS) + 24 * 8 * sps
+        span = int(0.4 * 288) * sps
+        rng = np.random.default_rng(1)
+        audio[start:start + span] = rng.normal(0, 0.5, span)
+
+        symbols, info = _recover(audio, 'bpsk', 1200, 1650)
+        data = DEMODULATORS['bpsk'](symbols[:len(symbols) - len(symbols) % 8])
+        searched = list(fec.decode_frames(data, generators, k))
+        self.assertFalse(any(status == 'ok' for status, _, _ in searched))
+        known = list(fec.decode_frames(data, generators, k, first_marker_bit=info['marker_index']))
+        self.assertEqual([(s, p) for s, _, p in known][:1], [('ok', payload)])
+
+
 class PcmTests(unittest.TestCase):
     def test_round_trip_and_clipping(self):
         audio = np.array([0.0, 0.5, -0.5, 0.999, -1.0, 1.7])

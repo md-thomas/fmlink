@@ -626,8 +626,15 @@ class Station:
             try:
                 symbols, snr_db, marker_index = recover(modulation, symbol_rate)
                 recovered = demod_fn(symbols)
-                candidate = (list(fec.decode_frames(recovered, fec_generators, fec_k)) if use_fec
-                             else list(sync.iter_frames_correlated(recovered)))
+                # Audio: the demodulator already found the marker by
+                # correlating against the samples - decode right there
+                # instead of re-finding it in hard bits, where a fade
+                # across the marker can fail an otherwise decodable frame.
+                first_marker_bit = (None if marker_index is None
+                                    else marker_index * BITS_PER_SYMBOL[modulation])
+                candidate = (list(fec.decode_frames(recovered, fec_generators, fec_k,
+                                                    first_marker_bit=first_marker_bit))
+                             if use_fec else list(sync.iter_frames_correlated(recovered)))
             except Exception:
                 candidate = []
             attempt = (candidate, modulation, symbols, snr_db, marker_index,

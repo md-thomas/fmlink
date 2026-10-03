@@ -447,7 +447,7 @@ def encode_frame(data, generators, k, interleaver=DEFAULT_INTERLEAVER):
 
 
 def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR_FRACTION,
-                  interleaver=DEFAULT_INTERLEAVER):
+                  interleaver=DEFAULT_INTERLEAVER, first_marker_bit=None):
     """Find and decode every frame in possibly-corrupted data (via
     openwave_sync's tolerant correlator - the prefix/preamble/sync-word
     were never FEC-coded, so this is the same sync step as the uncoded
@@ -508,14 +508,26 @@ def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR
       'ok'         - decoded and CRC-verified; header/payload are the
                      corrected values
 
+    first_marker_bit: where the first frame's marker starts, when the caller
+    already knows - e.g. openwave_audio.demodulate() found it by correlating
+    against the received samples, which is far more robust than matching
+    the marker's hard-decision bits (a fade across the marker can push it
+    past max_error_fraction while the FEC-protected header and payload
+    behind it are still decodable). That frame is decoded at exactly that
+    position with no bit-level threshold; any later frames are searched
+    for as usual.
+
     Yields nothing at all if no sync candidate ever clears the
     correlator's threshold (the multi-frame analogue of the old
     'no_sync' status - check for an empty result rather than a status)."""
     bits = modem.bytes_to_bits(data)
     pos = 0
     while True:
-        match = sync.best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction,
-                                       search_window=sync.FRAGMENT_GAP_SEARCH_BITS)
+        if first_marker_bit is not None:
+            match, pos, first_marker_bit = (first_marker_bit, None), 0, None
+        else:
+            match = sync.best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction,
+                                           search_window=sync.FRAGMENT_GAP_SEARCH_BITS)
         if match is None:
             match = sync.best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction)
             if match is None:

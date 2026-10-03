@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import openwave_fec as fec
 import openwave_link as link
 import openwave_modem as modem
+import openwave_sync as sync
 
 
 def _flip_bits(bits, indices):
@@ -290,6 +291,53 @@ class InterleaverTests(unittest.TestCase):
         frame = link.build_frame(b'default', seq=1)
         self.assertEqual(fec.encode_frame(frame, generators, k),
                          fec.encode_frame(frame, generators, k, interleaver='golden'))
+
+
+class KnownMarkerPositionTests(unittest.TestCase):
+    """decode_frames(first_marker_bit=...): decode at a marker position the
+    caller already found (e.g. by sample-domain correlation) instead of
+    re-searching for it in hard bits."""
+
+    def setUp(self):
+        self.generators, self.k = fec.PRESETS['r1_2_k7']
+        self.payload = b'marker under a fade'
+        frame = link.build_frame(self.payload, seq=2)
+        self.bits = modem.bytes_to_bits(fec.encode_frame(frame, self.generators, self.k))
+        self.marker_bit = 24 * 8  # build_frame()'s default lead pad
+
+    def damaged(self, fraction):
+        """Flip a contiguous run covering `fraction` of the marker's bits."""
+        bits = list(self.bits)
+        for i in range(self.marker_bit, self.marker_bit + int(fraction * sync.MARKER_LEN)):
+            bits[i] ^= 1
+        return modem.bits_to_bytes(bits)
+
+    def test_recovers_frame_whose_marker_is_too_damaged_to_find(self):
+        data = self.damaged(0.3)  # well past DEFAULT_MAX_ERROR_FRACTION (15%)
+        searched = list(fec.decode_frames(data, self.generators, self.k))
+        self.assertFalse(any(status == 'ok' for status, _, _ in searched))
+        status, _, payload = _decode_first(data, self.generators, self.k,
+                                           first_marker_bit=self.marker_bit)
+        self.assertEqual((status, payload), ('ok', self.payload))
+
+    def test_same_result_as_search_on_a_clean_frame(self):
+        data = modem.bits_to_bytes(self.bits)
+        self.assertEqual(list(fec.decode_frames(data, self.generators, self.k,
+                                                first_marker_bit=self.marker_bit)),
+                         list(fec.decode_frames(data, self.generators, self.k)))
+
+    def test_later_frames_are_still_searched_for(self):
+        frames, _ = link.build_fragmented_frames(b'x' * 300, seq_start=1, chunk_size=100)
+        data = fec.encode_frame(b''.join(frames), self.generators, self.k)
+        statuses = [status for status, _, _ in
+                    fec.decode_frames(data, self.generators, self.k, first_marker_bit=self.marker_bit)]
+        self.assertEqual(statuses, ['ok'] * len(frames))
+
+    def test_wrong_position_fails_cleanly(self):
+        data = modem.bits_to_bytes(self.bits)
+        results = list(fec.decode_frames(data, self.generators, self.k,
+                                         first_marker_bit=self.marker_bit + 5))
+        self.assertNotEqual(results[0][0], 'ok')
 
 
 class BitErrorCountTests(unittest.TestCase):
