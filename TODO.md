@@ -9,6 +9,36 @@ genuinely still open right now in one place, per
 `tasklist.txt` disagree, `tasklist.txt` is authoritative — it's updated
 far more frequently and carries the full reasoning behind each item.
 
+## Where we are (2026-10-02)
+
+The full FM chain now works end to end in simulation. Two `ota_station.py`
+stations (`--phy audio`) talk through `ota_sim`'s FM transceiver model
+over the TCP relay. `./fm_test.sh` launches the whole setup, and the
+channel can be changed live with `/cnr`, `/fading`, etc. typed into the
+simulator's window. Done most recently:
+
+- Audio-subcarrier PHY (`openwave_audio.py`): preamble-correlation sync,
+  PLL drift tracking, no frame padding.
+- Golden-ratio FEC interleaver, now defined in the spec.
+- Fading-aware `--auto` (`FADING_MODE_SNR_TABLE`).
+- Frames decoded at the correlation's marker position.
+- Live simulator `/commands`, plus station `/ack`, `/auto`, `/lead-in`.
+- Spec brought up to date: worked example, Control payloads, audio PHY.
+
+Next, roughly in order (pending: are radios + an audio/PTT interface
+available?):
+
+1. **Phase 5 on real radios** (sound-card I/O, PTT, over-the-air test),
+   if hardware is ready.
+2. **Automatic re-negotiation mid-session.** Stations pick a mode once;
+   they should adapt as the link changes (pairs with live control).
+3. **Soft-decision Viterbi** (~2 dB at the fringe).
+4. **Smarter ARQ for slow fading.** Lost ACKs make a sender give up on a
+   message that was actually delivered.
+5. **Data-port mode 3 fading table**, and possibly a faster data-port
+   mode (16-QAM @ 2400 baud - a protocol decision).
+6. **GUI `--phy audio` support.**
+
 ## Open (actively relevant — pluggable-PHY / OTA track)
 
 - [ ] **Phase 5 — audio-interfaced radio deployment (5.3 done in
