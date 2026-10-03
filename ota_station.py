@@ -102,12 +102,25 @@ except ImportError:
 
 RETRY_POLL_INTERVAL_S = 0.2
 
-# --phy audio: bits per symbol (to trim a recovered symbol stream to whole
-# bytes) and the frame's lead pad (openwave_link.build_frame()'s default),
-# which the audio demodulator includes ahead of the correlated marker so
-# the symbol stream starts where the IQ path's would.
+# --phy audio: bits per symbol, to trim a recovered symbol stream to whole
+# bytes.
 BITS_PER_SYMBOL = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
-FRAME_LEAD_PAD_BYTES = 24
+
+
+def _strip_frame_padding(frame_bytes):
+    """A build_frame()-style frame without its lead/end zero padding: just
+    marker + header + payload + CRC. The padding exists for the IQ path's
+    fixed-timing matched filter; the audio path doesn't need it (its
+    lead-in silence covers key-up, the RRC filter's own tails cover the
+    ends, and the receiver locates the marker by correlation), and at 600
+    baud the default 24+24 bytes cost ~0.64 s of airtime per burst."""
+    marker = link.PREAMBLE + link.SYNC_WORD
+    start = frame_bytes.find(marker)
+    if start < 0:
+        return frame_bytes
+    header_at = start + len(marker)
+    header = link.parse_header(frame_bytes[header_at:header_at + link.HEADER_LEN])
+    return frame_bytes[start:header_at + link.HEADER_LEN + header['payload_len'] + link.CRC_LEN]
 DEFAULT_FEC_PRESET = 'r1_4_k7'
 # --auto's mode-negotiation handshake always runs at this fixed mode/FEC,
 # regardless of whatever data mode is currently active - see Station's
@@ -551,7 +564,6 @@ class Station:
                 symbols, info = audio_phy.demodulate(
                     audio, symbol_rate, self._carrier_hz,
                     MODULATORS[modulation](link.PREAMBLE + link.SYNC_WORD),
-                    pre_symbols=FRAME_LEAD_PAD_BYTES * 8 // bps,
                     constellation=modem._CONSTELLATIONS[modulation])
                 symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
                 cache[(modulation, symbol_rate)] = (symbols, info['snr_db'], info['marker_index'])
@@ -1104,6 +1116,8 @@ class Station:
         fec_generators = self._fec_generators if fec_generators is None else fec_generators
         fec_k = self._fec_k if fec_k is None else fec_k
 
+        if self.phy == 'audio':
+            frame_bytes = _strip_frame_padding(frame_bytes)
         encoded = fec.encode_frame(frame_bytes, fec_generators, fec_k) if use_fec else frame_bytes
         symbols = modulate_fn(encoded)
         if self.phy == 'audio':

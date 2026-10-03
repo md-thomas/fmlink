@@ -20,6 +20,8 @@ Amateur Radio and SDR applications.
 Channel Bandwidth:
 VHF: 	Modes 0-3 within 15 kHz channels
 UHF:  	Modes 0-4 within 25 kHz channels
+(Direct RF modulation, e.g. an SDR. Through a radio's audio port the
+audio passband is the limit instead - see Audio PHY below.)
 
 Modem Chain:
 	Application Data
@@ -37,65 +39,107 @@ Modem Chain:
             RF
 
 Physical Layer (PHY)
-    Modulation: 		    Pluggable per Waveform Mode ID - BPSK, QPSK, and
-    				    16-QAM supported today (see openwave_link.py's
-    				    WAVEFORM_MODES and modulate.py/demodulate.py)
-    Symbol Rates: 	        600, 1200, 2400, 4800, 9600 symbols/sec
-    Raw Bit Rates: 	        Depends on the mode's modulation - see
-    				    Waveform Modes table below (600 bps - 38.4 kbps
-    				    across the modes defined today)
-    Filtering:  		    Root Raised Cosine
-    Roll-off: 		        0.35
-    Synchronization:
-    Preamble detection
-    Carrier recovery
-    Symbol timing recovery
+    Modulation: 		        Pluggable per Waveform Mode ID - BPSK, QPSK, and
+    				            16-QAM supported today (see openwave_link.py's
+    				            WAVEFORM_MODES and modulate.py/demodulate.py)
+    Symbol Rates: 	            600, 1200, 2400, 4800, 9600 symbols/sec
+    Raw Bit Rates: 	            Depends on the mode's modulation - see
+    				            Waveform Modes table below (600 bps - 38.4 kbps
+    				            across the modes defined today)
+    Filtering:  		        Root Raised Cosine
+    Roll-off: 		            0.35
+    Synchronization:            The receiver locates each frame by correlating
+                                against the known preamble + sync word (the
+                                "marker"). Over IQ this is a bit-level match
+                                that tolerates up to 15% wrong marker bits.
+                                On the audio PHY it is a sample-level
+                                correlation that also yields symbol timing,
+                                carrier phase and signal level; the frame
+                                is then decoded at that position.
+                                Carrier and timing drift are tracked on the
+                                audio PHY only (see Audio PHY). The IQ PHY
+                                does no carrier recovery yet.
     Forward Error Correction:	Convolutional code, rate 1/N, constraint
-    				    length K, hard-decision Viterbi at the
-    				    receiver (presets: openwave_fec.py's PRESETS).
-    				    The lead pad, preamble and sync word are sent
-    				    uncoded - the receiver finds them by
-    				    correlation, which needs a fixed known
-    				    pattern. The rest of the frame is two
-    				    independent blocks, each encoded separately:
-    				      1. the 32-byte header
-    				      2. payload + CRC32
-    				    Each block is flushed with K-1 zero tail bits,
-    				    then interleaved (below), then zero-padded to
-    				    a whole byte. The end pad stays uncoded.
-    Interleaver:		    Per FEC block, over its N coded bits (tail
-    				    included, padding excluded); bits are numbered
-    				    0..N-1 in encoder output order, MSB-first within
-    				    each byte on the wire. Transmitted bit j is
-    				    coded bit (j * s) mod N.
-    				    s is found from s0 = round(N * (sqrt(5) - 1) / 2):
-    				    for d = 0, 1, 2, ..., try s0 + d, then s0 - d,
-    				    and take the first value with 0 < s < N and
-    				    gcd(s, N) = 1. (N <= 1: no reordering.)
-    				    Consecutive channel bits come from coded bits
-    				    far apart, so a fade's or click's burst of
-    				    errors reaches the Viterbi decoder as scattered,
-    				    correctable errors.
+    				            length K, hard-decision Viterbi at the
+    				            receiver (presets: openwave_fec.py's PRESETS).
+    				            The lead pad, preamble and sync word are sent
+    				            uncoded - the receiver finds them by
+    				            correlation, which needs a fixed known
+    				            pattern. The rest of the frame is two
+    				            independent blocks, each encoded separately:
+    				                1. the 32-byte header
+    				                2. payload + CRC32
+    				            Each block is flushed with K-1 zero tail bits,
+    				            then interleaved (below), then zero-padded to
+    				            a whole byte. The end pad stays uncoded.
+    Interleaver:		        Per FEC block, over its N coded bits (tail
+    				            included, padding excluded); bits are numbered
+    				            0..N-1 in encoder output order, MSB-first within
+    				            each byte on the wire. Transmitted bit j is
+    				            coded bit (j * s) mod N.
+    				            s is found from s0 = round(N * (sqrt(5) - 1) / 2):
+    				            for d = 0, 1, 2, ..., try s0 + d, then s0 - d,
+    				            and take the first value with 0 < s < N and
+    				            gcd(s, N) = 1. (N <= 1: no reordering.)
+    				            Consecutive channel bits come from coded bits
+    				            far apart, so a fade's or click's burst of
+    				            errors reaches the Viterbi decoder as scattered,
+    				            correctable errors.
 
-Link layer
+Audio PHY (a radio's audio port, e.g. a VHF/UHF FM transceiver):
+    Interface:                  Real audio, 48000 samples/sec. 16-bit signed
+                                little-endian mono PCM where samples are
+                                exchanged (e.g. the ota_sim FM channel).
+    Pulse shaping:              RRC as above (roll-off 0.35, 11-symbol
+                                span), 48000 / symbol rate samples per symbol
+                                - every Waveform Mode's rate divides 48000.
+    Carrier:                    The complex baseband signal b(t) is sent as
+                                Re{ b(t) * exp(j*2*pi*fc*t) }, scaled to a
+                                peak of 0.7 of full scale. fc depends on the
+                                audio connection, and both ends must use the
+                                same one:
+                                  mic  (microphone/speaker path, ~300-3000 Hz,
+                                       pre/de-emphasis): fc = 1650 Hz,
+                                       max 1200 sym/s - Modes 0-2
+                                  data (6-pin data port, flat to ~5 kHz):
+                                       fc = 2000 Hz, max 2400 sym/s - Modes 0-3
+                                Modes 4-5 don't fit an FM radio's audio
+                                passband.
+    Burst:                      Lead-in silence (default 250 ms; it must
+                                exceed the transmitter's key-up time plus
+                                the far receiver's squelch opening time),
+                                then the frame with NO lead/end pad (see
+                                Link layer), then 20 ms of silence for
+                                the filter tail. One frame per burst.
+    Receiver (informative):     Correlate against the marker for timing,
+                                phase and level; decode at that position;
+                                track sound-card clock drift (which shifts
+                                carrier phase and symbol timing together)
+                                with a decision-directed PLL. See
+                                openwave_audio.py.
 
-    Preamble:	32 bytes (LFSR pseudo-noise sequence, seed 1, 9-bit register,
-		taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE).
-		Chosen over a repeating pattern (e.g. 55 55...) because a PN
-		sequence's autocorrelation has a sharp, unambiguous peak
-		(worst sidelobe ~9% of peak) vs. a repeating pattern's ~99%
-		sidelobes at every symbol-period offset, which made exact
-		frame-start detection under noise unreliable.
+Link layer:
+    Frame:                      Lead Pad + Preamble + Sync Word + Header +
+                                Payload + CRC32 + End Pad
+    Lead Pad / End Pad:         Zero bytes before the preamble and after the
+                                CRC. 24 each on the IQ PHY, which needs
+                                them for its fixed-timing matched filter;
+                                none on the audio PHY, whose lead-in silence
+                                and filter tails do the same job. Receivers
+                                must not depend on them.
+    Preamble:	                32 bytes (LFSR pseudo-noise sequence, seed 1, 9-bit register,
+	                            taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE).
+	                            Chosen over a repeating pattern (e.g. 55 55...) because a PN
+	                            sequence's autocorrelation has a sharp, unambiguous peak
+	                            (worst sidelobe ~9% of peak) vs. a repeating pattern's ~99%
+	                            sidelobes at every symbol-period offset, which made exact
+	                            frame-start detection under noise unreliable.
     
-    Sync Word: 	4 bytes (CCDS sync word) 0x1ACFFC1D (for correlation)
-	
-    Header:	    32 bytes
-    
-    Payload: 	Variable (maximum 1024 bytes)
-    
-    CRC32:	    4 bytes
-
-    Header: 	Total 32 bytes
+    Sync Word: 	                4 bytes (CCDS sync word) 0x1ACFFC1D (for correlation)	
+    Header:	                    32 bytes    
+    Payload: 	                Variable (maximum 1024 bytes)
+    CRC32:	                    4 bytes
+    Header: 	                Total 32 bytes
         Version: 		    1 byte
         Packet Type:		1 byte
         Waveform Mode ID:	1 byte
@@ -112,6 +156,40 @@ Link layer
             0x02 = ACK
             0x03 = Beacon
             0x04 = Control
+
+        ACK frame:
+            Packet Type ACK, Flags bit 1 (ACK Response) set, empty
+            payload. Its Sequence Number is the Sequence Number of the
+            frame being acknowledged; each fragment of a fragmented
+            message is acknowledged separately.
+
+        Control frame payloads (first byte = op):
+            0x01 MODE_REQUEST  [op]
+                 Probe sent by the station starting negotiation, so the
+                 peer has something to measure and reply to.
+            0x02 MODE_GRANT    [op][SNR: float32, big-endian][mode: 1 byte]
+                               [FEC preset name: ASCII, rest of payload]
+                 Reply to a MODE_REQUEST, with the same Sequence Number.
+                 The SNR and mode/preset are the replier's own
+                 non-binding opinion; the requester decides from its own
+                 measurement of this reply.
+            0x03 MODE_SET      [op][mode: 1 byte][FEC preset name: ASCII, rest]
+                 The requester's decision. Both stations use this
+                 mode/FEC in both directions from then on.
+            0x04 MODE_SET_ACK  [op]
+                 Confirms a MODE_SET, with the same Sequence Number.
+            0x05 PING          [op]
+            0x06 PONG          [op]
+                 Round-trip probe and its reply (same Sequence Number),
+                 sent at the currently active mode.
+            FEC preset names are openwave_fec.py's PRESETS keys (e.g.
+            "r1_2_k7"). MODE_REQUEST/GRANT/SET/SET_ACK are sent on a fixed
+            control channel both ends know in advance: Mode 0 with FEC
+            "r1_2_k9" (ota_station.py's CONTROL_MODE_ID/CONTROL_FEC_PRESET).
+            How the requester picks a mode from its measurement is local
+            policy, not part of the wire format (ota_station.py uses
+            openwave_link.py's MODE_SNR_TABLE, or FADING_MODE_SNR_TABLE
+            when the probe shows fading).
 
         Waveform Modes: (modulation/rate/FEC bundle - see openwave_link.py's
         WAVEFORM_MODES, the authoritative table; currently a documentation/
@@ -192,8 +270,8 @@ Link layer
         B8 C3 2D 60 98 18 9F CB 	   across 4 lines)
         1A CF FC 1D 			    <- Sync Word
         01 				            <- Version 
-        02 				            <- Waveform Mode ID (Mode 2: 1200 sym/s, qpsk)
         01 				            <- Packet Type (Data) 
+        02 				            <- Waveform Mode ID (Mode 2: 1200 sym/s, qpsk)
         01 				            <- Flags (ACK requested) 
         00 01 				        <- Sequence Number 
         4B 30 4D 44 54 00 00 00 	<- Source ID "K0MDT" 
@@ -202,6 +280,6 @@ Link layer
         00 				            <- Fragment Index (0 - not fragmented, N/A here)
         00 00 00 00 00 00 00 		<- Reserved
         48 65 6C 6C 6F 		        <- Payload "Hello"
-        A7 39 82 F1 			    <- CRC32 (Header + Payload) 
+        87 EA 6F C0 			    <- CRC32 (Header + Payload) 
 
 

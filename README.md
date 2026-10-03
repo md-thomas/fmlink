@@ -123,7 +123,10 @@ below.
 Live, interactive, bidirectional station process - talks to a peer station
 through a simulated over-the-air network link (path loss, fading, AWGN,
 latency), pushing real frames through the actual modem chain instead of a
-one-shot file pipeline. See "Over-The-Air (OTA) Simulator" below.
+one-shot file pipeline. It speaks either complex IQ (the default) or, with
+`--phy audio`, real audio through a simulated pair of FM radios. See
+"Over-The-Air (OTA) Simulator" below; `fm_test.sh` launches a full FM test
+setup.
 
 **`legacy/gnuradio/`**
 The project's original GNU Radio pi/4-QPSK PHY chain (`phy_sim_loopback.grc`,
@@ -444,7 +447,9 @@ from the peer print as they arrive.
 The link between two stations is relayed through `ota_sim` - a small,
 separate, protocol-agnostic network simulator (`../ota_sim`, alongside
 this repo) that models path loss, fading, AWGN, and configurable latency
-between two peers talking in raw IQ samples. `ota_sim` has no
+between two peers talking in raw IQ samples. With `--channel fm`, it
+instead models a pair of FM transceivers carrying audio between their
+audio ports (see "Audio PHY over a simulated FM radio" below). `ota_sim` has no
 OpenWave-specific code at all - it only relays whatever bytes a peer sends
 it, so it's reusable by any project that needs two simulated radios
 talking to each other, not just this one. See `../ota_sim/README.md` for
@@ -506,7 +511,9 @@ reachable through firewalls.
 ### Options
 
 Run `python3 ota_station.py -h` for the full reference, including a
-table of the Waveform Modes and FEC presets available. Key flags:
+table of the Waveform Modes and FEC presets available. The audio-PHY flags
+(`--phy`, `--audio-port`, `--lead-in-ms`) are covered in "Audio PHY over
+a simulated FM radio" below. Key flags:
 
 `--mode N` (0-5) selects a Waveform Mode ID - modulation and symbol rate
 per `openwave_link.py`'s `WAVEFORM_MODES` (0/1 BPSK, 2/3/4 QPSK, 5 16-QAM,
@@ -708,7 +715,9 @@ instead of IQ:
 - **TX:** each burst is RRC-shaped symbols on a carrier tone inside the
   radio's passband (`openwave_audio.py`), preceded by a lead-in of silence
   (`--lead-in-ms`, default 250) that covers transmitter key-up and the far
-  radio's squelch opening.
+  radio's squelch opening. Frames go out without `build_frame()`'s 24+24
+  bytes of zero padding, which only the IQ path needs. That saves about
+  0.64 s per burst at 600 baud: a mode 0 ACK takes 2.8 s instead of 3.4 s.
 - **The channel:** pair it with `ota_sim`'s `--channel fm`, which models
   the two radios' whole audio-to-audio path: filters, emphasis, deviation
   limiter, FM threshold and clicks, fading, squelch, sound-card clock

@@ -788,6 +788,37 @@ class AudioPhyStationTests(unittest.TestCase):
                          link.select_mode_for_snr(station._last_rx_snr_db,
                                                   max_symbol_rate=station.max_symbol_rate))
 
+    def test_strip_frame_padding_keeps_exactly_the_frame(self):
+        from ota_station import _strip_frame_padding
+        frame = link.build_frame(b'payload', seq=3)
+        stripped = _strip_frame_padding(frame)
+        self.assertTrue(stripped.startswith(link.PREAMBLE + link.SYNC_WORD))
+        self.assertEqual(len(stripped), len(frame) - 48)  # build_frame's 24 + 24 pad bytes
+        self.assertEqual(_strip_frame_padding(stripped), stripped)
+        self.assertEqual(_strip_frame_padding(b'no marker here'), b'no marker here')
+
+    def test_audio_bursts_drop_the_padding_airtime(self):
+        # At 600 baud the 48 uncoded pad bytes are 384 symbols = 0.64 s.
+        class _Recorder:
+            connected = True
+
+            def __init__(self):
+                self.sent = []
+
+            def send(self, payload):
+                self.sent.append(payload)
+
+        station = Station(station_id='K0MDT', dst_id='W1AW', mode_id=0, use_fec=True,
+                          phy='audio', audio_port='mic', on_log=lambda msg: None)
+        station._sim = _Recorder()
+        frame = link.build_ack_frame(5, mode_id=0, src_id=b'K0MDT', dst_id=b'W1AW')
+        station._transmit_frame(frame)
+        sent_s = len(station._sim.sent[0]) / 2 / audio_phy.AUDIO_SAMPLE_RATE
+        padded = fec.encode_frame(frame, station._fec_generators, station._fec_k)
+        padded_s = len(audio_phy.modulate(station._modulate(padded), 600, 1650)) / audio_phy.AUDIO_SAMPLE_RATE
+        self.assertAlmostEqual(padded_s - sent_s, 0.64, delta=0.01)
+        self.assertAlmostEqual(station._last_tx_airtime_s, sent_s, places=6)
+
     def test_reply_timeout_tracks_airtime(self):
         iq = Station(station_id='K0MDT', dst_id='W1AW')
         self.assertEqual(iq._reply_timeout_s(2.0), 2.0)
