@@ -59,7 +59,9 @@ def detect(host, overrides=None):
         if card is None:
             continue
         port = next((f'/dev/serial/by-id/{p}' for p in ports if prof['serial'].search(p)), None)
-        st = {'name': name, 'host': host, 'tx_device': f'hw:CARD={card},DEV=0',
+        st = {'name': name, 'host': host,
+              # plughw: converts mono to the stereo some sound cards (the CM108) insist on
+              'tx_device': f'plughw:CARD={card},DEV=0',
               'rx_device': f'hw:CARD={card},DEV=0', 'ptt_port': port,
               'ptt_line': prof['ptt_line'], 'rx_channels': 1}
         st.update(overrides.get(name, {}))
