@@ -1540,6 +1540,13 @@ def _mode_banner(station_id, station):
             f"auto-split into multiple message segments.")
 
 
+def default_log_path(station_id):
+    """logs/<station>-<date>-<time>.log next to this script (gitignored): one
+    new file per run, so a session can be read back afterwards."""
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', f'{station_id}-{stamp}.log')
+
+
 async def run(args):
     # --auto's whole point is picking the mode/FEC for you from the
     # threshold table (see openwave_link.py's MODE_SNR_TABLE), which is
@@ -1552,8 +1559,11 @@ async def run(args):
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
         phy=args.phy, audio_port=args.audio_port, lead_in_s=args.lead_in_ms / 1000,
     )
-    if args.log_file:
-        station.open_log_file(args.log_file)
+    log_path = None
+    if not args.no_log:
+        log_path = args.log_file or default_log_path(args.station_id)
+        os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
+        station.open_log_file(log_path)
         station._trace(f"args: {' '.join(sys.argv[1:])}")
     if args.radio is not None:
         try:
@@ -1584,6 +1594,8 @@ async def run(args):
           f"auto={'on' if args.auto else 'off'}{bandwidth_note} - connected, {link_note}.",
           file=sys.stderr)
     print(_mode_banner(args.station_id, station), file=sys.stderr)
+    if log_path:
+        print(f"[{args.station_id}] logging to {log_path}", file=sys.stderr)
 
     # With --auto, negotiation is deliberately NOT run here - it happens
     # lazily, at most once, on this station's own first send_text() call
@@ -1627,9 +1639,12 @@ def main():
                               "TRANSMITS: use a clear frequency, low power, and ./level_meter.py "
                               "to set the receive volume first.")
     parser.add_argument('--log-file', metavar='PATH',
-                         help='append everything this station logs, timestamped, to PATH - with '
-                              '--radio also every burst heard (mode, SNR, sync quality, peak) and '
-                              'every transmission. Share this file to debug a link.')
+                         help='write the session log here instead of the default '
+                              'logs/<station>-<date>-<time>.log. A log is ALWAYS written (see '
+                              '--no-log): everything this station prints, timestamped, plus with '
+                              '--radio every burst heard (mode, SNR, sync quality, peak) and every '
+                              'transmission. Share it to debug a link.')
+    parser.add_argument('--no-log', action='store_true', help='do not write a session log')
     parser.add_argument('--tx-level', type=float, default=0.5,
                          help='with --radio: peak TX audio level into the radio, 0-1 (default 0.5)')
     parser.add_argument('--ptt-line', choices=('dtr', 'rts'),

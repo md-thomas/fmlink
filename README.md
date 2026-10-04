@@ -522,11 +522,11 @@ setup and leveling, results and troubleshooting are in
 ./radio_stations.py       # is the AIOC / Digirig detected?
 ./level_meter.py          # open squelch, turn the radio volume until it says "good"
 ./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 \
-    --phy audio --audio-port mic --radio --ack --auto --log-file ~/station1.log
+    --phy audio --audio-port mic --radio --ack --auto
 ```
 
 On the other computer swap the two callsigns. This transmits: use a clear
-frequency and low power.
+frequency and low power. Each run writes a session log to `logs/`.
 
 ## Over-The-Air (OTA) Simulator
 
