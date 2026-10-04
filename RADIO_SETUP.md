@@ -145,7 +145,7 @@ cd ~/Projects/open_wave
 ./radio_stations.py                       # confirm the interface is found
 ./level_meter.py                          # set the radio volume (Ctrl-C when "good")
 ./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 \
-    --phy audio --audio-port mic --radio --ack --auto
+    --phy audio --audio-port mic --radio --ack --auto --log-file ~/station1.log
 ```
 
 **Station 2** (for example the Digirig laptop):
@@ -155,7 +155,7 @@ cd ~/Projects/open_wave
 ./radio_stations.py
 ./level_meter.py
 ./ota_station.py --station-id K0MDT-2 --dst K0MDT-1 \
-    --phy audio --audio-port mic --radio --ack --auto
+    --phy audio --audio-port mic --radio --ack --auto --log-file ~/station2.log
 ```
 
 Type a line and press Enter to send it; messages from the other station
@@ -163,6 +163,12 @@ print as they arrive. `/help` lists the commands (`/mode`, `/fec`, `/ping`,
 `/ping survey`, `/renegotiate`, ...). Ctrl-C exits and prints a session
 summary.
 
+- `--log-file PATH` appends everything the station logs to a timestamped
+  file: what you see on screen plus, for the radio, every burst heard (mode,
+  SNR, sync quality, peak level), every transmission (keyed and released) and
+  every line you type. The terminal output is not saved anywhere otherwise.
+  Keep it on for real-radio runs, and send the file (not a screenshot) when
+  asking for help debugging a link.
 - `--radio` alone uses the only interface attached to that computer; with two
   attached, name one: `--radio aioc` or `--radio digirig`.
 - `--ack` retries each fragment until it is acknowledged. `--auto`
@@ -221,6 +227,7 @@ All decoded at sync quality 0.99-1.00. Both stations running `ota_station.py
 | the sender keeps retrying and the peer reports "duplicate" | the peer's ACK is not getting back: check the levels and PTT in that direction; the transport already waits a 0.6 s turnaround before replying |
 | high CPU on a small computer | the receiver re-decodes its audio buffer every 0.5 s (about half a core with 2-3 candidate modes) |
 | `[radio tx error]` | the line after it names the `aplay` or serial error |
+| something odd on the link | rerun with `--log-file` on both stations and look at the timestamps: who keyed when, what each side heard and at what SNR |
 
 ## How it works (short)
 

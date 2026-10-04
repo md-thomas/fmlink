@@ -194,9 +194,10 @@ class RadioTransport:
     overhead_s = 2.0
 
     def __init__(self, on_burst, attempts_fn, carrier_hz, capture, player, loop, tx_level=0.5,
-                 log=print, settle_s=0.4, turnaround_s=0.6):
+                 log=print, settle_s=0.4, turnaround_s=0.6, trace=None):
         self._on_burst, self._loop, self._player = on_burst, loop, player
         self._capture, self._log = capture, log
+        self._trace = trace or (lambda msg: None)   # detail for a log file, not the terminal
         self.tx_level, self.settle_s, self.turnaround_s = tx_level, settle_s, turnaround_s
         self._last_rx_end = 0.0   # when the last received burst finished airing (monotonic)
         self._detector = BurstDetector(attempts_fn, carrier_hz, self._burst)
@@ -225,6 +226,10 @@ class RadioTransport:
 
     def _burst(self, segment, result):
         self._last_rx_end = time.monotonic() - result['lag_s']
+        mod, rate = result['attempt'][0], result['attempt'][1]
+        self._trace(f"[radio rx] burst {mod} {rate} baud: {result['status']}, "
+                    f"SNR {result['snr_db']:.1f} dB, sync {result['quality']:.2f}, "
+                    f"peak {result['burst_peak']:.2f}, {len(segment) / RATE:.2f} s of audio")
         pcm = audio.audio_to_pcm16(segment)
         self._loop.call_soon_threadsafe(self._on_burst, pcm)
 
@@ -261,8 +266,12 @@ class RadioTransport:
             # on top of that.
             time.sleep(min(2.0, max(0.0, self._last_rx_end + self.turnaround_s - time.monotonic())))
             self._transmitting = True
+            started = time.monotonic()
+            self._trace(f"[radio tx] keying, {len(pcm) / 2 / RATE:.2f} s of audio at peak "
+                        f"{self.tx_level:g}")
             try:
                 self._player(pcm)
+                self._trace(f"[radio tx] released after {time.monotonic() - started:.2f} s")
             except Exception as exc:
                 self._log(f"[radio tx error] {exc!r} - burst NOT sent")
             finally:

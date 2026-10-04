@@ -30,6 +30,9 @@ async def run(args):
             on_log=lambda m, n=name: logs.append(f"[{n}] {m}"))
 
     a, b = make('K0AAA', 'K0BBB'), make('K0BBB', 'K0AAA')
+    if args.log_dir:
+        for st in (a, b):
+            st.open_log_file(f"{args.log_dir}/{st.station_id}.log")
     got = {'K0AAA': [], 'K0BBB': []}
     for st, port in ((a, air.port()), (b, air.port())):
         await st.connect_radio({'rx_device': None, 'rx_channels': 1}, capture=port.capture,
@@ -63,6 +66,7 @@ def main():
     p.add_argument('--mode', type=int, default=0)
     p.add_argument('--auto', action='store_true')
     p.add_argument('--noise', type=float, default=0.02, help='noise rms on the simulated air')
+    p.add_argument('--log-dir', help='write each station\'s --log-file style log here')
     p.add_argument('--verbose', '-v', action='store_true')
     sys.exit(asyncio.run(run(p.parse_args())))
 

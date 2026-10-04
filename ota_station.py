@@ -480,10 +480,22 @@ class Station:
             self._on_message(text)
 
     def _log(self, msg):
+        self._trace(msg)
         if self._on_log:
             self._on_log(msg)
         else:
             print(msg, file=sys.stderr)
+
+    def open_log_file(self, path):
+        """Append everything the station logs, timestamped, to path (see
+        --log-file). _trace() lines go only here, not to the terminal."""
+        self._log_file = open(path, 'a', buffering=1)
+        self._trace(f"=== {self.station_id} session start ===")
+
+    def _trace(self, msg):
+        f = getattr(self, '_log_file', None)
+        if f is not None:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
     def _ceiling_for(self, bandwidth):
         """Effective max symbol rate for a --bandwidth setting: the
@@ -527,11 +539,16 @@ class Station:
             self._burst_received, attempts, self._carrier_hz,
             capture or (lambda: radio.arecord_chunks(station['rx_device'], station['rx_channels'])),
             player or radio.make_player(station), asyncio.get_running_loop(), tx_level, self._log,
+            trace=self._trace,
         ).connect()
 
     def close(self):
         if self._sim is not None:
             self._sim.close()
+        if getattr(self, '_log_file', None) is not None:
+            self._trace("=== session end ===")
+            self._log_file.close()
+            self._log_file = None
 
     def _burst_received(self, payload):
         try:
@@ -1535,6 +1552,9 @@ async def run(args):
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
         phy=args.phy, audio_port=args.audio_port, lead_in_s=args.lead_in_ms / 1000,
     )
+    if args.log_file:
+        station.open_log_file(args.log_file)
+        station._trace(f"args: {' '.join(sys.argv[1:])}")
     if args.radio is not None:
         try:
             st = dict(radio_stations.pick_local(args.radio or None))
@@ -1581,6 +1601,7 @@ async def run(args):
 
     try:
         async for line in _stdin_lines():
+            station._trace(f"[typed] {line}")
             if line.startswith('/'):
                 if not await _handle_command(station, line):
                     break
@@ -1605,6 +1626,10 @@ def main():
                               "./radio_stations.py) instead of a simulator. Needs --phy audio. THIS "
                               "TRANSMITS: use a clear frequency, low power, and ./level_meter.py "
                               "to set the receive volume first.")
+    parser.add_argument('--log-file', metavar='PATH',
+                         help='append everything this station logs, timestamped, to PATH - with '
+                              '--radio also every burst heard (mode, SNR, sync quality, peak) and '
+                              'every transmission. Share this file to debug a link.')
     parser.add_argument('--tx-level', type=float, default=0.5,
                          help='with --radio: peak TX audio level into the radio, 0-1 (default 0.5)')
     parser.add_argument('--ptt-line', choices=('dtr', 'rts'),

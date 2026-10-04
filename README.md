@@ -522,7 +522,7 @@ setup and leveling, results and troubleshooting are in
 ./radio_stations.py       # is the AIOC / Digirig detected?
 ./level_meter.py          # open squelch, turn the radio volume until it says "good"
 ./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 \
-    --phy audio --audio-port mic --radio --ack --auto
+    --phy audio --audio-port mic --radio --ack --auto --log-file ~/station1.log
 ```
 
 On the other computer swap the two callsigns. This transmits: use a clear
