@@ -164,6 +164,12 @@ available?):
       that adjacent reliability tiers' estimate ranges overlap
       substantially — averaging multiple probes in `negotiate()` instead
       of trusting one would shrink this directly. Noted but not done.
+      Real-radio evidence (2026-10-04, K0MDT-2's log): two BPSK 600 bursts
+      from the same station 6 s apart read 21.4 dB and 12.9 dB, then the
+      QPSK 1200 data bursts after them read 16-17 dB (about 3 dB below
+      where a 600 baud burst would). One burst was an 8.5 dB outlier, so a
+      single reading can mislead negotiation on a link with less margin.
+      Averaging a few probes, or taking the minimum, would guard against it.
 - [ ] **Concurrent-initiator race in negotiation (known gap, 8.21).** If
       both stations get their own first message to send within the same
       handshake window, both could start as their own initiator
