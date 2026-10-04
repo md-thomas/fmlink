@@ -9,69 +9,54 @@ genuinely still open right now in one place, per
 `tasklist.txt` disagree, `tasklist.txt` is authoritative — it's updated
 far more frequently and carries the full reasoning behind each item.
 
-## Where we are (2026-10-02)
+## Where we are (2026-10-04)
 
-The full FM chain now works end to end in simulation. Two `ota_station.py`
-stations (`--phy audio`) talk through `ota_sim`'s FM transceiver model
-over the TCP relay. `./fm_test.sh` launches the whole setup, and the
-channel can be changed live with `/cnr`, `/fading`, etc. typed into the
-simulator's window. Done most recently:
+**The live station now runs over real radios.** Two computers, each with an
+HT on a USB audio interface (an AIOC and a Digirig), run
+`ota_station.py --phy audio --audio-port mic --radio --ack --auto` and
+exchange messages in both directions over the air, with mode negotiation
+and ACKs working. Setup, per-station commands, audio leveling, results and
+troubleshooting are in [RADIO_SETUP.md](RADIO_SETUP.md). Before that, the
+full FM chain worked in simulation (two stations through `ota_sim`'s FM
+transceiver model; `./fm_test.sh`).
 
-- Audio-subcarrier PHY (`openwave_audio.py`): preamble-correlation sync,
-  PLL drift tracking, no frame padding.
-- Golden-ratio FEC interleaver, now defined in the spec.
-- Fading-aware `--auto` (`FADING_MODE_SNR_TABLE`).
-- Frames decoded at the correlation's marker position.
-- Live simulator `/commands`, plus station `/ack`, `/auto`, `/lead-in`.
-- Spec brought up to date: worked example, Control payloads, audio PHY.
+Done most recently:
 
-First real-radio steps (2026-10-03/04):
-
-- `audio_wav_test.py gen|decode` makes a burst WAV and decodes a
-  recording, offline.
-- **Over-the-air reception works (2026-10-04).** An HT on an AIOC
-  (USB audio `hw:AllInOneCable,0`, PTT = DTR on `/dev/ttyACM0`) sent a
-  mode 0 burst; a second HT on a Digirig (CM108 USB sound card) on
-  another laptop recorded it, and `decode` returned the message: sync
-  quality 1.00, 21.3 dB SNR (46.6 dB in software loopback).
-- Modes 1 and 2 also decode over the air on the same pair (17.2 dB and
-  15.6 dB SNR, sync quality 0.99). Modes 3-5 need the `data` port
-  profile; the `mic` port caps at 1200 baud.
-- `radio_link_test.py` runs the whole over-the-air test in one command
-  (keys PTT, plays the burst, records on the other station, decodes,
-  prints pass/fail and SNR per burst), in either direction:
-  `./radio_link_test.py --src K0MDT --tx aioc --rx digirig -m 0 1 2`.
-  Radio interfaces (AIOC, Digirig) are auto-detected on this computer and
-  the `[scan]` hosts in `stations.toml` (`./radio_stations.py` lists
-  them). `./level_meter.py` is a live level bar for setting the radio's
-  volume (an HT mutes its speaker when the cable is plugged in). The
-  Digirig's PTT line (RTS) and the digirig-to-aioc direction are still
-  untested over the air.
-- Receive setup lessons: the MacBook's headphone jack has no usable
-  audio input, so a USB sound card is needed; turn the CM108's Auto Gain
-  Control off (it pumps and clips); keep capture gain low and the radio
-  volume moderate, with squelch open so the start isn't clipped.
-- **Real-time radio mode (2026-10-04, simulation-tested only):**
-  `ota_station.py --phy audio --audio-port mic --radio [aioc|digirig]`
-  runs the live station over a real radio: `openwave_radio.py` listens
-  continuously (burst detection using the station's current mode/FEC
-  attempts), keys PTT to send, pauses receive while transmitting, and
-  waits a turnaround before replying. `./air_loopback_test.py` runs two
-  stations over an in-memory simulated air (3 messages delivered + ACKed
-  at modes 0 and 2, `--auto`, and a noisy air). Not yet tried on real
-  radios. Also: `radio_send.py` / `radio_listen.py` are standalone
-  one-way burst test tools (send on one station, listen on the other).
-  The reply timeout now allows `2 * overhead_s` for the radio transport.
-  Open: the detector re-decodes the buffer every 0.5 s (about half a core
-  with 2-3 candidate modes; optimise before a Pi); mid-burst collisions
-  are lost (half duplex).
+- **Real-radio transport** (`openwave_radio.py`): continuous burst
+  detection using the station's current mode/FEC attempts, queued PTT
+  transmit, receive paused while keyed, a turnaround before replying, and
+  extra reply-timeout allowance. `--radio [aioc|digirig]` on
+  `ota_station.py`; `ota_sim` is no longer needed unless used.
+- **Interface detection** (`radio_stations.py`): AIOC (audio + serial DTR
+  PTT) and Digirig (CM108 audio + serial RTS PTT) found by USB ID;
+  per-interface overrides in `stations.toml`. No ssh unless `[scan]` hosts
+  are set.
+- **Tools:** `level_meter.py` (live receive-level bar - an HT mutes its
+  speaker when the cable is plugged in), `radio_send.py` / `radio_listen.py`
+  (one-way burst tests, one command per station), `radio_link_test.py`
+  (one machine drives both stations over ssh), `air_loopback_test.py` (two
+  full stations over an in-memory simulated air, no hardware), and
+  `audio_wav_test.py` (burst WAVs offline).
+- **One-way over-the-air bursts** (AIOC HT to Digirig HT): modes 0, 1, 2
+  decoded at 21.3, 17.2, 15.6 dB SNR (sync quality 0.99-1.00).
+- **Lessons learned:** a laptop headphone jack has no usable audio input; the
+  CM108's Auto Gain Control must be off (it pumps and clips); the Digirig
+  plays only stereo, so playback goes through ALSA `plughw:`; a replying
+  station must wait a turnaround or its ACK lands while the peer is deaf.
+- Earlier: audio-subcarrier PHY (preamble-correlation sync, PLL drift
+  tracking), golden-ratio FEC interleaver (in the spec), fading-aware
+  `--auto`, frames decoded at the correlation's marker position, live
+  simulator `/commands`, station `/ack`, `/auto`, `/lead-in`.
 
 Next, roughly in order (pending: are radios + an audio/PTT interface
 available?):
 
-1. **Phase 5 on real radios** (sound-card I/O, PTT, over-the-air test).
-   Reception of modes 0-2 is confirmed over the air; next is real-time
-   audio I/O and PTT in `ota_station.py`.
+1. **Phase 5 on real radios - the rest.** Done: audio I/O, PTT and an
+   over-the-air test on the `mic` port. Still to do: the faster `data`
+   port profile (needs a radio data connector), the closed-squelch case
+   (everything so far used open squelch), link-margin/range tests, and
+   cutting the receiver's CPU use (it re-decodes its buffer every 0.5 s,
+   about half a core) before a Raspberry Pi.
 2. **Automatic re-negotiation mid-session.** Stations pick a mode once;
    they should adapt as the link changes (pairs with live control).
 3. **Soft-decision Viterbi** (~2 dB at the fringe).
@@ -83,20 +68,22 @@ available?):
 
 ## Open (actively relevant — pluggable-PHY / OTA track)
 
-- [ ] **Phase 5 — audio-interfaced radio deployment (5.3 done in
-      simulation).** The actual eventual deployment target: driving real
-      VHF/UHF FM transceivers through their audio ports (not SDR
-      hardware). 5.3 (a real radio's audio passband/deviation vs. direct
-      complex baseband) is handled in simulation as of 2026-10-02:
+- [ ] **Phase 5 — audio-interfaced radio deployment (5.1, 5.2, 5.3 and
+      5.4 done on the `mic` port, 2026-10-04).** Driving real VHF/UHF FM
+      transceivers through their audio ports works end to end between two
+      computers (AIOC and Digirig interfaces; see
+      [RADIO_SETUP.md](RADIO_SETUP.md)):
       - `openwave_audio.py` puts symbols on an audio carrier, with
         preamble-correlation sync and PLL drift tracking.
-      - `ota_station.py --phy audio --audio-port mic|data` uses it.
-      - `ota_sim`'s FM transceiver model (`--channel fm`) is the channel.
-      
-      Still needed: real-time audio I/O without buffer underruns (5.1),
-      PTT control to key the transceiver (5.2, e.g. CAT/serial
-      RTS-DTR/VOX), and an actual over-the-air test between two radios
-      (5.4).
+      - `openwave_radio.py` + `ota_station.py --radio` do the real-time
+        audio I/O (5.1) and serial PTT (5.2, DTR on the AIOC, RTS on the
+        Digirig); the over-the-air test (5.4) passed in both directions.
+      - `ota_sim`'s FM transceiver model remains the hardware-free test.
+
+      Still open: the `data` port profile (modes 3-5, needs a radio data
+      connector), the closed-squelch case, CAT/VOX PTT variants,
+      range/link-margin tests (7.4), and receiver CPU use on small
+      computers (7.5).
 - [ ] **6.3 — design an OFDM mode.** A bigger lift than the existing
       constellation-dict approach — needs new sync/framing, not a
       drop-in replacement for the single-carrier chain.

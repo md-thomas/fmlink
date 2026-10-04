@@ -60,7 +60,10 @@ stages, chainable by hand), `fec_encode.py`/`fec_decode.py` (FEC wrappers
 around the pipeline), `openwave_fec_generate_presets.py` (regenerates the
 `PRESETS` table), `ota_station.py` (the live interactive station — see
 §3), `pipeline_test.sh`/`file_xfer_test.sh` (turnkey end-to-end test
-scripts). See `README.md` for full usage of each.
+scripts), and the real-radio tools: `openwave_radio.py` (the radio
+transport), `radio_stations.py`, `ptt_play.py`, `level_meter.py`,
+`radio_send.py`, `radio_listen.py`, `radio_link_test.py`,
+`air_loopback_test.py`, `audio_wav_test.py` (see [RADIO_SETUP.md](RADIO_SETUP.md)). See `README.md` for full usage of each.
 
 ## 3. `ota_station.py` — the live station process
 
@@ -82,7 +85,10 @@ long-running interactive process, not a one-shot pipeline stage.
   transceiver pair's audio path, carrying PCM audio, which the station
   speaks with `--phy audio --audio-port mic|data` (`openwave_audio.py`).
   Each peer identifies itself by callsign on connect; no static address
-  configuration.
+  configuration. With `--radio` instead of the simulator, the station runs
+  over a real radio's audio interface (`openwave_radio.py`,
+  `radio_stations.py`; see [RADIO_SETUP.md](RADIO_SETUP.md)) and needs
+  neither `ota_sim` nor any network.
 - **Mode/FEC negotiation** (`--auto`): initiator-driven and symmetric —
   whichever station gets a message to send first measures the link
   itself and picks ONE mode/FEC both directions use, via a two-phase
@@ -138,7 +144,10 @@ long-running interactive process, not a one-shot pipeline stage.
 - `numpy`, `scipy` (`pyproject.toml`) for the installed modules.
 - `plotly` for `plot_constellation.py` only (not a core dependency).
 - `ota_station.py` depends on the separate sibling package `ota_sim`
-  (`pip install -e ../ota_sim`) for the network/channel-simulation layer.
+  (`pip install -e ../ota_sim`) for the network/channel-simulation layer,
+  but only when talking to a simulator; `--radio` needs neither `ota_sim`
+  nor a network. The real-radio tools need `pyserial` (PTT) and ALSA's
+  `arecord`/`aplay`.
 - No dependency on any `general_xxx` sibling modem package — OpenWave's
   BPSK/QPSK/16-QAM implementations are entirely its own
   (`openwave_modem.py`), independent of `general_bpsk`/`general_qpsk`/
@@ -172,5 +181,8 @@ and `ota_station.py`/`ota_sim` live-link testing).
   re-probe (though `/renegotiate` can be triggered manually).
 - **The archived GNU Radio chain (`legacy/gnuradio/`) is not the active
   development target** — kept for history/reference, not being extended.
-- **Real transceiver (audio-interfaced radio) deployment is the eventual
-  target, not yet built** — see Phase 5 in `tasklist.txt`/TODO.md.
+- **Real-radio operation is early.** `ota_station.py --radio` works over
+  FM radios through an AIOC or Digirig (see [RADIO_SETUP.md](RADIO_SETUP.md)),
+  verified between two stations on the `mic` audio port (modes 0-2) with
+  `--ack --auto`. Not yet done: the faster `data` port, link-margin and
+  range testing, and low-power-computer tuning (TODO.md, Phase 5).

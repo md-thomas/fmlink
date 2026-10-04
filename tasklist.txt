@@ -200,23 +200,33 @@ No GNU Radio, eventually: this direction has effectively started - the
 pure-Python CLI pipeline (openwave_modem.py/openwave_pulse.py/etc.) already
 is the GNU-Radio-free path anticipated here, and is now the sole actively
 developed PHY (Phase 4's GNU Radio chain is archived, not a parallel
-track). What remains is real-time audio I/O and PTT (5.1/5.2 below), not a
-rewrite away from GNU Radio - there's nothing left to move away from.
+track). Real-time audio I/O and PTT (5.1/5.2 below) are now done too (2026-10-04),
+so this is a GNU-Radio-free path all the way to real radios.
 Favor keeping core logic (openwave_link.py already has zero GNU Radio
 imports, including the LinkReceiver dispatch class - see 2.10) portable.
 
-  [ ] 5.1 Real-time audio I/O: stream the pluggable-PHY baseband (see
+  [x] 5.1 Real-time audio I/O (2026-10-04, openwave_radio.py): stream the pluggable-PHY baseband (see
           WAVEFORM_MODES) through a soundcard interface (TX: samples out to
           radio's mic/data input; RX: samples in from radio's speaker/data
           output) without buffer underruns.
-  [ ] 5.2 PTT control to key the transceiver for TX bursts (e.g. CAT control,
+  [x] 5.2 PTT control (2026-10-04: serial DTR on the AIOC, RTS on the
+          Digirig, ptt_play.py) to key the transceiver for TX bursts (e.g. CAT control,
           serial RTS/DTR, or VOX tone), gated on frame transmission.
-  [ ] 5.3 Handle the transceiver audio passband/deviation characteristics
+  [x] 5.3 Handle the transceiver audio passband/deviation characteristics
           (unlike Pluto/RTL-SDR's direct complex baseband, real radios impose
           their own audio bandpass and possibly FM discriminator response) -
           likely needs a baseband<->audio-passband translation stage.
-  [ ] 5.4 Over-the-air test between two audio-interfaced radios running
+  [x] 5.4 Over-the-air test (2026-10-04, see RADIO_SETUP.md) between two audio-interfaced radios running
           OpenWave, using the same framing validated in Phase 4.
+          DONE 2026-10-04 on the mic port: an HT on an AIOC and an HT on a
+          Digirig, one per computer, ran ota_station.py --phy audio
+          --audio-port mic --radio --ack --auto and exchanged messages in
+          both directions with negotiation and ACKs. One-way bursts decoded
+          at modes 0/1/2 with 21.3/17.2/15.6 dB SNR. Lessons: a laptop
+          headphone jack has no audio input; a CM108's AGC must be off;
+          the Digirig plays stereo only (use ALSA plughw:); a replier must
+          wait a turnaround after hearing a burst. Still open: the data
+          port, closed squelch, CAT/VOX PTT, range tests, receiver CPU.
 
 Phase 6: Multi-Modulation Support - IN PROGRESS (CLI pipeline)
 -----------------------------------------------

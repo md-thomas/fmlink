@@ -121,12 +121,26 @@ below.
 
 **`ota_station.py`**
 Live, interactive, bidirectional station process - talks to a peer station
-through a simulated over-the-air network link (path loss, fading, AWGN,
-latency), pushing real frames through the actual modem chain instead of a
+either through a simulated over-the-air network link (path loss, fading,
+AWGN, latency) or, with `--radio`, over a real FM radio through its audio
+interface, pushing real frames through the actual modem chain instead of a
 one-shot file pipeline. It speaks either complex IQ (the default) or, with
-`--phy audio`, real audio through a simulated pair of FM radios. See
-"Over-The-Air (OTA) Simulator" below; `fm_test.sh` launches a full FM test
-setup.
+`--phy audio`, real audio. See "Over-The-Air (OTA) Simulator" below for the
+simulator (`fm_test.sh` launches a full FM test setup) and
+[RADIO_SETUP.md](RADIO_SETUP.md) for real radios.
+
+**Real-radio support** (all described in [RADIO_SETUP.md](RADIO_SETUP.md)):
+`openwave_radio.py` (the radio transport `ota_station.py --radio` uses:
+continuous burst detection, queued PTT transmit, half-duplex muting, and an
+in-memory `SimulatedAir` for hardware-free tests), `radio_stations.py`
+(auto-detects AIOC and Digirig interfaces; `stations.toml` holds per-interface
+overrides), `ptt_play.py` (key PTT, play a WAV, release), `level_meter.py`
+(live receive-level bar for setting the radio volume), `radio_send.py` /
+`radio_listen.py` (one-way burst test tools, one per station),
+`radio_link_test.py` (one machine drives both stations over ssh),
+`air_loopback_test.py` (two full stations over a simulated air, no
+hardware), and `audio_wav_test.py` (generate/decode burst WAV files
+offline).
 
 **`legacy/gnuradio/`**
 The project's original GNU Radio pi/4-QPSK PHY chain (`phy_sim_loopback.grc`,
@@ -494,6 +508,25 @@ Two limits on all this:
   fades, clicks and interference near that floor, not into going below
   it. Getting far below the noise, as FT8 or WSPR do, needs an SSB
   (linear) radio path.
+
+## Over the air with real radios
+
+`ota_station.py --radio` runs the same live station over real FM radios, one
+per computer, with no simulator and no link between the computers except the
+radio. Verified with an HT on an AIOC and an HT on a Digirig, in both
+directions. The short version, on each computer (full details, the audio
+setup and leveling, results and troubleshooting are in
+[RADIO_SETUP.md](RADIO_SETUP.md)):
+
+```
+./radio_stations.py       # is the AIOC / Digirig detected?
+./level_meter.py          # open squelch, turn the radio volume until it says "good"
+./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 \
+    --phy audio --audio-port mic --radio --ack --auto
+```
+
+On the other computer swap the two callsigns. This transmits: use a clear
+frequency and low power.
 
 ## Over-The-Air (OTA) Simulator
 
