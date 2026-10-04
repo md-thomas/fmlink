@@ -56,6 +56,34 @@ Done most recently:
   `--auto`, frames decoded at the correlation's marker position, live
   simulator `/commands`, station `/ack`, `/auto`, `/lead-in`.
 
+**Pick up here - weak-link testing (planned 2026-10-04, not started).**
+Everything on the air so far was a strong link (about 15-21 dB SNR, 8 dB
+or more above mode 2's cliff). To see how the modes and `--auto` behave
+near their limits:
+
+- **Get both laptops current first:** `macbookair2` is on `8fb78bd`, behind
+  the mode-table fix (`4f6619c`) and the docs.
+- **TX-level sweep (start here, controlled and repeatable):** lowering the
+  TX audio level lowers the received audio SNR with the RF link unchanged.
+  `./radio_send.py --src K0MDT -m 1 2 --count 10 --level 0.5` then 0.25,
+  0.12, 0.06, 0.03, with `./radio_listen.py` on the other station (or
+  `ota_station.py --tx-level`). Record delivered counts and mean SNR per mode
+  per level and compare with the software cliffs (mode 0 ~-1 dB, mode 1
+  ~4.5 dB, mode 2 ~7 dB; `audio_margin_sweep.py`). It tests the real receive
+  chain's noise floor, not FM's RF threshold effect.
+- **RF-weak link (uncontrolled):** radios on dummy loads a few feet apart
+  will stay very strong (leakage is only tens of dB down from the carrier,
+  and the receiver hears about -117 dBm), so distance alone won't weaken it.
+  Options: separate rooms/floors at the lowest power with the receiver on a
+  dummy load, a grounded metal box around one radio, or conducted attenuators
+  (60-90 dB, rated above the radio's power). Read SNR from the logs instead of
+  trusting a calibration; expect burst-to-burst scatter.
+- **Then:** `ota_station.py --auto` at a weak position - does negotiation pick
+  a mode that works, and does it survive the next outlier probe? Averaging
+  several probes (see the single-probe item below) is the likely fix if not.
+- Also still open from the radio work: soft-decision Viterbi, the `data` port,
+  closed squelch, CPU use before a Raspberry Pi.
+
 Next, roughly in order (pending: are radios + an audio/PTT interface
 available?):
 
