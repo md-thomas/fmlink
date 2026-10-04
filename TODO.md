@@ -25,23 +25,28 @@ simulator's window. Done most recently:
 - Live simulator `/commands`, plus station `/ack`, `/auto`, `/lead-in`.
 - Spec brought up to date: worked example, Control payloads, audio PHY.
 
-First real-radio steps (2026-10-03), with an HT on an AIOC adapter
-(USB audio `hw:AllInOneCable,0`, PTT = DTR on `/dev/ttyACM0`):
+First real-radio steps (2026-10-03/04):
 
 - `audio_wav_test.py gen|decode` makes a burst WAV and decodes a
-  recording, offline. A software loopback decodes fine.
-- A mode 0 burst keyed out through the AIOC sounded clean on a second
-  (listen-only) radio. Not yet confirmed: that a received burst decodes.
-- Blocked on a second AIOC + USB cable, so one radio can transmit and the
-  other record. Then: `gen` on one, `arecord` + `decode` on the other,
-  then modes 1 and 2.
+  recording, offline.
+- **Over-the-air reception works (2026-10-04).** An HT on an AIOC
+  (USB audio `hw:AllInOneCable,0`, PTT = DTR on `/dev/ttyACM0`) sent a
+  mode 0 burst; a second HT on a Digirig (CM108 USB sound card) on
+  another laptop recorded it, and `decode` returned the message: sync
+  quality 1.00, 21.3 dB SNR (46.6 dB in software loopback).
+- Receive setup lessons: the MacBook's headphone jack has no usable
+  audio input, so a USB sound card is needed; turn the CM108's Auto Gain
+  Control off (it pumps and clips); keep capture gain low and the radio
+  volume moderate, with squelch open so the start isn't clipped.
+- Next: modes 1 and 2 over the air, then real-time audio I/O and PTT in
+  `ota_station.py`.
 
 Next, roughly in order (pending: are radios + an audio/PTT interface
 available?):
 
 1. **Phase 5 on real radios** (sound-card I/O, PTT, over-the-air test).
-   Next is the two-AIOC reception test above, then real-time audio I/O
-   and PTT in `ota_station.py`.
+   Reception of a mode 0 burst is confirmed; next are the faster modes
+   over the air, then real-time audio I/O and PTT in `ota_station.py`.
 2. **Automatic re-negotiation mid-session.** Stations pick a mode once;
    they should adapt as the link changes (pairs with live control).
 3. **Soft-decision Viterbi** (~2 dB at the fringe).

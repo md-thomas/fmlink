@@ -39,7 +39,7 @@ def mode_params(args):
 
 def gen(args):
     mod, rate, gens, k, carrier = mode_params(args)
-    frame = strip_padding(link.build_frame(args.text.encode(), mode_id=args.mode, src_id=b'TEST',
+    frame = strip_padding(link.build_frame(args.text.encode(), mode_id=args.mode, src_id=args.src.encode(),
                                            dst_id=b'ALL'))
     symbols = MODULATORS[mod](fec.encode_frame(frame, gens, k))
     samples = audio.modulate(symbols, rate, carrier, level=args.level, lead_in_s=args.lead_in)
@@ -54,9 +54,12 @@ def gen(args):
 def decode(args):
     mod, rate, gens, k, carrier = mode_params(args)
     with wave.open(args.input) as w:
-        assert w.getframerate() == audio.AUDIO_SAMPLE_RATE and w.getnchannels() == 1
+        assert w.getframerate() == audio.AUDIO_SAMPLE_RATE, "needs a 48 kHz recording"
+        channels = w.getnchannels()
         raw = w.readframes(w.getnframes())
     x = audio.pcm16_to_audio(raw)
+    if channels > 1:  # some sound cards only record stereo: average the channels
+        x = x.reshape(-1, channels).mean(axis=1)
     print(f"{len(x) / audio.AUDIO_SAMPLE_RATE:.1f} s, rms {x.std():.3f}, peak {np.abs(x).max():.3f}")
     symbols, info = audio.demodulate(x, rate, carrier, MODULATORS[mod](link.PREAMBLE + link.SYNC_WORD),
                                      constellation=modem._CONSTELLATIONS[mod])
@@ -85,6 +88,7 @@ def main():
         s.add_argument('--port', choices=sorted(audio.PORT_PROFILES), default='mic')
         if name == 'gen':
             s.add_argument('text')
+            s.add_argument('--src', default='TEST', help='source ID in the frame header (e.g. a callsign)')
             s.add_argument('-o', '--output', default='tx.wav')
             s.add_argument('--level', type=float, default=0.5)
             s.add_argument('--lead-in', type=float, default=0.5, help='seconds of silence first')
