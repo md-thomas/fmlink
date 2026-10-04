@@ -37,6 +37,11 @@ First real-radio steps (2026-10-03/04):
 - Modes 1 and 2 also decode over the air on the same pair (17.2 dB and
   15.6 dB SNR, sync quality 0.99). Modes 3-5 need the `data` port
   profile; the `mic` port caps at 1200 baud.
+- `radio_link_test.py` runs the whole over-the-air test from the
+  transmit machine in one command (keys PTT, plays the burst, records on
+  the receiver over ssh, decodes, prints pass/fail and SNR per burst):
+  `./radio_link_test.py --src K0MDT -m 0 1 2 --count 3 --rx-host HOST`.
+  Only the receiver's `arecord` runs remotely.
 - Receive setup lessons: the MacBook's headphone jack has no usable
   audio input, so a USB sound card is needed; turn the CM108's Auto Gain
   Control off (it pumps and clips); keep capture gain low and the radio

@@ -30,51 +30,78 @@ def strip_padding(frame):
     return frame[frame.find(marker):at + link.HEADER_LEN + hdr['payload_len'] + link.CRC_LEN]
 
 
-def mode_params(args):
-    m = link.WAVEFORM_MODES[args.mode]
-    gens, k = fec.PRESETS[args.fec or m['fec_preset']]
-    prof = audio.PORT_PROFILES[args.port]
+def mode_params(mode, fec_preset=None, port='mic'):
+    m = link.WAVEFORM_MODES[mode]
+    gens, k = fec.PRESETS[fec_preset or m['fec_preset']]
+    prof = audio.PORT_PROFILES[port]
     return m['modulation'], m['symbol_rate'], gens, k, prof['carrier_hz']
 
 
-def gen(args):
-    mod, rate, gens, k, carrier = mode_params(args)
-    frame = strip_padding(link.build_frame(args.text.encode(), mode_id=args.mode, src_id=args.src.encode(),
-                                           dst_id=b'ALL'))
+def build_samples(text, mode=0, fec_preset=None, port='mic', src='TEST', level=0.5, lead_in=0.5):
+    """Message text -> audio samples (float, 48 kHz) for one burst."""
+    mod, rate, gens, k, carrier = mode_params(mode, fec_preset, port)
+    frame = strip_padding(link.build_frame(text.encode(), mode_id=mode, src_id=src.encode(), dst_id=b'ALL'))
     symbols = MODULATORS[mod](fec.encode_frame(frame, gens, k))
-    samples = audio.modulate(symbols, rate, carrier, level=args.level, lead_in_s=args.lead_in)
-    pcm = audio.audio_to_pcm16(samples)
+    return audio.modulate(symbols, rate, carrier, level=level, lead_in_s=lead_in)
+
+
+def read_wav(path):
+    """48 kHz WAV -> mono float samples (stereo is averaged: some sound
+    cards only record stereo)."""
+    with wave.open(path) as w:
+        assert w.getframerate() == audio.AUDIO_SAMPLE_RATE, "needs a 48 kHz recording"
+        channels = w.getnchannels()
+        raw = w.readframes(w.getnframes())
+    x = audio.pcm16_to_audio(raw)
+    return x.reshape(-1, channels).mean(axis=1) if channels > 1 else x
+
+
+def decode_samples(x, mode=0, fec_preset=None, port='mic'):
+    """Recorded audio -> dict: quality, snr_db, status ('ok', a decode
+    failure status, 'no_frame' or 'no_burst'), payload (bytes or None),
+    plus the recording's rms and peak."""
+    mod, rate, gens, k, carrier = mode_params(mode, fec_preset, port)
+    out = {'rms': float(x.std()), 'peak': float(np.abs(x).max()), 'quality': 0.0,
+           'snr_db': float('-inf'), 'status': 'no_burst', 'payload': None}
+    symbols, info = audio.demodulate(x, rate, carrier, MODULATORS[mod](link.PREAMBLE + link.SYNC_WORD),
+                                     constellation=modem._CONSTELLATIONS[mod])
+    out['quality'], out['snr_db'] = float(info['quality']), float(info['snr_db'])
+    if info['quality'] < 0.15:
+        return out
+    n = 8 // BITS[mod]
+    symbols = symbols[:len(symbols) - len(symbols) % n]
+    bits = DEMODULATORS[mod](symbols)
+    frames = list(fec.decode_frames(bits, gens, k, first_marker_bit=info['marker_index'] * BITS[mod]))
+    out['status'] = 'no_frame'
+    for status, header, payload in frames:
+        out['status'] = status
+        if status == 'ok':
+            out['payload'] = payload
+            break
+    return out
+
+
+def gen(args):
+    samples = build_samples(args.text, args.mode, args.fec, args.port, args.src, args.level, args.lead_in)
+    mod, rate, _, _, carrier = mode_params(args.mode, args.fec, args.port)
     with wave.open(args.output, 'wb') as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(audio.AUDIO_SAMPLE_RATE)
-        w.writeframes(pcm)
+        w.writeframes(audio.audio_to_pcm16(samples))
     print(f"wrote {args.output}: {len(samples) / audio.AUDIO_SAMPLE_RATE:.2f} s, {mod} {rate} baud, "
           f"carrier {carrier:g} Hz, level {args.level}")
 
 
 def decode(args):
-    mod, rate, gens, k, carrier = mode_params(args)
-    with wave.open(args.input) as w:
-        assert w.getframerate() == audio.AUDIO_SAMPLE_RATE, "needs a 48 kHz recording"
-        channels = w.getnchannels()
-        raw = w.readframes(w.getnframes())
-    x = audio.pcm16_to_audio(raw)
-    if channels > 1:  # some sound cards only record stereo: average the channels
-        x = x.reshape(-1, channels).mean(axis=1)
-    print(f"{len(x) / audio.AUDIO_SAMPLE_RATE:.1f} s, rms {x.std():.3f}, peak {np.abs(x).max():.3f}")
-    symbols, info = audio.demodulate(x, rate, carrier, MODULATORS[mod](link.PREAMBLE + link.SYNC_WORD),
-                                     constellation=modem._CONSTELLATIONS[mod])
-    print(f"sync quality {info['quality']:.2f} (>~0.5 good, <~0.15 nothing), SNR {info['snr_db']:.1f} dB")
-    if info['quality'] < 0.15:
+    x = read_wav(args.input)
+    r = decode_samples(x, args.mode, args.fec, args.port)
+    print(f"{len(x) / audio.AUDIO_SAMPLE_RATE:.1f} s, rms {r['rms']:.3f}, peak {r['peak']:.3f}")
+    print(f"sync quality {r['quality']:.2f} (>~0.5 good, <~0.15 nothing), SNR {r['snr_db']:.1f} dB")
+    if r['status'] == 'no_burst':
         print("no burst found")
-        return
-    n = 8 // BITS[mod]
-    symbols = symbols[:len(symbols) - len(symbols) % n]
-    bits = DEMODULATORS[mod](symbols)
-    frames = list(fec.decode_frames(bits, gens, k, first_marker_bit=info['marker_index'] * BITS[mod]))
-    for status, header, payload in frames:
-        print(status, payload if status == 'ok' else '')
-    if not frames:
+    elif r['status'] == 'no_frame':
         print("sync found but no frame decoded")
+    else:
+        print(r['status'], r['payload'] if r['status'] == 'ok' else '')
 
 
 def main():
