@@ -94,11 +94,13 @@ import openwave_sync as sync
 from modulate import MODULATORS
 from demodulate import DEMODULATORS
 
+import openwave_radio as radio
+import radio_stations
+
 try:
     from ota_sim.simulator import SimClient
 except ImportError:
-    sys.exit("error: ota_sim is not installed - run `pip install -e ../ota_sim` "
-             "from this repo (see /data/Projects/ota_sim/README.md)")
+    SimClient = None  # only needed to talk to a simulator, not for --radio
 
 RETRY_POLL_INTERVAL_S = 0.2
 
@@ -499,8 +501,10 @@ class Station:
     def _reply_timeout_s(self, base_s):
         """How long to wait for a reply to the burst just sent: base_s
         plus twice its airtime - once for it to finish airing, once for a
-        similar-sized reply to air back. Equals base_s for IQ."""
-        return base_s + 2 * self._last_tx_airtime_s
+        similar-sized reply to air back. Equals base_s for IQ. A real radio
+        adds its transport's per-direction overhead (PTT, mute, detection)."""
+        overhead = getattr(self._sim, 'overhead_s', 0.0)
+        return base_s + 2 * self._last_tx_airtime_s + 2 * overhead
 
     # -- simulator connection -----------------------------------------
     async def connect(self, sim_host, sim_port):
@@ -508,6 +512,22 @@ class Station:
         peer_id immediately, so a receive-only station is reachable before
         it ever sends anything."""
         self._sim = await SimClient(self.station_id, self._burst_received).connect(sim_host, sim_port)
+
+    async def connect_radio(self, station, tx_level=0.5, capture=None, player=None):
+        """Use a radio's audio interface (a radio_stations.py station)
+        instead of a simulator. capture / player replace the real audio
+        in and out (openwave_radio.SimulatedAir uses that for testing)."""
+        if self.phy != 'audio':
+            raise ValueError("a radio needs --phy audio")
+
+        def attempts():
+            return [(modulation, rate, use_fec, gens, k)
+                    for modulation, rate, _demod, use_fec, gens, k in self._demod_attempts()]
+        self._sim = await radio.RadioTransport(
+            self._burst_received, attempts, self._carrier_hz,
+            capture or (lambda: radio.arecord_chunks(station['rx_device'], station['rx_channels'])),
+            player or radio.make_player(station), asyncio.get_running_loop(), tx_level, self._log,
+        ).connect()
 
     def close(self):
         if self._sim is not None:
@@ -1515,18 +1535,34 @@ async def run(args):
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
         phy=args.phy, audio_port=args.audio_port, lead_in_s=args.lead_in_ms / 1000,
     )
-    try:
-        await station.connect(args.sim_host, args.sim_port)
-    except OSError as exc:
-        sys.exit(f"error: can't reach the ota_sim simulator at {args.sim_host}:{args.sim_port} "
-                 f"({exc}) - is `python3 -m ota_sim.simulator` running?")
+    if args.radio is not None:
+        try:
+            st = dict(radio_stations.pick_local(args.radio or None))
+        except ValueError as exc:
+            sys.exit(f"error: {exc}")
+        if args.ptt_line:
+            st['ptt_line'] = args.ptt_line
+        if not st['ptt_port']:
+            sys.exit(f"error: {st['name']} has no PTT serial port detected, so it can't transmit")
+        await station.connect_radio(st, args.tx_level)
+        link_note = f"on air via {st['name']} (PTT {st['ptt_line'].upper()}, {st['rx_device']})"
+    else:
+        if SimClient is None:
+            sys.exit("error: ota_sim is not installed - run `pip install -e ../ota_sim` "
+                     "from this repo (see /data/Projects/ota_sim/README.md)")
+        try:
+            await station.connect(args.sim_host, args.sim_port)
+        except OSError as exc:
+            sys.exit(f"error: can't reach the ota_sim simulator at {args.sim_host}:{args.sim_port} "
+                     f"({exc}) - is `python3 -m ota_sim.simulator` running?")
+        link_note = f"relaying via {args.sim_host}:{args.sim_port}"
     bandwidth_note = f" bandwidth={args.bandwidth}" if args.auto else ""
     phy_note = (f"phy=audio ({args.audio_port} port, "
                 f"{audio_phy.PORT_PROFILES[args.audio_port]['carrier_hz']:g} Hz carrier)"
                 if args.phy == 'audio' else "phy=iq")
     print(f"[{args.station_id}] {phy_note} ack={'on' if args.ack else 'off'} "
-          f"auto={'on' if args.auto else 'off'}{bandwidth_note} - connected, relaying via "
-          f"{args.sim_host}:{args.sim_port}.", file=sys.stderr)
+          f"auto={'on' if args.auto else 'off'}{bandwidth_note} - connected, {link_note}.",
+          file=sys.stderr)
     print(_mode_banner(args.station_id, station), file=sys.stderr)
 
     # With --auto, negotiation is deliberately NOT run here - it happens
@@ -1561,8 +1597,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--station-id', required=True, help="This station's own callsign")
     parser.add_argument('--dst', default='ALL', help="Peer's callsign (default: ALL/broadcast)")
-    parser.add_argument('--sim-host', required=True, help='ota_sim simulator address')
+    parser.add_argument('--sim-host', help='ota_sim simulator address (not needed with --radio)')
     parser.add_argument('--sim-port', type=int, default=9500, help='ota_sim simulator port (default: 9500)')
+    parser.add_argument('--radio', nargs='?', const='', metavar='INTERFACE',
+                         help="transmit and receive over this computer's radio interface "
+                              "(e.g. aioc or digirig; omit the name if only one is attached; see "
+                              "./radio_stations.py) instead of a simulator. Needs --phy audio. THIS "
+                              "TRANSMITS: use a clear frequency, low power, and ./level_meter.py "
+                              "to set the receive volume first.")
+    parser.add_argument('--tx-level', type=float, default=0.5,
+                         help='with --radio: peak TX audio level into the radio, 0-1 (default 0.5)')
+    parser.add_argument('--ptt-line', choices=('dtr', 'rts'),
+                         help="with --radio: override the interface's PTT line")
     parser.add_argument('--mode', type=int, default=0, choices=sorted(link.WAVEFORM_MODES),
                          help='Waveform Mode ID - selects modulation/symbol rate (see Waveform '
                               'Modes table below; default: 0)')
@@ -1612,6 +1658,10 @@ def main():
                               '(bytes/messages sent+received, elapsed time) always prints on exit '
                               'regardless of this flag.')
     args = parser.parse_args()
+    if args.radio is None and not args.sim_host:
+        parser.error("give --sim-host (simulator) or --radio (a real radio)")
+    if args.radio is not None and args.phy != 'audio':
+        parser.error("--radio needs --phy audio")
     if args.phy == 'audio':
         if args.audio_port is None:
             parser.error("--phy audio needs --audio-port mic or --audio-port data")

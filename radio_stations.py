@@ -102,6 +102,22 @@ def resolve(name, stations):
     return matches[0]
 
 
+def pick_local(name=None, config_path=DEFAULT_CONFIG):
+    """This computer's station: the one named, or the only one attached.
+    Raises ValueError if there's none or it's ambiguous."""
+    local = detect(LOCAL, load_config(config_path).get('interfaces', {}))
+    if name:
+        matches = [s for s in local if s['name'] == name.split('@')[0]]
+        if not matches:
+            raise ValueError(f"no {name!r} on this computer (here: "
+                             f"{', '.join(s['name'] for s in local) or 'no radio interface found'})")
+        return matches[0]
+    if len(local) != 1:
+        raise ValueError("name the station to use (here: "
+                         + (', '.join(s['name'] for s in local) or 'no radio interface found') + ")")
+    return local[0]
+
+
 def describe(st):
     port = st['ptt_port'] or 'NO PTT PORT FOUND (receive only)'
     return (f"{label(st):<22} audio {st['rx_device']:<26} PTT {st['ptt_line'].upper()} "

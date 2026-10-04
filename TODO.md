@@ -51,7 +51,20 @@ First real-radio steps (2026-10-03/04):
   audio input, so a USB sound card is needed; turn the CM108's Auto Gain
   Control off (it pumps and clips); keep capture gain low and the radio
   volume moderate, with squelch open so the start isn't clipped.
-- Next: real-time audio I/O and PTT in `ota_station.py`.
+- **Real-time radio mode (2026-10-04, simulation-tested only):**
+  `ota_station.py --phy audio --audio-port mic --radio [aioc|digirig]`
+  runs the live station over a real radio: `openwave_radio.py` listens
+  continuously (burst detection using the station's current mode/FEC
+  attempts), keys PTT to send, pauses receive while transmitting, and
+  waits a turnaround before replying. `./air_loopback_test.py` runs two
+  stations over an in-memory simulated air (3 messages delivered + ACKed
+  at modes 0 and 2, `--auto`, and a noisy air). Not yet tried on real
+  radios. Also: `radio_send.py` / `radio_listen.py` are standalone
+  one-way burst test tools (send on one station, listen on the other).
+  The reply timeout now allows `2 * overhead_s` for the radio transport.
+  Open: the detector re-decodes the buffer every 0.5 s (about half a core
+  with 2-3 candidate modes; optimise before a Pi); mid-burst collisions
+  are lost (half duplex).
 
 Next, roughly in order (pending: are radios + an audio/PTT interface
 available?):

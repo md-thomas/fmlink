@@ -1,6 +1,6 @@
 # Radio interfaces are auto-detected (see radio_stations.py): the AIOC and the
-# Digirig are found by their USB sound card and serial port, on this computer
-# and on the computers listed here. Stations are named by interface:
+# Digirig are found by their USB sound card and serial port on this computer
+# (and on any computers listed under [scan]). Stations are named by interface:
 # 'aioc', 'digirig', or 'aioc@macbookair2' if the same one is on two machines.
 #
 # Run ./radio_stations.py to see what's detected.
@@ -10,10 +10,12 @@
 # (./level_meter.py helps with the last one).
 
 [scan]
-# Other computers to look for interfaces on, over ssh (passwordless key
-# login needed). Entries naming the computer you run on are ignored, so
-# the same file works from every machine.
-hosts = ["macbookair2"]
+# Other computers to look for interfaces on, over ssh. EMPTY by default:
+# nothing here uses ssh unless you add a host (passwordless key login
+# needed), e.g. hosts = ["macbookair2"]. radio_listen.py, radio_send.py and
+# level_meter.py only look at this computer's interfaces; only
+# radio_link_test.py (one machine driving both stations) uses other hosts.
+hosts = []
 
 # Optional per-interface overrides: ptt_line, level (TX audio 0-1),
 # rx_channels (2 for a sound card that only records stereo).

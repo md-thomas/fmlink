@@ -59,13 +59,16 @@ def read_wav(path):
 def decode_samples(x, mode=0, fec_preset=None, port='mic'):
     """Recorded audio -> dict: quality, snr_db, status ('ok', a decode
     failure status, 'no_frame' or 'no_burst'), payload (bytes or None),
-    plus the recording's rms and peak."""
+    header (parsed header of that frame, or None), timing (sample index of
+    the burst's marker, None if no burst), plus the recording's rms and peak."""
     mod, rate, gens, k, carrier = mode_params(mode, fec_preset, port)
     out = {'rms': float(x.std()), 'peak': float(np.abs(x).max()), 'quality': 0.0,
-           'snr_db': float('-inf'), 'status': 'no_burst', 'payload': None}
+           'snr_db': float('-inf'), 'status': 'no_burst', 'payload': None, 'header': None,
+           'timing': None}
     symbols, info = audio.demodulate(x, rate, carrier, MODULATORS[mod](link.PREAMBLE + link.SYNC_WORD),
                                      constellation=modem._CONSTELLATIONS[mod])
     out['quality'], out['snr_db'] = float(info['quality']), float(info['snr_db'])
+    out['timing'] = info['timing']
     if info['quality'] < 0.15:
         return out
     n = 8 // BITS[mod]
@@ -76,7 +79,7 @@ def decode_samples(x, mode=0, fec_preset=None, port='mic'):
     for status, header, payload in frames:
         out['status'] = status
         if status == 'ok':
-            out['payload'] = payload
+            out['payload'], out['header'] = payload, header
             break
     return out
 
