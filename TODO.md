@@ -34,19 +34,21 @@ First real-radio steps (2026-10-03/04):
   mode 0 burst; a second HT on a Digirig (CM108 USB sound card) on
   another laptop recorded it, and `decode` returned the message: sync
   quality 1.00, 21.3 dB SNR (46.6 dB in software loopback).
+- Modes 1 and 2 also decode over the air on the same pair (17.2 dB and
+  15.6 dB SNR, sync quality 0.99). Modes 3-5 need the `data` port
+  profile; the `mic` port caps at 1200 baud.
 - Receive setup lessons: the MacBook's headphone jack has no usable
   audio input, so a USB sound card is needed; turn the CM108's Auto Gain
   Control off (it pumps and clips); keep capture gain low and the radio
   volume moderate, with squelch open so the start isn't clipped.
-- Next: modes 1 and 2 over the air, then real-time audio I/O and PTT in
-  `ota_station.py`.
+- Next: real-time audio I/O and PTT in `ota_station.py`.
 
 Next, roughly in order (pending: are radios + an audio/PTT interface
 available?):
 
 1. **Phase 5 on real radios** (sound-card I/O, PTT, over-the-air test).
-   Reception of a mode 0 burst is confirmed; next are the faster modes
-   over the air, then real-time audio I/O and PTT in `ota_station.py`.
+   Reception of modes 0-2 is confirmed over the air; next is real-time
+   audio I/O and PTT in `ota_station.py`.
 2. **Automatic re-negotiation mid-session.** Stations pick a mode once;
    they should adapt as the link changes (pairs with live control).
 3. **Soft-decision Viterbi** (~2 dB at the fringe).
