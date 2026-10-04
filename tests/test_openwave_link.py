@@ -544,6 +544,29 @@ class ModeSnrTableTests(unittest.TestCase):
         for threshold, mode, _ in link.FADING_MODE_SNR_TABLE[1:]:
             self.assertGreater(threshold, awgn[mode])
 
+    def test_probe_symbol_rate_judges_each_mode_at_its_own_rate(self):
+        # Measured over the audio path: a 1200 baud mode sees ~3 dB less SNR
+        # than a 600 baud probe of the same channel, so a 600 baud probe
+        # reading just over a mode's threshold doesn't mean the mode works.
+        ceiling = 1200   # the mic port
+        pick = lambda snr, **kw: link.select_mode_for_snr(snr, max_symbol_rate=ceiling, **kw)[0]
+        self.assertEqual(pick(6.0), 1)                           # uncorrected: mode 1 at its own 3 dB
+        self.assertEqual(pick(6.0, probe_symbol_rate=600), 0)    # corrected: not yet
+        self.assertEqual(pick(9.0), 2)                           # uncorrected: mode 2 at its own 6.5 dB
+        self.assertEqual(pick(9.0, probe_symbol_rate=600), 1)
+        self.assertEqual(pick(13.0, probe_symbol_rate=600), 2)
+        self.assertEqual(pick(17.8, probe_symbol_rate=600), 2)   # the logged real-radio link
+
+    def test_probe_symbol_rate_none_changes_nothing(self):
+        for snr in range(-20, 40):
+            self.assertEqual(link.select_mode_for_snr(snr, probe_symbol_rate=None),
+                             link.select_mode_for_snr(snr))
+
+    def test_probe_symbol_rate_equal_to_candidate_rate_is_no_correction(self):
+        # A probe at mode 2's own rate leaves mode 2's threshold exactly as is.
+        self.assertEqual(link.select_mode_for_snr(9.0, max_symbol_rate=1200, probe_symbol_rate=1200)[0], 2)
+        self.assertEqual(link.select_mode_for_snr(8.9, max_symbol_rate=1200, probe_symbol_rate=1200)[0], 1)
+
     def test_fading_table_respects_ceiling(self):
         mode_id, _ = link.select_mode_for_snr(30.0, max_symbol_rate=600,
                                               table=link.FADING_MODE_SNR_TABLE)

@@ -435,6 +435,7 @@ class Station:
         self._ping_last_rx_status = None
         self._negotiating = False  # reentrancy guard - see negotiate()
         self._last_rx_snr_db = None
+        self._last_rx_symbol_rate = None   # symbol rate of the burst that SNR came from
         self._last_rx_quality = None
 
         self._apply_mode(mode_id, fec_preset)
@@ -641,7 +642,11 @@ class Station:
             return link.select_mode_for_snr(self._last_rx_quality['snr_db'],
                                             max_symbol_rate=self.max_symbol_rate,
                                             table=link.FADING_MODE_SNR_TABLE)
-        return link.select_mode_for_snr(self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate)
+        # On the audio path a faster mode sees more of the channel's noise, so
+        # judge the probe's SNR at each candidate's own symbol rate.
+        probe_rate = self._last_rx_symbol_rate if self.phy == 'audio' else None
+        return link.select_mode_for_snr(self._last_rx_snr_db, max_symbol_rate=self.max_symbol_rate,
+                                        probe_symbol_rate=probe_rate)
 
     def _snr_note(self):
         """'~X dB', plus a fading note when the last burst showed fading."""
@@ -707,6 +712,7 @@ class Station:
 
         self._last_rx_snr_db = (snr_db if snr_db is not None
                                 else modem.estimate_snr_db(symbols, matched_modulation))
+        self._last_rx_symbol_rate = phy_params[0]
         # Whole-burst quality incl. fading detection (audio only) - see
         # _burst_quality() and _select_mode().
         self._last_rx_quality = None

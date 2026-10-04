@@ -36,6 +36,7 @@ is the one RX chain that parses and acts on them now (format_mode() for
 display, is_for_station() for Destination ID address filtering) -
 phy_sim_loopback.grc's loopback RX does not.
 """
+import math
 import struct
 import time
 import zlib
@@ -861,11 +862,20 @@ FADING_MODE_SNR_TABLE = (
 )
 
 
-def select_mode_for_snr(snr_db, max_symbol_rate=None, table=MODE_SNR_TABLE):
+def select_mode_for_snr(snr_db, max_symbol_rate=None, table=MODE_SNR_TABLE, probe_symbol_rate=None):
     """Estimated SNR (see MODE_SNR_TABLE's docstring for exactly what this
     should be) -> (mode_id, fec_preset): the highest-throughput mode this
     link can apparently support. Always returns something, even for an SNR
     below every threshold (falls back to the most robust row).
+
+    probe_symbol_rate, if given, is the symbol rate of the burst snr_db was
+    measured on. The table's thresholds are SNRs at the candidate mode's OWN
+    symbol rate, but on a real audio channel noise fills a fixed bandwidth,
+    so a faster mode sees proportionally more of it: each row is judged on
+    snr_db - 10*log10(row_rate / probe_symbol_rate). Measured over the audio
+    path: mode 1 reads ~3.1 dB below a mode 0 probe, mode 2 ~2.5 dB below.
+    None (the default) compares snr_db directly, which is right for the
+    simulator's IQ path, where SNR doesn't depend on symbol rate.
 
     max_symbol_rate, if given, excludes any row whose mode's symbol_rate
     exceeds it before picking - for a real deployment that physically
@@ -882,7 +892,10 @@ def select_mode_for_snr(snr_db, max_symbol_rate=None, table=MODE_SNR_TABLE):
             rows = (table[0],)  # even the floor row's symbol_rate must fit any sane ceiling
     best = rows[0]
     for row in rows:
-        if row[0] <= snr_db:
+        row_snr = snr_db
+        if probe_symbol_rate:
+            row_snr -= 10 * math.log10(WAVEFORM_MODES[row[1]]['symbol_rate'] / probe_symbol_rate)
+        if row[0] <= row_snr:
             best = row
     return best[1], best[2]
 

@@ -223,6 +223,28 @@ it was typed, and a second one 3 s after. The QPSK bursts heard after
 negotiating measured 14.8 and 14.7 dB (about 3 dB below the BPSK 600 probe,
 as expected from the doubled symbol rate), all with peaks of 0.45-0.57.
 
+### How much SNR each mode needs (software noise test)
+
+`./audio_margin_sweep.py` adds white noise to real audio bursts and finds where
+each mode stops decoding (30-character message, mic port; nothing is
+transmitted):
+
+| Mode | FEC | Stops delivering reliably near |
+|---|---|---|
+| 0 (BPSK 600) | `r1_4_k9` | -1 dB |
+| 1 (BPSK 1200) | `r1_2_k3` | 4.5 dB |
+| 2 (QPSK 1200) | `r1_2_k3` | 7 dB |
+
+These SNRs are the station's own data-aided readings. A faster mode sees more
+of the channel's noise at the same signal: at identical noise, mode 1 reads
+about 3.1 dB below mode 0 and mode 2 about 2.5 dB below. `--auto` measures SNR
+on a 600 baud probe, so on the audio path it now subtracts that penalty
+(`10*log10(rate/600)`) before comparing with the mode table. Before this, a
+weak link could be put on a mode right at, or past, its cliff. The logged
+real-radio link (probe 17.8 dB, so about 14.8 dB at mode 2) has about 8 dB of
+margin over mode 2's cliff. This is plain added noise; real FM noise has a
+threshold effect and fades, so keep some extra margin.
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |

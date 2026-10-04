@@ -39,6 +39,14 @@ Done most recently:
   `audio_wav_test.py` (burst WAVs offline).
 - **One-way over-the-air bursts** (AIOC HT to Digirig HT): modes 0, 1, 2
   decoded at 21.3, 17.2, 15.6 dB SNR (sync quality 0.99-1.00).
+- **Mode-table margin (2026-10-04):** a faster mode sees more of an
+  audio channel's noise, so negotiation now judges the 600 baud probe's SNR
+  at each candidate's own symbol rate on `--phy audio`
+  (`select_mode_for_snr(probe_symbol_rate=...)`; the fading table is left
+  as it was, since it was calibrated against mode-0 probes already).
+  Measured cliffs: mode 0 ~-1 dB, mode 1 ~4.5 dB, mode 2 ~7 dB
+  (`audio_margin_sweep.py`). Still open: re-measure under real FM noise
+  and fading, and the data port's modes 3-5 (penalties of 6-12 dB).
 - **Lessons learned:** a laptop headphone jack has no usable audio input; the
   CM108's Auto Gain Control must be off (it pumps and clips); the Digirig
   plays only stereo, so playback goes through ALSA `plughw:`; a replying
