@@ -175,8 +175,9 @@ summary.
   attached, name one: `--radio aioc` or `--radio digirig`.
 - `--ack` retries each fragment until it is acknowledged. `--auto`
   negotiates one mode/FEC for both directions on the first message you send
-  (a short exchange of control bursts first; it took about 15 seconds in
-  simulation, so allow for that the first time). Both are optional: for the simplest possible test use
+  (a short exchange of control bursts first; on the real radios the
+  negotiation took about 12 seconds and the first message was acknowledged
+  after about 16, with later messages taking about 3). Both are optional: for the simplest possible test use
   `--mode 0 --fec --ack` without `--auto`.
 - `--tx-level 0.5` is the default; `--ptt-line dtr|rts` overrides the
   interface's PTT line; `-v` prints per-message detail.
@@ -214,6 +215,13 @@ low power), data-aided SNR from the preamble:
 
 All decoded at sync quality 0.99-1.00. Both stations running `ota_station.py
 --radio --ack --auto` exchanged messages in both directions.
+
+A session log (the lenovo/AIOC station sending its first message, 2026-10-04):
+the negotiation probe and reply (BPSK 600) measured 17.8 and 20.0 dB and chose
+Mode 2 (QPSK 1200, `r1_2_k3`); the first message was acknowledged 16 s after
+it was typed, and a second one 3 s after. The QPSK bursts heard after
+negotiating measured 14.8 and 14.7 dB (about 3 dB below the BPSK 600 probe,
+as expected from the doubled symbol rate), all with peaks of 0.45-0.57.
 
 ## Troubleshooting
 
