@@ -152,6 +152,24 @@ class DemodulateTests(unittest.TestCase):
             _, info = _recover(noisy, 'qpsk', 1200, 1650)
             self.assertAlmostEqual(info['snr_db'], target_db, delta=1.5)
 
+    def test_snr_estimate_ignores_clock_offset(self):
+        # A long 600-baud marker under 100 ppm of sound-card drift: its
+        # carrier phase rotates ~28 degrees across the marker. Before the
+        # marker was de-rotated, that read as noise (~5 dB low through FM).
+        rng = np.random.default_rng(8)
+        data = _burst('bpsk', _rng_bytes(40))
+        clean = audio_phy.modulate(MODULATORS['bpsk'](data), 600, 1650)
+        sps = audio_phy.samples_per_symbol(600)
+        noise_power = np.mean(clean[clean != 0] ** 2) * sps / 2 / 10 ** (20 / 10)
+        ratio = 1 + 100e-6
+        drifted = np.interp(np.arange(int(len(clean) * ratio)) / ratio, np.arange(len(clean)), clean)
+        estimates = []
+        for audio in (clean, drifted):
+            noisy = audio + rng.normal(0, np.sqrt(noise_power), len(audio))
+            estimates.append(_recover(noisy, 'bpsk', 600, 1650)[1]['snr_db'])
+        self.assertAlmostEqual(estimates[0], 20, delta=1.5)
+        self.assertAlmostEqual(estimates[1], estimates[0], delta=1.0)
+
     def test_wrong_symbol_rate_correlates_poorly(self):
         audio = audio_phy.modulate(MODULATORS['bpsk'](_burst('bpsk', _rng_bytes(60))), 1200, 1650)
         _, right = _recover(audio, 'bpsk', 1200, 1650)

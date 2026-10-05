@@ -161,14 +161,32 @@ def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
     n_pre = min(pre_symbols, timing // sps)
     before = y[timing - n_pre * sps:timing:sps] / gain
 
+    # Residual carrier frequency across the marker (radians/symbol): the
+    # phase change between the marker's first and second halves, once the
+    # known data is removed. A sound-card clock offset leaves exactly this.
+    # The one-shot gain above only fixes the marker's AVERAGE phase, so
+    # without de-rotating, a long marker under drift reads its phase error
+    # as noise (measured: ~5 dB low at 100 ppm, 600 baud). Halves rather
+    # than neighbouring symbols: the estimate is ~N/2 times less noisy.
     marker = y[timing:timing + len(ref) * sps:sps] / gain
-    noise = np.mean(np.abs(marker - ref) ** 2)
+    residual = marker * np.conj(ref)
+    half = len(ref) // 2
+    freq = (float(np.angle(np.sum(residual[half:2 * half]) * np.conj(np.sum(residual[:half])))) / half
+            if half else 0.0)
+    center = (len(ref) - 1) / 2
+    derotated = marker * np.exp(-1j * freq * (np.arange(len(ref)) - center))
+    noise = np.mean(np.abs(derotated - ref) ** 2)
     signal = np.mean(np.abs(ref) ** 2)
     snr_db = float(10 * np.log10(signal / max(noise, 1e-12)))
 
     if constellation is None:
         after = y[timing::sps] / gain
     else:
+        # The tracker starts from zero, not from freq: over a marker this
+        # short, freq is good enough to de-rotate an SNR measurement but far
+        # too noisy to seed the loop (it also steers symbol timing, and a
+        # bad seed walks the timing off - measured: mode 2 delivery under
+        # fading fell from 333/360 to 217/360 when seeded).
         after = _track(y / gain, timing, sps, ref, np.asarray(list(constellation), dtype=complex),
                        -symbol_rate / (2 * np.pi * carrier_hz))
     symbols = np.concatenate([before, after])
@@ -192,8 +210,9 @@ def _track(y, timing, sps, ref, points, eps_per_rad):
     marker onward (data-aided on the marker itself, where the transmitted
     symbols are known). The loop keeps running past the frame's end into
     whatever follows (squelch-tail noise), so its final state says nothing
-    reliable - only the symbols are returned. eps_per_rad converts the loop's frequency term (radians/symbol) to
-    the clock-offset fraction eps that also drives the sampling position."""
+    reliable - only the symbols are returned. eps_per_rad converts the
+    loop's frequency term (radians/symbol) to the clock-offset fraction eps
+    that also drives the sampling position."""
     theta_n = LOOP_BANDWIDTH / (LOOP_DAMPING + 1 / (4 * LOOP_DAMPING))
     denom = 1 + 2 * LOOP_DAMPING * theta_n + theta_n ** 2
     k_p = 4 * LOOP_DAMPING * theta_n / denom
