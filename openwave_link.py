@@ -85,8 +85,16 @@ def _pn_bytes(num_bytes):
 # noise, since many offsets look almost equally "correct" to a correlator.
 PREAMBLE = _pn_bytes(32)
 SYNC_WORD = b'\x1A\xCF\xFC\x1D'
+# The audio PHY sends only the first 16 bytes of the same PN preamble:
+# its receiver correlates against samples rather than matching bits, and
+# 16 bytes delivered the same as 32 through the FM model (fading 5-80 km/h,
+# 8-15 dB CNR) while 8 and below started missing frames in slow fading.
+# See PROTOCOL_V2_PROPOSAL.md. The IQ PHY keeps all 32.
+AUDIO_PREAMBLE_LEN = 16
+AUDIO_MARKER = PREAMBLE[:AUDIO_PREAMBLE_LEN] + SYNC_WORD
+IQ_MARKER = PREAMBLE + SYNC_WORD
 
-HEADER_LEN = 32
+HEADER_LEN = 20
 CRC_LEN = 4
 MAX_PAYLOAD_LEN = 1024
 MAX_FRAGMENTS = 64  # defensive cap on a single reassembly - see FragmentReassembler
@@ -110,7 +118,7 @@ def format_packet_type(packet_type):
     return name if name is not None else f'Unknown(0x{packet_type:02X})'
 
 
-VERSION = 1
+VERSION = 2
 
 SEQ_MODULUS = 0x10000  # Sequence Number is a 16-bit field
 
@@ -119,7 +127,9 @@ FLAG_ACK_RESPONSE = 0x02
 FLAG_FRAGMENTED = 0x04
 FLAG_MORE_FRAGMENTS = 0x08
 FLAG_PRIORITY = 0x10
-# bits 5-7 reserved
+# The payload starts with a header-extension block - see split_extension().
+FLAG_HEADER_EXTENSION = 0x20
+# bits 6-7 reserved
 
 _FLAG_NAMES = (
     (FLAG_ACK_REQUESTED, 'ack_requested'),
@@ -127,12 +137,13 @@ _FLAG_NAMES = (
     (FLAG_FRAGMENTED, 'fragmented'),
     (FLAG_MORE_FRAGMENTS, 'more_fragments'),
     (FLAG_PRIORITY, 'priority'),
+    (FLAG_HEADER_EXTENSION, 'header_extension'),
 )
 
 
 def parse_flags(flags_byte):
     """Flags byte -> {'ack_requested': bool, 'ack_response': bool, 'fragmented': bool,
-    'more_fragments': bool, 'priority': bool}."""
+    'more_fragments': bool, 'priority': bool, 'header_extension': bool}."""
     return {name: bool(flags_byte & bit) for bit, name in _FLAG_NAMES}
 
 
@@ -141,50 +152,134 @@ def format_flags(flags_byte):
     names = [name for bit, name in _FLAG_NAMES if flags_byte & bit]
     return ','.join(names) if names else '-'
 
-# version(B) type(B) mode(B) flags(B) seq(H) src(8s) dst(8s) payload_len(H)
-# fragment_index(B) reserved(7s). All multi-byte fields big-endian, matching
-# OpenWave_Specification.txt's byte-dump examples.
+# Frame format v2 (see PROTOCOL_V2_PROPOSAL.md): version(4 bits)|type(4 bits)
+# in one byte, mode(B) flags(B) seq(H) src(6s) dst(6s) payload_len(H)
+# fragment_index(B) - 20 bytes, down from v1's 32 (v1 had 8-byte ASCII IDs,
+# separate version/type bytes and 7 reserved bytes). All multi-byte fields
+# big-endian. Callsigns are packed base-40 (see pack_callsign()).
 #
-# fragment_index repurposes 1 of the original 8 Reserved bytes (7 remain
-# truly reserved): the position of this frame within its fragmented-message
-# run (0 = this frame genuinely starts a new run). Added specifically so
-# FragmentReassembler has an authoritative signal for "is this really a new
+# fragment_index: the position of this frame within its fragmented-message
+# run (0 = this frame genuinely starts a new run). It gives
+# FragmentReassembler an authoritative signal for "is this really a new
 # run" instead of inferring it from "nothing else is in progress" - that
 # inference was silently wrong whenever a run got abandoned mid-stream (e.g.
 # MAX_FRAGMENTS overflow): the very next leftover continuation fragment used
 # to get misread as a fresh start, so a receiver could silently get delivered
 # a truncated tail of an oversized message with a normal 'ok' status and no
 # indication anything was wrong. See FragmentReassembler's docstring.
-_HEADER_STRUCT = struct.Struct('>BBBBH8s8sHB7s')
+_HEADER_STRUCT = struct.Struct('>BBBH6s6sHB')
 assert _HEADER_STRUCT.size == HEADER_LEN
+
+
+# Callsign alphabet for the packed 6-byte Source/Destination fields: index 0
+# is end/padding, so a 9-character callsign is 9 base-40 digits, and
+# 40**9 < 2**48 always fits in 6 bytes.
+CALLSIGN_ALPHABET = '\0ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-.'
+CALLSIGN_MAX_LEN = 9
+_CALLSIGN_FIELD_LEN = 6
+
+
+def pack_callsign(callsign):
+    """Callsign (str or ASCII bytes, up to 9 characters from
+    CALLSIGN_ALPHABET; lowercase is folded to uppercase) -> 6 packed bytes:
+    the characters as base-40 digits, most significant first, padded with
+    0 to 9 digits, as a 48-bit big-endian integer. '' packs to all zeros.
+    Raises ValueError for anything that can't be represented."""
+    if isinstance(callsign, bytes):
+        callsign = callsign.rstrip(b'\x00').decode('ascii', errors='replace')
+    callsign = callsign.upper()
+    if len(callsign) > CALLSIGN_MAX_LEN:
+        raise ValueError(f'callsign {callsign!r} is longer than {CALLSIGN_MAX_LEN} characters')
+    for ch in callsign:
+        if ch == '\0' or ch not in CALLSIGN_ALPHABET:
+            raise ValueError(f'callsign {callsign!r}: {ch!r} is not allowed '
+                             f'(A-Z, 0-9, /, -, . only)')
+    value = 0
+    for ch in callsign.ljust(CALLSIGN_MAX_LEN, '\0'):
+        value = value * 40 + CALLSIGN_ALPHABET.index(ch)
+    return value.to_bytes(_CALLSIGN_FIELD_LEN, 'big')
+
+
+def unpack_callsign(field):
+    """Inverse of pack_callsign(): 6 bytes -> the callsign as ASCII bytes
+    (b'' for an all-zero field), stopping at the first end/padding digit."""
+    value = int.from_bytes(field, 'big')
+    digits = []
+    for _ in range(CALLSIGN_MAX_LEN):
+        digits.append(value % 40)
+        value //= 40
+    chars = []
+    for digit in reversed(digits):
+        if digit == 0:
+            break
+        chars.append(CALLSIGN_ALPHABET[digit])
+    return ''.join(chars).encode('ascii')
 
 
 def build_header(payload_len, version=VERSION, packet_type=PACKET_TYPE_DATA,
                   mode_id=0, flags=0, seq=0, src_id=b'', dst_id=b'', fragment_index=0):
-    """Build the 32-byte header. src_id/dst_id are truncated/zero-padded to 8 bytes.
+    """Build the 20-byte v2 header. src_id/dst_id are callsigns (str or
+    ASCII bytes) packed with pack_callsign() - ValueError if one can't be.
     seq wraps automatically at SEQ_MODULUS (16 bits) - callers don't need to.
     fragment_index only matters when the Fragmented flag is set - see this
     module's header-struct comment and FragmentReassembler."""
     if not (0 <= payload_len <= MAX_PAYLOAD_LEN):
         raise ValueError(f'payload_len {payload_len} out of range 0..{MAX_PAYLOAD_LEN}')
+    if not (0 <= version <= 0xF and 0 <= packet_type <= 0xF):
+        raise ValueError(f'version {version} and packet_type {packet_type} must each fit in 4 bits')
     return _HEADER_STRUCT.pack(
-        version, packet_type, mode_id, flags, seq % SEQ_MODULUS,
-        src_id[:8].ljust(8, b'\x00'), dst_id[:8].ljust(8, b'\x00'),
-        payload_len, fragment_index % 0x100, b'\x00' * 7,
+        (version << 4) | packet_type, mode_id, flags, seq % SEQ_MODULUS,
+        pack_callsign(src_id), pack_callsign(dst_id), payload_len, fragment_index % 0x100,
     )
 
 
 def parse_header(header_bytes):
-    """Parse a 32-byte header into a dict of fields."""
+    """Parse a 20-byte v2 header into a dict of fields. src_id/dst_id come
+    back unpacked, as the callsign's ASCII bytes (e.g. b'K0MDT')."""
     if len(header_bytes) != HEADER_LEN:
         raise ValueError(f'header must be exactly {HEADER_LEN} bytes, got {len(header_bytes)}')
-    version, packet_type, mode_id, flags, seq, src_id, dst_id, payload_len, fragment_index, _reserved = \
+    version_type, mode_id, flags, seq, src_id, dst_id, payload_len, fragment_index = \
         _HEADER_STRUCT.unpack(header_bytes)
     return {
-        'version': version, 'packet_type': packet_type, 'mode_id': mode_id,
-        'flags': flags, 'seq': seq, 'src_id': src_id, 'dst_id': dst_id,
-        'payload_len': payload_len, 'fragment_index': fragment_index,
+        'version': version_type >> 4, 'packet_type': version_type & 0xF, 'mode_id': mode_id,
+        'flags': flags, 'seq': seq, 'src_id': unpack_callsign(src_id),
+        'dst_id': unpack_callsign(dst_id), 'payload_len': payload_len,
+        'fragment_index': fragment_index,
     }
+
+
+def split_extension(payload):
+    """For a frame with FLAG_HEADER_EXTENSION set: payload -> (entries,
+    application payload). The payload starts with [block length N][N bytes
+    of entries], each entry [type][length L][L bytes]; entries is a list of
+    (type, value bytes), in order - a receiver ignores types it doesn't
+    know. No entry types are defined yet. Raises ValueError if the block
+    is malformed."""
+    if not payload:
+        raise ValueError('header-extension flag set but the payload is empty')
+    block_len = payload[0]
+    block = payload[1:1 + block_len]
+    if len(block) < block_len:
+        raise ValueError(f'header extension declares {block_len} bytes, only {len(block)} present')
+    entries, pos = [], 0
+    while pos < len(block):
+        if pos + 2 > len(block):
+            raise ValueError('header extension entry truncated')
+        entry_type, entry_len = block[pos], block[pos + 1]
+        value = block[pos + 2:pos + 2 + entry_len]
+        if len(value) < entry_len:
+            raise ValueError('header extension entry runs past the block')
+        entries.append((entry_type, value))
+        pos += 2 + entry_len
+    return entries, payload[1 + block_len:]
+
+
+def application_payload(header, payload):
+    """The payload a frame actually carries for its application - payload
+    minus any header-extension block (see split_extension())."""
+    if header['flags'] & FLAG_HEADER_EXTENSION:
+        return split_extension(payload)[1]
+    return payload
 
 
 def build_frame(payload, lead_pad=24, end_pad=24, **header_kwargs):
@@ -216,9 +311,8 @@ def build_frame_with_bad_length(payload, declared_length, lead_pad=24, end_pad=2
     header+payload, which is a lie once declared_length disagrees with
     len(payload)) is never actually checked by a well-behaved receiver."""
     header = _HEADER_STRUCT.pack(
-        version, packet_type, mode_id, flags, seq % SEQ_MODULUS,
-        src_id[:8].ljust(8, b'\x00'), dst_id[:8].ljust(8, b'\x00'),
-        declared_length % 0x10000, 0, b'\x00' * 7,
+        (version << 4) | packet_type, mode_id, flags, seq % SEQ_MODULUS,
+        pack_callsign(src_id), pack_callsign(dst_id), declared_length % 0x10000, 0,
     )
     crc = zlib.crc32(header + payload) & 0xFFFFFFFF
     packet = header + payload + struct.pack('>I', crc)
@@ -321,8 +415,34 @@ CONTROL_OP_MODE_SET_ACK = 4
 CONTROL_OP_PING = 5
 CONTROL_OP_PONG = 6
 
-_CONTROL_GRANT_STRUCT = struct.Struct('>BfB')  # op, snr_db (float32), mode_id
-_CONTROL_SET_STRUCT = struct.Struct('>BB')  # op, mode_id
+_CONTROL_GRANT_STRUCT = struct.Struct('>BfBB')  # op, snr_db (float32), mode_id, fec preset ID
+_CONTROL_SET_STRUCT = struct.Struct('>BBB')  # op, mode_id, fec preset ID
+
+# 1-byte wire IDs for openwave_fec.py's PRESETS, used in MODE_GRANT/MODE_SET
+# payloads (v1 sent the preset's name as ASCII, ~7 bytes). This numbering
+# is part of the wire format: never renumber, only append new presets.
+FEC_PRESET_IDS = {
+    'r1_2_k3': 1, 'r1_2_k7': 2, 'r1_2_k9': 3,
+    'r1_3_k3': 4, 'r1_3_k7': 5, 'r1_3_k9': 6,
+    'r1_4_k3': 7, 'r1_4_k7': 8, 'r1_4_k9': 9,
+    'r1_5_k7': 10, 'r1_5_k9': 11,
+    'r1_6_k7': 12, 'r1_6_k9': 13,
+}
+_FEC_PRESETS_BY_ID = {preset_id: name for name, preset_id in FEC_PRESET_IDS.items()}
+
+
+def _fec_preset_id(fec_preset):
+    try:
+        return FEC_PRESET_IDS[fec_preset]
+    except KeyError:
+        raise ValueError(f'FEC preset {fec_preset!r} has no wire ID (see FEC_PRESET_IDS)') from None
+
+
+def _fec_preset_name(preset_id):
+    try:
+        return _FEC_PRESETS_BY_ID[preset_id]
+    except KeyError:
+        raise ValueError(f'unknown FEC preset ID {preset_id}') from None
 
 
 def build_mode_request_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
@@ -343,8 +463,7 @@ def build_mode_grant_frame(seq, granted_mode_id, fec_preset, snr_db, lead_pad=24
     selected for the requester to use (see select_mode_for_snr()), plus the
     snr_db estimate that selection was based on (purely informational - the
     requester adopts granted_mode_id/fec_preset, not snr_db). fec_preset is
-    written as trailing ASCII bytes (its length comes from the header's own
-    Payload Length field, so no separate length byte is needed).
+    a PRESETS name, sent as its 1-byte FEC_PRESET_IDS wire ID.
 
     granted_mode_id is deliberately a distinct name from the header's own
     mode_id field (in header_kwargs, if the caller passes one) - they're
@@ -353,8 +472,8 @@ def build_mode_grant_frame(seq, granted_mode_id, fec_preset, snr_db, lead_pad=24
     payload content naming a DIFFERENT mode for the requester's future
     sends."""
     header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
-    payload = _CONTROL_GRANT_STRUCT.pack(CONTROL_OP_MODE_GRANT, snr_db, granted_mode_id) \
-        + fec_preset.encode('ascii')
+    payload = _CONTROL_GRANT_STRUCT.pack(CONTROL_OP_MODE_GRANT, snr_db, granted_mode_id,
+                                         _fec_preset_id(fec_preset))
     return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
 
 
@@ -362,8 +481,8 @@ def build_mode_set_frame(seq, chosen_mode_id, fec_preset, lead_pad=24, end_pad=2
     """The initiator's authoritative announcement, after measuring its OWN
     reception of the peer's mode_grant_frame reply: "use this mode/FEC for
     BOTH directions" - unlike build_mode_grant_frame's snr_db, this
-    carries no measurement, just the decision itself. fec_preset is
-    trailing ASCII bytes, same convention as build_mode_grant_frame.
+    carries no measurement, just the decision itself. fec_preset is sent
+    as its 1-byte wire ID, same as build_mode_grant_frame.
 
     chosen_mode_id is deliberately a distinct name from the header's own
     mode_id field (in header_kwargs, if the caller passes one) - same
@@ -372,7 +491,7 @@ def build_mode_set_frame(seq, chosen_mode_id, fec_preset, lead_pad=24, end_pad=2
     mode), unrelated to chosen_mode_id, which is payload content naming
     the mode both stations are about to switch to."""
     header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
-    payload = _CONTROL_SET_STRUCT.pack(CONTROL_OP_MODE_SET, chosen_mode_id) + fec_preset.encode('ascii')
+    payload = _CONTROL_SET_STRUCT.pack(CONTROL_OP_MODE_SET, chosen_mode_id, _fec_preset_id(fec_preset))
     return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
 
 
@@ -421,19 +540,16 @@ def parse_control_payload(payload):
     if op in (CONTROL_OP_MODE_REQUEST, CONTROL_OP_MODE_SET_ACK, CONTROL_OP_PING, CONTROL_OP_PONG):
         return {'op': op}
     if op == CONTROL_OP_MODE_GRANT:
-        prefix_len = _CONTROL_GRANT_STRUCT.size
-        if len(payload) < prefix_len:
+        if len(payload) < _CONTROL_GRANT_STRUCT.size:
             raise ValueError(f'mode grant payload too short ({len(payload)} bytes)')
-        _, snr_db, mode_id = _CONTROL_GRANT_STRUCT.unpack(payload[:prefix_len])
-        fec_preset = payload[prefix_len:].decode('ascii', errors='replace')
-        return {'op': op, 'mode_id': mode_id, 'fec_preset': fec_preset, 'snr_db': snr_db}
+        _, snr_db, mode_id, preset_id = _CONTROL_GRANT_STRUCT.unpack(payload[:_CONTROL_GRANT_STRUCT.size])
+        return {'op': op, 'mode_id': mode_id, 'fec_preset': _fec_preset_name(preset_id),
+                'snr_db': snr_db}
     if op == CONTROL_OP_MODE_SET:
-        prefix_len = _CONTROL_SET_STRUCT.size
-        if len(payload) < prefix_len:
+        if len(payload) < _CONTROL_SET_STRUCT.size:
             raise ValueError(f'mode set payload too short ({len(payload)} bytes)')
-        _, mode_id = _CONTROL_SET_STRUCT.unpack(payload[:prefix_len])
-        fec_preset = payload[prefix_len:].decode('ascii', errors='replace')
-        return {'op': op, 'mode_id': mode_id, 'fec_preset': fec_preset}
+        _, mode_id, preset_id = _CONTROL_SET_STRUCT.unpack(payload[:_CONTROL_SET_STRUCT.size])
+        return {'op': op, 'mode_id': mode_id, 'fec_preset': _fec_preset_name(preset_id)}
     raise ValueError(f'unrecognized Control op {op}')
 
 
@@ -575,7 +691,7 @@ class LinkReceiver:
         self.reassembler = FragmentReassembler()
         self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'truncated': 0, 'dup': 0,
                         'lost': 0, 'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0,
-                        'frag_discarded': 0, 'not_for_us': 0}
+                        'frag_discarded': 0, 'not_for_us': 0, 'bad_extension': 0}
         self.last_seq = None
         self.last_flags = 0
         self.last_mode = 0
@@ -649,6 +765,15 @@ class LinkReceiver:
         if is_ack(header):
             self.counts['acks_rx'] += 1
             self._on_ack_received(header['seq'])
+            return
+
+        # A malformed header-extension block can't be trusted to say where the
+        # application payload starts - drop the frame (unacked, so a sender
+        # retries) rather than deliver misaligned bytes.
+        try:
+            payload = application_payload(header, payload)
+        except ValueError:
+            self.counts['bad_extension'] += 1
             return
 
         if needs_ack(header):
@@ -912,8 +1037,8 @@ def format_mode(mode_id):
 
 
 def decode_station_id(id_bytes):
-    """Decode an 8-byte Source/Destination ID field per spec: zero-padded
-    ASCII/UTF-8 with trailing 0x00 stripped. Never raises on malformed input
+    """Decode a Source/Destination ID as parse_header() returns it (the
+    unpacked callsign's ASCII bytes) to a str, trailing 0x00 stripped. Never raises on malformed input
     (replaces undecodable bytes) - a CRC-verified frame's src/dst field is
     still only as trustworthy as whatever the sender actually put there, and
     every TX chain so far sends an all-zero placeholder (decodes to '')."""

@@ -465,8 +465,10 @@ of it:
   Viterbi decoder weighs all of them, plus the code's structure across
   neighbouring bits. r1_4_k9 gives each bit 4 times the energy (6 dB)
   before the coding gain itself.
-- **Finding the frame** correlates against the 288 known preamble and
-  sync-word symbols at once, about 24.6 dB of gain. So the receiver
+- **Finding the frame** correlates against the known preamble and sync
+  word all at once: 288 symbols on the IQ path (about 24.6 dB of gain), and
+  160 at the audio path's 600 baud (its 16-byte preamble, about 22 dB). So
+  the receiver
   locks on even when individual bits are coming out wrong.
 
 The same idea, seen from the bandwidth side: what counts is energy per
@@ -818,8 +820,9 @@ instead of IQ:
   radio's passband (`openwave_audio.py`), preceded by a lead-in of silence
   (`--lead-in-ms`, default 250) that covers transmitter key-up and the far
   radio's squelch opening. Frames go out without `build_frame()`'s 24+24
-  bytes of zero padding, which only the IQ path needs. That saves about
-  0.64 s per burst at 600 baud: a mode 0 ACK takes 2.8 s instead of 3.4 s.
+  bytes of zero padding, which only the IQ path needs, and with a 16-byte
+  preamble instead of 32 (`openwave_audio.frame_for_audio()`). With frame
+  format v2's 20-byte header, a mode 0 ACK takes 1.9 s (it was 3.4 s).
 - **The channel:** pair it with `ota_sim`'s `--channel fm`, which models
   the two radios' whole audio-to-audio path: filters, emphasis, deviation
   limiter, FM threshold and clicks, fading, squelch, sound-card clock

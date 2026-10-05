@@ -56,6 +56,13 @@ Done most recently:
   `--auto`, frames decoded at the correlation's marker position, live
   simulator `/commands`, station `/ack`, `/auto`, `/lead-in`.
 
+**Frame format v2 (2026-10-05).** Shorter bursts: a 20-byte header (was 32),
+a 16-byte audio preamble (was 32) and 1-byte FEC preset IDs in negotiation
+(`PROTOCOL_V2_PROPOSAL.md`, now in the spec). A mode 0 message + ACK is
+4.95 s of airtime (was 6.65 s). **v1 and v2 can't decode each other: update
+both laptops before the next over-the-air test.** The weak-link figures
+below were measured with v1 bursts.
+
 **Pick up here - weak-link testing (planned 2026-10-04, not started).**
 Everything on the air so far was a strong link (about 15-21 dB SNR, 8 dB
 or more above mode 2's cliff). To see how the modes and `--auto` behave

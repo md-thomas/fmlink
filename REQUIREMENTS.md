@@ -111,14 +111,23 @@ long-running interactive process, not a one-shot pipeline stage.
 
 (Full detail lives in `OpenWave_Specification.txt` — summary here.)
 
-- **Preamble**: 32-byte LFSR pseudo-noise sequence (9-bit register, taps
-  1/2/5/9) — sharp autocorrelation (~9% worst sidelobe) for reliable
-  frame-start detection under noise.
+- **Frame format version 2** (since 2026-10; v1 and v2 stations can't
+  decode each other - see `PROTOCOL_V2_PROPOSAL.md` for the change and its
+  measurements).
+- **Preamble**: LFSR pseudo-noise sequence (9-bit register, taps 1/2/5/9),
+  32 bytes on the IQ PHY and the first 16 on the audio PHY
+  (`link.IQ_MARKER` / `link.AUDIO_MARKER`) — sharp autocorrelation (~9%
+  worst sidelobe) for reliable frame-start detection under noise.
 - **Sync word**: `0x1ACFFC1D` (`SYNC_WORD`).
-- **Header**: 32 bytes, `struct '>BBBBH8s8sH8s'` — Version, Packet Type,
-  Waveform Mode ID, Flags, Sequence Number, Source ID (8 bytes),
-  Destination ID (8 bytes), Payload Length, Reserved (8 bytes, 1 of
-  which is now repurposed as a Fragment Index).
+- **Header**: 20 bytes, `struct '>BBBH6s6sHB'`:
+  - Version and Packet Type, 4 bits each in one byte.
+  - Waveform Mode ID, Flags, Sequence Number.
+  - Source ID and Destination ID: 6-byte packed callsigns, up to 9
+    characters of A-Z, 0-9, `/`, `-`, `.`.
+  - Payload Length, Fragment Index.
+
+  There are no reserved bytes. Flags bit 5 marks an optional
+  header-extension block at the start of the payload.
 - **Integrity**: CRC32 over Header+Payload; RX knows exact frame length
   from the header's Payload Length field, not a marker scan.
 - **ACK/retry**: `RetryManager` — pure state machine, no RF knowledge,

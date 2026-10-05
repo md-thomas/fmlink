@@ -109,20 +109,6 @@ RETRY_POLL_INTERVAL_S = 0.2
 BITS_PER_SYMBOL = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
 
 
-def _strip_frame_padding(frame_bytes):
-    """A build_frame()-style frame without its lead/end zero padding: just
-    marker + header + payload + CRC. The padding exists for the IQ path's
-    fixed-timing matched filter; the audio path doesn't need it (its
-    lead-in silence covers key-up, the RRC filter's own tails cover the
-    ends, and the receiver locates the marker by correlation), and at 600
-    baud the default 24+24 bytes cost ~0.64 s of airtime per burst."""
-    marker = link.PREAMBLE + link.SYNC_WORD
-    start = frame_bytes.find(marker)
-    if start < 0:
-        return frame_bytes
-    header_at = start + len(marker)
-    header = link.parse_header(frame_bytes[header_at:header_at + link.HEADER_LEN])
-    return frame_bytes[start:header_at + link.HEADER_LEN + header['payload_len'] + link.CRC_LEN]
 DEFAULT_FEC_PRESET = 'r1_4_k7'
 # --auto's mode-negotiation handshake always runs at this fixed mode/FEC,
 # regardless of whatever data mode is currently active - see Station's
@@ -604,7 +590,7 @@ class Station:
                 bps = BITS_PER_SYMBOL[modulation]
                 symbols, info = audio_phy.demodulate(
                     audio, symbol_rate, self._carrier_hz,
-                    MODULATORS[modulation](link.PREAMBLE + link.SYNC_WORD),
+                    MODULATORS[modulation](link.AUDIO_MARKER),
                     constellation=modem._CONSTELLATIONS[modulation])
                 symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
                 cache[(modulation, symbol_rate)] = (symbols, info['snr_db'], info['marker_index'])
@@ -622,9 +608,10 @@ class Station:
         if decoded is None:
             return None
         header, payload = decoded
-        frame = link.build_frame(payload, lead_pad=0, end_pad=0,
-                                 **{key: value for key, value in header.items() if key != 'payload_len'})
-        coded = fec.encode_frame(frame, fec_generators, fec_k) if use_fec else frame
+        frame = audio_phy.frame_for_audio(link.build_frame(
+            payload, **{key: value for key, value in header.items() if key not in ('payload_len',)}))
+        coded = (fec.encode_frame(frame, fec_generators, fec_k, marker=link.AUDIO_MARKER)
+                 if use_fec else frame)
         reference = np.asarray(MODULATORS[modulation](coded), dtype=complex)
         received = np.asarray(symbols[marker_index:marker_index + len(reference)])
         if len(received) < len(reference):
@@ -689,9 +676,10 @@ class Station:
                 # across the marker can fail an otherwise decodable frame.
                 first_marker_bit = (None if marker_index is None
                                     else marker_index * BITS_PER_SYMBOL[modulation])
+                marker = link.AUDIO_MARKER if self.phy == 'audio' else None
                 candidate = (list(fec.decode_frames(recovered, fec_generators, fec_k,
-                                                    first_marker_bit=first_marker_bit))
-                             if use_fec else list(sync.iter_frames_correlated(recovered)))
+                                                    first_marker_bit=first_marker_bit, marker=marker))
+                             if use_fec else list(sync.iter_frames_correlated(recovered, marker=marker)))
             except Exception:
                 candidate = []
             attempt = (candidate, modulation, symbols, snr_db, marker_index,
@@ -731,7 +719,12 @@ class Station:
         for status, header, payload_bytes in frames:
             if status == 'ok':
                 if header['packet_type'] == link.PACKET_TYPE_CONTROL:
-                    self._handle_control_frame(header, payload_bytes)
+                    try:
+                        control_payload = link.application_payload(header, payload_bytes)
+                    except ValueError:
+                        self.receiver.counts['bad_extension'] += 1
+                        continue
+                    self._handle_control_frame(header, control_payload)
                     continue
                 # LinkReceiver itself tracks a repeated seq as a 'dup' stat
                 # but still delivers it (the right call for its other use -
@@ -1162,9 +1155,11 @@ class Station:
         fec_generators = self._fec_generators if fec_generators is None else fec_generators
         fec_k = self._fec_k if fec_k is None else fec_k
 
+        marker = None
         if self.phy == 'audio':
-            frame_bytes = _strip_frame_padding(frame_bytes)
-        encoded = fec.encode_frame(frame_bytes, fec_generators, fec_k) if use_fec else frame_bytes
+            frame_bytes, marker = audio_phy.frame_for_audio(frame_bytes), link.AUDIO_MARKER
+        encoded = (fec.encode_frame(frame_bytes, fec_generators, fec_k, marker=marker)
+                   if use_fec else frame_bytes)
         symbols = modulate_fn(encoded)
         if self.phy == 'audio':
             samples = audio_phy.modulate(symbols, symbol_rate, self._carrier_hz,
@@ -1704,6 +1699,11 @@ def main():
                               '(bytes/messages sent+received, elapsed time) always prints on exit '
                               'regardless of this flag.')
     args = parser.parse_args()
+    for name, callsign in (('--station-id', args.station_id), ('--dst', args.dst)):
+        try:
+            link.pack_callsign(callsign)
+        except ValueError as exc:
+            parser.error(f"{name}: {exc}")
     if args.radio is None and not args.sim_host:
         parser.error("give --sim-host (simulator) or --radio (a real radio)")
     if args.radio is not None and args.phy != 'audio':

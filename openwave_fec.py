@@ -385,7 +385,7 @@ def _coded_byte_length(num_input_bits, generators, k):
     return (coded_bit_length(num_input_bits, generators, k) + 7) // 8
 
 
-def encode_frame(data, generators, k, interleaver=DEFAULT_INTERLEAVER):
+def encode_frame(data, generators, k, interleaver=DEFAULT_INTERLEAVER, marker=None):
     """FEC-encode one or more frames produced by openwave_link.build_frame()
     or build_fragmented_frames() - each frame found is processed
     independently and in order (matching how build_fragmented_frames()
@@ -408,7 +408,7 @@ def encode_frame(data, generators, k, interleaver=DEFAULT_INTERLEAVER):
     clean/uncorrupted (nothing to be tolerant of yet), so each frame is
     found via an exact preamble+sync-word match, same as
     openwave_link.build_frame()'s own output always allows."""
-    marker = link.PREAMBLE + link.SYNC_WORD
+    marker = link.IQ_MARKER if marker is None else marker  # e.g. link.AUDIO_MARKER
     result = bytearray()
     pos = 0
     found_any = False
@@ -447,7 +447,7 @@ def encode_frame(data, generators, k, interleaver=DEFAULT_INTERLEAVER):
 
 
 def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR_FRACTION,
-                  interleaver=DEFAULT_INTERLEAVER, first_marker_bit=None):
+                  interleaver=DEFAULT_INTERLEAVER, first_marker_bit=None, marker=None):
     """Find and decode every frame in possibly-corrupted data (via
     openwave_sync's tolerant correlator - the prefix/preamble/sync-word
     were never FEC-coded, so this is the same sync step as the uncoded
@@ -517,26 +517,31 @@ def decode_frames(data, generators, k, max_error_fraction=sync.DEFAULT_MAX_ERROR
     position with no bit-level threshold; any later frames are searched
     for as usual.
 
+    marker: the marker bytes frames start with (default: the IQ PHY's
+    link.IQ_MARKER; the audio PHY's frames use link.AUDIO_MARKER).
+
     Yields nothing at all if no sync candidate ever clears the
     correlator's threshold (the multi-frame analogue of the old
     'no_sync' status - check for an empty result rather than a status)."""
     bits = modem.bytes_to_bits(data)
+    marker_len = sync.MARKER_LEN if marker is None else len(marker) * 8
     pos = 0
     while True:
         if first_marker_bit is not None:
             match, pos, first_marker_bit = (first_marker_bit, None), 0, None
         else:
             match = sync.best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction,
-                                           search_window=sync.FRAGMENT_GAP_SEARCH_BITS)
+                                           search_window=sync.FRAGMENT_GAP_SEARCH_BITS, marker=marker)
         if match is None:
-            match = sync.best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction)
+            match = sync.best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction,
+                                           marker=marker)
             if match is None:
                 return
             yield 'gap', None, None
 
         rel_offset, _errors = match
         marker_start = pos + rel_offset
-        header_block_start = marker_start + sync.MARKER_LEN
+        header_block_start = marker_start + marker_len
 
         header_input_bits = link.HEADER_LEN * 8
         header_block_bytes = _coded_byte_length(header_input_bits, generators, k)

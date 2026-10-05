@@ -41,17 +41,6 @@ TAIL_S = 0.3          # ... and after its end
 MIN_QUALITY = 0.15    # below this, "no burst" (see openwave_audio.demodulate)
 
 
-def strip_frame_padding(frame_bytes):
-    """A build_frame() frame without its lead/end zero padding."""
-    marker = link.PREAMBLE + link.SYNC_WORD
-    start = frame_bytes.find(marker)
-    if start < 0:
-        return frame_bytes
-    at = start + len(marker)
-    header = link.parse_header(frame_bytes[at:at + link.HEADER_LEN])
-    return frame_bytes[start:at + link.HEADER_LEN + header['payload_len'] + link.CRC_LEN]
-
-
 def decode_burst(x, modulation, symbol_rate, use_fec, generators, k, carrier_hz):
     """Audio -> dict: quality, snr_db, timing (sample index of the burst's
     marker, or None), status ('ok', a decode-failure status, 'no_frame' or
@@ -63,7 +52,7 @@ def decode_burst(x, modulation, symbol_rate, use_fec, generators, k, carrier_hz)
         return out
     try:
         symbols, info = audio.demodulate(
-            x, symbol_rate, carrier_hz, MODULATORS[modulation](link.PREAMBLE + link.SYNC_WORD),
+            x, symbol_rate, carrier_hz, MODULATORS[modulation](link.AUDIO_MARKER),
             constellation=modem._CONSTELLATIONS[modulation])
         out['quality'], out['snr_db'], out['timing'] = float(info['quality']), float(info['snr_db']), info['timing']
         if info['quality'] < MIN_QUALITY:
@@ -71,8 +60,9 @@ def decode_burst(x, modulation, symbol_rate, use_fec, generators, k, carrier_hz)
         bps = BITS_PER_SYMBOL[modulation]
         symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]
         bits = DEMODULATORS[modulation](symbols)
-        frames = list(fec.decode_frames(bits, generators, k, first_marker_bit=info['marker_index'] * bps)
-                      if use_fec else sync.iter_frames_correlated(bits))
+        frames = list(fec.decode_frames(bits, generators, k, first_marker_bit=info['marker_index'] * bps,
+                                        marker=link.AUDIO_MARKER)
+                      if use_fec else sync.iter_frames_correlated(bits, marker=link.AUDIO_MARKER))
     except Exception:
         out['status'] = 'error'
         return out
@@ -88,8 +78,8 @@ def decode_burst(x, modulation, symbol_rate, use_fec, generators, k, carrier_hz)
 
 def burst_air_samples(modulation, symbol_rate, use_fec, generators, k, payload_len):
     """On-air length, in samples, of a frame with this payload length."""
-    frame = strip_frame_padding(link.build_frame(bytes(payload_len)))
-    encoded = fec.encode_frame(frame, generators, k) if use_fec else frame
+    frame = audio.frame_for_audio(link.build_frame(bytes(payload_len)))
+    encoded = fec.encode_frame(frame, generators, k, marker=link.AUDIO_MARKER) if use_fec else frame
     return len(MODULATORS[modulation](encoded)) * audio.samples_per_symbol(symbol_rate)
 
 

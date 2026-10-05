@@ -23,13 +23,6 @@ from modulate import MODULATORS
 BITS = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
 
 
-def strip_padding(frame):
-    marker = link.PREAMBLE + link.SYNC_WORD
-    at = frame.find(marker) + len(marker)
-    hdr = link.parse_header(frame[at:at + link.HEADER_LEN])
-    return frame[frame.find(marker):at + link.HEADER_LEN + hdr['payload_len'] + link.CRC_LEN]
-
-
 def mode_params(mode, fec_preset=None, port='mic'):
     m = link.WAVEFORM_MODES[mode]
     gens, k = fec.PRESETS[fec_preset or m['fec_preset']]
@@ -40,8 +33,9 @@ def mode_params(mode, fec_preset=None, port='mic'):
 def build_samples(text, mode=0, fec_preset=None, port='mic', src='TEST', level=0.5, lead_in=0.5):
     """Message text -> audio samples (float, 48 kHz) for one burst."""
     mod, rate, gens, k, carrier = mode_params(mode, fec_preset, port)
-    frame = strip_padding(link.build_frame(text.encode(), mode_id=mode, src_id=src.encode(), dst_id=b'ALL'))
-    symbols = MODULATORS[mod](fec.encode_frame(frame, gens, k))
+    frame = audio.frame_for_audio(link.build_frame(text.encode(), mode_id=mode, src_id=src.encode(),
+                                                   dst_id=b'ALL'))
+    symbols = MODULATORS[mod](fec.encode_frame(frame, gens, k, marker=link.AUDIO_MARKER))
     return audio.modulate(symbols, rate, carrier, level=level, lead_in_s=lead_in)
 
 
@@ -65,7 +59,7 @@ def decode_samples(x, mode=0, fec_preset=None, port='mic'):
     out = {'rms': float(x.std()), 'peak': float(np.abs(x).max()), 'quality': 0.0,
            'snr_db': float('-inf'), 'status': 'no_burst', 'payload': None, 'header': None,
            'timing': None}
-    symbols, info = audio.demodulate(x, rate, carrier, MODULATORS[mod](link.PREAMBLE + link.SYNC_WORD),
+    symbols, info = audio.demodulate(x, rate, carrier, MODULATORS[mod](link.AUDIO_MARKER),
                                      constellation=modem._CONSTELLATIONS[mod])
     out['quality'], out['snr_db'] = float(info['quality']), float(info['snr_db'])
     out['timing'] = info['timing']
@@ -74,7 +68,8 @@ def decode_samples(x, mode=0, fec_preset=None, port='mic'):
     n = 8 // BITS[mod]
     symbols = symbols[:len(symbols) - len(symbols) % n]
     bits = DEMODULATORS[mod](symbols)
-    frames = list(fec.decode_frames(bits, gens, k, first_marker_bit=info['marker_index'] * BITS[mod]))
+    frames = list(fec.decode_frames(bits, gens, k, first_marker_bit=info['marker_index'] * BITS[mod],
+                                    marker=link.AUDIO_MARKER))
     out['status'] = 'no_frame'
     for status, header, payload in frames:
         out['status'] = status

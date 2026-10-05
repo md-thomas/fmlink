@@ -157,9 +157,12 @@ def cmd_dump(args):
         print(f"  Waveform Mode ID: {header['mode_id']} ({link.format_mode(header['mode_id'])})")
         print(f"  Flags           : 0x{header['flags']:02X} ({link.format_flags(header['flags'])})")
         print(f"  Sequence Number : {header['seq']}")
-        print(f"  Source ID       : {header['src_id'].hex(' ')}  \"{link.decode_station_id(header['src_id'])}\"")
-        print(f"  Destination ID  : {header['dst_id'].hex(' ')}  \"{link.decode_station_id(header['dst_id'])}\"")
+        print(f"  Source ID       : {link.pack_callsign(header['src_id']).hex(' ')}  "
+              f"\"{link.decode_station_id(header['src_id'])}\" (packed callsign)")
+        print(f"  Destination ID  : {link.pack_callsign(header['dst_id']).hex(' ')}  "
+              f"\"{link.decode_station_id(header['dst_id'])}\" (packed callsign)")
         print(f"  Payload Length  : {header['payload_len']}")
+        print(f"  Fragment Index  : {header['fragment_index']}")
 
         if frame['status'] == 'bad_length':
             print(f"  (Payload Length {header['payload_len']} out of range "

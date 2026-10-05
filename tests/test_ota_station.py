@@ -722,15 +722,15 @@ class AudioPhyStationTests(unittest.TestCase):
         self._run(scenario())
 
     def test_ack_waits_out_airtime_instead_of_retrying(self):
-        # Mode 1 bursts air for ~1.4 s each way - longer than the old fixed
+        # Mode 0 bursts air for ~1.9-3 s each way - longer than the old fixed
         # 2 s reply timeout in total, which would retry (and collide, on a
         # half-duplex link) before the ACK could ever arrive.
         async def scenario():
             sim = await _create_simulator(self._fm_channel(seed=2))
             received = []
-            a = await _create_station('K0MDT', 'W1AW', mode_id=1, use_fec=True, use_ack=True,
+            a = await _create_station('K0MDT', 'W1AW', mode_id=0, use_fec=True, use_ack=True,
                                       phy='audio', audio_port='mic')
-            b = await _create_station('W1AW', 'K0MDT', mode_id=1, use_fec=True, use_ack=True,
+            b = await _create_station('W1AW', 'K0MDT', mode_id=0, use_fec=True, use_ack=True,
                                       phy='audio', audio_port='mic', on_message=received.append)
             await a.connect(*sim.address)
             await b.connect(*sim.address)
@@ -759,8 +759,10 @@ class AudioPhyStationTests(unittest.TestCase):
         station = Station(station_id='K0MDT', dst_id='W1AW', phy='audio', audio_port='mic',
                           on_log=lambda msg: None)
         sender = Station(station_id='W1AW', dst_id='K0MDT', phy='audio', audio_port='mic')
-        request = link.build_mode_request_frame(7, mode_id=0, src_id=b'W1AW', dst_id=b'K0MDT')
-        coded = fec.encode_frame(request, sender._control_fec_generators, sender._control_fec_k)
+        request = audio_phy.frame_for_audio(
+            link.build_mode_request_frame(7, mode_id=0, src_id=b'W1AW', dst_id=b'K0MDT'))
+        coded = fec.encode_frame(request, sender._control_fec_generators, sender._control_fec_k,
+                                 marker=link.AUDIO_MARKER)
         audio = audio_phy.modulate(sender._control_modulate(coded), 600,
                                    audio_phy.PORT_PROFILES['mic']['carrier_hz'])
         received, _ = FMLink('mic', freq_hz=440e6, latency_s=0, jitter_s=0, **fm_kwargs).transmit(audio)
@@ -788,17 +790,18 @@ class AudioPhyStationTests(unittest.TestCase):
                          link.select_mode_for_snr(station._last_rx_snr_db,
                                                   max_symbol_rate=station.max_symbol_rate))
 
-    def test_strip_frame_padding_keeps_exactly_the_frame(self):
-        from ota_station import _strip_frame_padding
+    def test_frame_for_audio_keeps_exactly_the_frame(self):
         frame = link.build_frame(b'payload', seq=3)
-        stripped = _strip_frame_padding(frame)
-        self.assertTrue(stripped.startswith(link.PREAMBLE + link.SYNC_WORD))
-        self.assertEqual(len(stripped), len(frame) - 48)  # build_frame's 24 + 24 pad bytes
-        self.assertEqual(_strip_frame_padding(stripped), stripped)
-        self.assertEqual(_strip_frame_padding(b'no marker here'), b'no marker here')
+        audio_frame = audio_phy.frame_for_audio(frame)
+        self.assertTrue(audio_frame.startswith(link.AUDIO_MARKER))
+        # build_frame's 24 + 24 pad bytes, and 16 of the 32 preamble bytes
+        self.assertEqual(len(audio_frame), len(frame) - 48 - 16)
+        self.assertEqual(audio_frame[len(link.AUDIO_MARKER):], frame[24 + len(link.IQ_MARKER):-24])
+        self.assertEqual(audio_phy.frame_for_audio(audio_frame), audio_frame)
+        self.assertEqual(audio_phy.frame_for_audio(b'no marker here'), b'no marker here')
 
     def test_audio_bursts_drop_the_padding_airtime(self):
-        # At 600 baud the 48 uncoded pad bytes are 384 symbols = 0.64 s.
+        # The audio frame drops the 48 pad bytes and 16 preamble bytes (uncoded).
         class _Recorder:
             connected = True
 
@@ -816,7 +819,8 @@ class AudioPhyStationTests(unittest.TestCase):
         sent_s = len(station._sim.sent[0]) / 2 / audio_phy.AUDIO_SAMPLE_RATE
         padded = fec.encode_frame(frame, station._fec_generators, station._fec_k)
         padded_s = len(audio_phy.modulate(station._modulate(padded), 600, 1650)) / audio_phy.AUDIO_SAMPLE_RATE
-        self.assertAlmostEqual(padded_s - sent_s, 0.64, delta=0.01)
+        # 48 pad bytes + 16 preamble bytes, uncoded: 512 symbols = 0.853 s at 600 baud
+        self.assertAlmostEqual(padded_s - sent_s, 512 / 600, delta=0.01)
         self.assertAlmostEqual(station._last_tx_airtime_s, sent_s, places=6)
 
     def test_ack_auto_and_lead_in_commands(self):

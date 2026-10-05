@@ -22,8 +22,11 @@ import numpy as np
 import openwave_link as link
 import openwave_modem as modem
 
-MARKER_BITS = modem.bytes_to_bits(link.PREAMBLE + link.SYNC_WORD)
-MARKER_LEN = len(MARKER_BITS)  # 288 bits (36 bytes: 32-byte preamble + 4-byte sync word)
+# The IQ PHY's marker (the default everywhere here): 288 bits, the 32-byte
+# preamble + 4-byte sync word. The audio PHY uses link.AUDIO_MARKER (16-byte
+# preamble); pass it as `marker` to search for that instead.
+MARKER_BITS = modem.bytes_to_bits(link.IQ_MARKER)
+MARKER_LEN = len(MARKER_BITS)
 
 DEFAULT_MAX_ERROR_FRACTION = 0.15  # tolerate up to ~15% of the marker's bits being wrong
 
@@ -36,7 +39,7 @@ DEFAULT_MAX_ERROR_FRACTION = 0.15  # tolerate up to ~15% of the marker's bits be
 # repro showed decode_frames() yielding fragment seq 0, 2, 3, 4 - fragment
 # 1's marker was too corrupted to clear the threshold, so the unbounded
 # search just kept going and landed on fragment 2's marker instead,
-# reporting nothing wrong at all. Default lead_pad+end_pad between frames
+# reporting nothing wrong at all. Default lead_pad+end_pad between IQ frames
 # is 48 bytes (384 bits) - this window is >10x that for margin against a
 # shifted match, while staying far smaller than even the smallest realistic
 # coded fragment (so it can't accidentally reach the NEXT real fragment).
@@ -49,7 +52,7 @@ def hamming_distance(a, b):
 
 
 def find_sync_offsets(bits, max_errors=None, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION,
-                       search_window=None):
+                       search_window=None, marker=None):
     """Slide MARKER_BITS across bits and return a list of (offset, errors)
     for every position where the Hamming distance to the marker is <=
     max_errors (default: max_error_fraction * MARKER_LEN, rounded down).
@@ -61,9 +64,12 @@ def find_sync_offsets(bits, max_errors=None, max_error_fraction=DEFAULT_MAX_ERRO
     search_window: if given, only scan the first search_window possible
     offsets rather than the entire buffer - see FRAGMENT_GAP_SEARCH_BITS
     and best_sync_offset()'s docstring for why a bounded, nearby search is
-    what callers scanning for a KNOWN-nearby next frame should use."""
+    what callers scanning for a KNOWN-nearby next frame should use.
+
+    marker: the marker bytes to look for (default: the IQ marker)."""
     bits_arr = np.asarray(bits, dtype=np.int8)
-    marker_arr = np.asarray(MARKER_BITS, dtype=np.int8)
+    marker_arr = np.asarray(MARKER_BITS if marker is None else modem.bytes_to_bits(marker),
+                            dtype=np.int8)
     n = len(bits_arr) - len(marker_arr) + 1
     if search_window is not None:
         n = min(n, search_window)
@@ -81,7 +87,7 @@ def find_sync_offsets(bits, max_errors=None, max_error_fraction=DEFAULT_MAX_ERRO
 
 
 def best_sync_offset(bits, max_errors=None, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION,
-                      search_window=None):
+                      search_window=None, marker=None):
     """Return the (offset, errors) pair with the fewest bit errors among
     find_sync_offsets()'s candidates, or None if none cleared the
     threshold. Ties broken by earliest offset.
@@ -92,7 +98,8 @@ def best_sync_offset(bits, max_errors=None, max_error_fraction=DEFAULT_MAX_ERROR
     an unbounded search doesn't fail loudly when the nearby marker didn't
     survive noise, it just locks onto whatever real marker comes next,
     however far away, silently skipping everything in between."""
-    candidates = find_sync_offsets(bits, max_errors, max_error_fraction, search_window=search_window)
+    candidates = find_sync_offsets(bits, max_errors, max_error_fraction, search_window=search_window,
+                                   marker=marker)
     if not candidates:
         return None
     return min(candidates, key=lambda c: (c[1], c[0]))
@@ -122,7 +129,7 @@ def extract_frame_at(bits, header_start):
     return 'truncated', parser.last_header, None
 
 
-def iter_frames_correlated(data, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION):
+def iter_frames_correlated(data, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION, marker=None):
     """Like openwave_link.iter_frames(), but finds each frame's start via
     Hamming-distance correlation instead of an exact byte match - tolerates
     bit errors in the marker itself. Yields (status, header, payload)
@@ -138,21 +145,24 @@ def iter_frames_correlated(data, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION):
     so later frames can still be found - without this, an unbounded
     search would just silently lock onto whatever real marker comes next,
     however far away, with no indication a frame in between was lost (see
-    FRAGMENT_GAP_SEARCH_BITS)."""
+    FRAGMENT_GAP_SEARCH_BITS).
+
+    marker: the marker bytes frames start with (default: the IQ marker)."""
     bits = modem.bytes_to_bits(data)
+    marker_len = MARKER_LEN if marker is None else len(marker) * 8
     pos = 0
     while True:
         match = best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction,
-                                  search_window=FRAGMENT_GAP_SEARCH_BITS)
+                                  search_window=FRAGMENT_GAP_SEARCH_BITS, marker=marker)
         if match is None:
-            match = best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction)
+            match = best_sync_offset(bits[pos:], max_error_fraction=max_error_fraction, marker=marker)
             if match is None:
                 return
             yield 'gap', None, None
 
         rel_offset, _errors = match
         marker_start = pos + rel_offset
-        header_start = marker_start + MARKER_LEN
+        header_start = marker_start + marker_len
 
         status, header, payload = extract_frame_at(bits, header_start)
         if status == 'truncated':

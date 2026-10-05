@@ -59,8 +59,9 @@ def chunks_from_wav(path):
 def burst_samples(mode, fec_preset, port, payload_len):
     """On-air length, in samples, of a frame with this payload length."""
     mod, rate, gens, k, _ = awt.mode_params(mode, fec_preset, port)
-    frame = awt.strip_padding(link.build_frame(bytes(payload_len), mode_id=mode))
-    return len(MODULATORS[mod](fec.encode_frame(frame, gens, k))) * audio.samples_per_symbol(rate)
+    frame = audio.frame_for_audio(link.build_frame(bytes(payload_len), mode_id=mode))
+    return (len(MODULATORS[mod](fec.encode_frame(frame, gens, k, marker=link.AUDIO_MARKER)))
+            * audio.samples_per_symbol(rate))
 
 
 class Listener:

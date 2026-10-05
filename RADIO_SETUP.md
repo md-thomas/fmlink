@@ -177,7 +177,9 @@ summary.
   negotiates one mode/FEC for both directions on the first message you send
   (a short exchange of control bursts first; on the real radios the
   negotiation took about 12 seconds and the first message was acknowledged
-  after about 16, with later messages taking about 3). Both are optional: for the simplest possible test use
+  after about 16, with later messages taking about 3 - measured with frame
+  format v1. v2's bursts are 17-31% shorter, so expect less now. Both
+  stations must run v2 code to hear each other.) Both are optional: for the simplest possible test use
   `--mode 0 --fec --ack` without `--auto`.
 - `--tx-level 0.5` is the default; `--ptt-line dtr|rts` overrides the
   interface's PTT line; `-v` prints per-message detail.

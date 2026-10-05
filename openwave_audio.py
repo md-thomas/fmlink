@@ -35,6 +35,7 @@ one loop, no separate timing-recovery loop.
 """
 import numpy as np
 
+import openwave_link as link
 import openwave_pulse as pulse
 
 AUDIO_SAMPLE_RATE = 48000
@@ -72,6 +73,24 @@ SPAN_SYMBOLS = 11
 # of clock offset.
 LOOP_BANDWIDTH = 0.005
 LOOP_DAMPING = 0.707
+
+
+def frame_for_audio(frame_bytes):
+    """A build_frame()-style frame as the audio PHY sends it: the 16-byte-
+    preamble marker (link.AUDIO_MARKER), header, payload and CRC - no lead
+    or end padding. The IQ PHY's padding exists for its fixed-timing
+    matched filter; here the lead-in silence and RRC tails cover the ends,
+    and the receiver finds the marker by correlating against the samples,
+    for which 16 bytes of preamble is enough. Encode the result with
+    fec.encode_frame(..., marker=link.AUDIO_MARKER). A frame already in
+    audio form is returned unchanged."""
+    start = frame_bytes.find(link.IQ_MARKER)
+    if start < 0:
+        return frame_bytes
+    header_at = start + len(link.IQ_MARKER)
+    header = link.parse_header(frame_bytes[header_at:header_at + link.HEADER_LEN])
+    end = header_at + link.HEADER_LEN + header['payload_len'] + link.CRC_LEN
+    return link.AUDIO_MARKER + frame_bytes[header_at:end]
 
 
 def samples_per_symbol(symbol_rate, sample_rate=AUDIO_SAMPLE_RATE):

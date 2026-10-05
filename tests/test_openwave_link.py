@@ -41,15 +41,80 @@ class HeaderRoundTripTests(unittest.TestCase):
         self.assertEqual(parsed['mode_id'], 2)
         self.assertEqual(parsed['flags'], link.FLAG_ACK_REQUESTED | link.FLAG_PRIORITY)
         self.assertEqual(parsed['seq'], 1234)
-        self.assertEqual(parsed['src_id'], b'K0MDT\x00\x00\x00')
-        self.assertEqual(parsed['dst_id'], b'W1AW\x00\x00\x00\x00')
+        self.assertEqual(parsed['src_id'], b'K0MDT')
+        self.assertEqual(parsed['dst_id'], b'W1AW')
         self.assertEqual(parsed['payload_len'], 42)
 
-    def test_src_dst_id_truncated_to_8_bytes(self):
-        header = link.build_header(0, src_id=b'TOOLONGCALL', dst_id=b'ALSOTOOLONG')
-        parsed = link.parse_header(header)
-        self.assertEqual(parsed['src_id'], b'TOOLONGC')
-        self.assertEqual(parsed['dst_id'], b'ALSOTOOL')
+    def test_version_and_type_share_a_byte(self):
+        header = link.build_header(0, packet_type=link.PACKET_TYPE_CONTROL)
+        self.assertEqual(header[0], 0x24)  # version 2, type 4
+        with self.assertRaises(ValueError):
+            link.build_header(0, packet_type=16)
+
+    def test_spec_worked_example_bytes(self):
+        # OpenWave_Specification.txt's v2 worked example, byte for byte.
+        frame = link.build_frame(b'Hello', lead_pad=0, end_pad=0, mode_id=2,
+                                 flags=link.FLAG_ACK_REQUESTED, seq=1, src_id=b'K0MDT', dst_id=b'ALL')
+        expected = bytes.fromhex(
+            '21 02 01 00 01 45 A3 24 2B 40 00 07 CB 16 30 00 00 00 05 00'
+            '48 65 6C 6C 6F F4 97 61 37'.replace(' ', ''))
+        self.assertEqual(frame, link.IQ_MARKER + expected)
+
+
+class CallsignTests(unittest.TestCase):
+    def test_round_trip_and_known_packings(self):
+        known = {'K0MDT': '45A3242B4000', 'W1AW': '8D44D5058000', 'ALL': '07CB16300000',
+                 'K0MDT-7': '45A324513080', 'W1AW/P': '8D44DABA7000', 'VE3XYZ/MM': '83FD44BEDD55'}
+        for call, packed in known.items():
+            with self.subTest(call=call):
+                self.assertEqual(link.pack_callsign(call).hex().upper(), packed)
+                self.assertEqual(link.unpack_callsign(link.pack_callsign(call)), call.encode())
+
+    def test_lowercase_bytes_and_empty(self):
+        self.assertEqual(link.pack_callsign('k0mdt'), link.pack_callsign(b'K0MDT'))
+        self.assertEqual(link.pack_callsign(''), bytes(6))
+        self.assertEqual(link.unpack_callsign(bytes(6)), b'')
+
+    def test_rejects_unrepresentable(self):
+        for bad in ('TOOLONGCALL', 'K0 MDT', 'K0MDT_1', 'K0\x00MDT'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    link.pack_callsign(bad)
+        with self.assertRaises(ValueError):
+            link.build_header(0, src_id=b'TOOLONGCALL')
+
+
+class HeaderExtensionTests(unittest.TestCase):
+    def test_split_and_skip_unknown_entries(self):
+        block = bytes([7, 0x41, 2, 0xAA, 0xBB, 0x99, 1, 0xCC])  # two entries, one unknown type
+        entries, app = link.split_extension(block + b'hello')
+        self.assertEqual(entries, [(0x41, b'\xaa\xbb'), (0x99, b'\xcc')])
+        self.assertEqual(app, b'hello')
+
+    def test_malformed_blocks_rejected(self):
+        for bad in (b'', bytes([5, 1, 2]), bytes([3, 1, 5, 0])):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    link.split_extension(bad)
+
+    def test_receiver_delivers_application_payload_only(self):
+        delivered = []
+        receiver = link.LinkReceiver(station_id='W1AW', on_message=delivered.append)
+        header = link.parse_header(link.build_header(
+            11, flags=link.FLAG_HEADER_EXTENSION, seq=1, src_id=b'K0MDT', dst_id=b'W1AW'))
+        receiver.feed_frame(header, bytes([3, 0x50, 1, 0x01]) + b'message')
+        self.assertEqual(len(delivered), 1)
+        self.assertIn('message', str(delivered[0]))
+        self.assertNotIn('P', str(delivered[0]))
+
+    def test_receiver_drops_malformed_extension(self):
+        delivered = []
+        receiver = link.LinkReceiver(station_id='W1AW', on_message=delivered.append)
+        header = link.parse_header(link.build_header(
+            3, flags=link.FLAG_HEADER_EXTENSION, seq=1, src_id=b'K0MDT', dst_id=b'W1AW'))
+        receiver.feed_frame(header, bytes([9, 1, 2]))
+        self.assertEqual(delivered, [])
+        self.assertEqual(receiver.counts['bad_extension'], 1)
 
     def test_payload_len_out_of_range_rejected(self):
         with self.assertRaises(ValueError):
@@ -95,9 +160,10 @@ class FlagsTests(unittest.TestCase):
         self.assertIn('priority', formatted)
 
     def test_reserved_bits_ignored(self):
-        # bits 5-7 (0xE0) aren't named - shouldn't register as any known flag
-        self.assertFalse(any(link.parse_flags(0xE0).values()))
-        self.assertEqual(link.format_flags(0xE0), '-')
+        # bits 6-7 (0xC0) aren't named - shouldn't register as any known flag
+        self.assertFalse(any(link.parse_flags(0xC0).values()))
+        self.assertEqual(link.format_flags(0xC0), '-')
+        self.assertTrue(link.parse_flags(link.FLAG_HEADER_EXTENSION)['header_extension'])
 
 
 class ModeAndStationIdTests(unittest.TestCase):

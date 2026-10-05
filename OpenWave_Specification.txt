@@ -67,7 +67,7 @@ Physical Layer (PHY)
     				            correlation, which needs a fixed known
     				            pattern. The rest of the frame is two
     				            independent blocks, each encoded separately:
-    				                1. the 32-byte header
+    				                1. the 20-byte header
     				                2. payload + CRC32
     				            Each block is flushed with K-1 zero tail bits,
     				            then interleaved (below), then zero-padded to
@@ -108,9 +108,10 @@ Audio PHY (a radio's audio port, e.g. a VHF/UHF FM transceiver):
     Burst:                      Lead-in silence (default 250 ms; it must
                                 exceed the transmitter's key-up time plus
                                 the far receiver's squelch opening time),
-                                then the frame with NO lead/end pad (see
-                                Link layer), then 20 ms of silence for
-                                the filter tail. One frame per burst.
+                                then the frame with NO lead/end pad and a
+                                16-byte preamble (see Link layer), then
+                                20 ms of silence for the filter tail. One
+                                frame per burst.
     Receiver (informative):     Correlate against the marker for timing,
                                 phase and level; decode at that position;
                                 track sound-card clock drift (which shifts
@@ -119,6 +120,10 @@ Audio PHY (a radio's audio port, e.g. a VHF/UHF FM transceiver):
                                 openwave_audio.py.
 
 Link layer:
+    Frame format version:       2 (since 2026-10). v1 had a 32-byte header,
+                                8-byte ASCII IDs and a 32-byte preamble on
+                                every PHY; v1 and v2 stations can't decode
+                                each other's frames.
     Frame:                      Lead Pad + Preamble + Sync Word + Header +
                                 Payload + CRC32 + End Pad
     Lead Pad / End Pad:         Zero bytes before the preamble and after the
@@ -127,29 +132,37 @@ Link layer:
                                 none on the audio PHY, whose lead-in silence
                                 and filter tails do the same job. Receivers
                                 must not depend on them.
-    Preamble:	                32 bytes (LFSR pseudo-noise sequence, seed 1, 9-bit register,
-	                            taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE).
-	                            Chosen over a repeating pattern (e.g. 55 55...) because a PN
-	                            sequence's autocorrelation has a sharp, unambiguous peak
-	                            (worst sidelobe ~9% of peak) vs. a repeating pattern's ~99%
-	                            sidelobes at every symbol-period offset, which made exact
-	                            frame-start detection under noise unreliable.
+    Preamble:	                LFSR pseudo-noise sequence (seed 1, 9-bit register,
+	                            taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE):
+	                              IQ PHY:    32 bytes
+	                              Audio PHY: the first 16 bytes of the same
+	                                         sequence (its receiver correlates
+	                                         against samples, not bits; 16
+	                                         bytes delivered the same as 32
+	                                         through the FM model, 8 and below
+	                                         did not)
+	                            A PN sequence rather than a repeating pattern (e.g.
+	                            55 55...) because its autocorrelation has a sharp,
+	                            unambiguous peak (worst sidelobe ~9% of peak) vs. a
+	                            repeating pattern's ~99% sidelobes at every
+	                            symbol-period offset.
     
     Sync Word: 	                4 bytes (CCDS sync word) 0x1ACFFC1D (for correlation)	
-    Header:	                    32 bytes    
     Payload: 	                Variable (maximum 1024 bytes)
-    CRC32:	                    4 bytes
-    Header: 	                Total 32 bytes
-        Version: 		    1 byte
-        Packet Type:		1 byte
-        Waveform Mode ID:	1 byte
-		Flags: 			    1 byte
-        Sequence Number:	2 bytes
-        Source ID:		    8 bytes
-        Destination ID: 	8 bytes
-        Payload Length:	    2 bytes
-        Fragment Index:	    1 byte
-        Reserved:		    7 bytes
+    CRC32:	                    4 bytes, over header + payload
+    Header: 	                Total 20 bytes
+        Version / Packet Type:	1 byte - version in the high 4 bits (2),
+                                packet type in the low 4 bits
+        Waveform Mode ID:	    1 byte
+        Flags: 			        1 byte
+        Sequence Number:	    2 bytes
+        Source ID:		        6 bytes (packed callsign, see below)
+        Destination ID: 	    6 bytes (packed callsign; "ALL" = broadcast)
+        Payload Length:	        2 bytes
+        Fragment Index:	        1 byte
+        All multi-byte fields are big-endian. There are no reserved bytes:
+        room to grow is Flags bit 5 (header extension, below), Flags bits
+        6-7, packet types 5-15 and versions 3-15.
 
         Packet Types:
             0x01 = Data
@@ -168,12 +181,12 @@ Link layer:
                  Probe sent by the station starting negotiation, so the
                  peer has something to measure and reply to.
             0x02 MODE_GRANT    [op][SNR: float32, big-endian][mode: 1 byte]
-                               [FEC preset name: ASCII, rest of payload]
+                               [FEC preset ID: 1 byte]
                  Reply to a MODE_REQUEST, with the same Sequence Number.
                  The SNR and mode/preset are the replier's own
                  non-binding opinion; the requester decides from its own
                  measurement of this reply.
-            0x03 MODE_SET      [op][mode: 1 byte][FEC preset name: ASCII, rest]
+            0x03 MODE_SET      [op][mode: 1 byte][FEC preset ID: 1 byte]
                  The requester's decision. Both stations use this
                  mode/FEC in both directions from then on.
             0x04 MODE_SET_ACK  [op]
@@ -182,8 +195,14 @@ Link layer:
             0x06 PONG          [op]
                  Round-trip probe and its reply (same Sequence Number),
                  sent at the currently active mode.
-            FEC preset names are openwave_fec.py's PRESETS keys (e.g.
-            "r1_2_k7"). MODE_REQUEST/GRANT/SET/SET_ACK are sent on a fixed
+            FEC preset IDs (never renumbered; new presets only append):
+                1 r1_2_k3   2 r1_2_k7   3 r1_2_k9
+                4 r1_3_k3   5 r1_3_k7   6 r1_3_k9
+                7 r1_4_k3   8 r1_4_k7   9 r1_4_k9
+               10 r1_5_k7  11 r1_5_k9
+               12 r1_6_k7  13 r1_6_k9
+            (names are openwave_fec.py's PRESETS keys).
+            MODE_REQUEST/GRANT/SET/SET_ACK are sent on a fixed
             control channel both ends know in advance: Mode 0 with FEC
             "r1_2_k9" (ota_station.py's CONTROL_MODE_ID/CONTROL_FEC_PRESET).
             How the requester picks a mode from its measurement is local
@@ -222,9 +241,22 @@ Link layer:
                 0 = Normal priority 
                 1 = High priority 
 
-            Bit 5: Reserved
+            Bit 5: Header Extension
+                0 = The payload is all application data
+                1 = The payload starts with a header-extension block
+
             Bit 6: Reserved
             Bit 7: Reserved
+
+        Header extension (Flags bit 5):
+            [block length N: 1 byte][N bytes of entries][application payload...]
+            entry = [type: 1 byte][length L: 1 byte][L bytes of value]
+            Payload Length counts the whole payload, block included. A
+            receiver skips entry types it doesn't recognize (using their
+            length), so it can still read the application payload; a
+            malformed block makes the frame unusable. In a fragmented
+            message each fragment carries its own block, removed before
+            reassembly. No entry types are defined yet.
 
         Fragment Index: 1 byte
             Position of this frame within its fragmented-message run
@@ -245,41 +277,42 @@ Link layer:
                 a complete, valid message.)
 
 
-        Source ID / Destination ID Encoding:
-            Format:  	Fixed length 8-byte ASCII field
-            Encoding: 	UTF-8/ASCII characters Unused bytes padded with 0x00
-            Maximum Length: 8 characters
+        Source ID / Destination ID Encoding (packed callsign):
+            Up to 9 characters from a 40-symbol alphabet:
+                index 0 = end/padding, 1-26 = A-Z, 27-36 = 0-9,
+                37 = '/', 38 = '-', 39 = '.'
+            Lowercase is folded to uppercase; nothing else is allowed.
+            Left-align, pad to 9 characters with index 0, and send
+            c0*40^8 + c1*40^7 + ... + c8 as a 48-bit big-endian integer
+            (40^9 < 2^48, so it always fits). Decode the base-40 digits
+            most-significant first and stop at the first 0.
 
     Examples:
-    "K0MDT"
-        ASCII: 4B 30 4D 44 54
-        Encoded 8-byte field: 4B 30 4D 44 54 00 00 00
-    
-    "W1AW"
-        ASCII:  57 31 41 57
-        Encoded 8-byte field: 57 31 41 57 00 00 00 00
-    
-    "BROADCAST"
-        Not valid (exceeds 8 bytes)
+        "K0MDT"      -> 45 A3 24 2B 40 00
+        "W1AW"       -> 8D 44 D5 05 80 00
+        "ALL"        -> 07 CB 16 30 00 00
+        "K0MDT-7"    -> 45 A3 24 51 30 80
+        "W1AW/P"     -> 8D 44 DA BA 70 00
+        "VE3XYZ/MM"  -> 83 FD 44 BE DD 55
+        "BROADCAST1" -> not valid (more than 9 characters)
 
 
-    Example:
+    Example (IQ PHY, without the lead/end pad):
         80 7D 33 D8 A1 52 4E 11 	<- Preamble (32 bytes,
         1E 42 5E FB 93 7E 20 21 	   LFSR pseudo-noise
         D5 1A 78 FD B4 8C C8 B1 	   sequence, shown here
-        B8 C3 2D 60 98 18 9F CB 	   across 4 lines)
+        B8 C3 2D 60 98 18 9F CB 	   across 4 lines; the audio
+                                       PHY sends the first 2 lines only)
         1A CF FC 1D 			    <- Sync Word
-        01 				            <- Version 
-        01 				            <- Packet Type (Data) 
+        21 				            <- Version 2 / Packet Type 1 (Data)
         02 				            <- Waveform Mode ID (Mode 2: 1200 sym/s, qpsk)
         01 				            <- Flags (ACK requested) 
         00 01 				        <- Sequence Number 
-        4B 30 4D 44 54 00 00 00 	<- Source ID "K0MDT" 
-        41 4C 4C 00 00 00 00 00 	<- Destination ID "ALL" 
+        45 A3 24 2B 40 00 	        <- Source ID "K0MDT" 
+        07 CB 16 30 00 00 	        <- Destination ID "ALL" 
         00 05 				        <- Payload Length (5 bytes)
         00 				            <- Fragment Index (0 - not fragmented, N/A here)
-        00 00 00 00 00 00 00 		<- Reserved
         48 65 6C 6C 6F 		        <- Payload "Hello"
-        87 EA 6F C0 			    <- CRC32 (Header + Payload) 
+        F4 97 61 37 			    <- CRC32 (Header + Payload) 
 
 
