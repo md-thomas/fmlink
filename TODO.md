@@ -9,7 +9,7 @@ genuinely still open right now in one place, per
 `tasklist.txt` disagree, `tasklist.txt` is authoritative — it's updated
 far more frequently and carries the full reasoning behind each item.
 
-## Where we are (2026-10-04)
+## Where we are (2026-10-05)
 
 **The live station now runs over real radios.** Two computers, each with an
 HT on a USB audio interface (an AIOC and a Digirig), run
@@ -102,23 +102,34 @@ near their limits:
 - Also still open from the radio work: soft-decision Viterbi, the `data` port,
   closed squelch, CPU use before a Raspberry Pi.
 
-Next, roughly in order (pending: are radios + an audio/PTT interface
-available?):
+**Payload compression: on hold.** Drafted (DEFLATE with a preset dictionary,
+36% smaller chat messages) but Winlink, the expected main traffic, already
+compresses its messages. Kept on the local `compression-draft` branch
+([PAYLOAD_COMPRESSION_PROPOSAL.md](PAYLOAD_COMPRESSION_PROPOSAL.md) there).
+OFDM was discussed and deferred: a throughput gain on strong links, at the
+cost of high peak power through the FM limiter.
 
-1. **Phase 5 on real radios - the rest.** Done: audio I/O, PTT and an
+Next, roughly in order:
+
+1. **Update both laptops to current `main`** (frame format v2 + KISS TNC;
+   v1 and v2 can't hear each other) and install `ax25-tools` on the second.
+2. **KISS TNC Milestone 2: Pat peer-to-peer over the radios**, then
+   digipeating and a gateway ([KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)).
+3. **Weak-link testing over the air** (planned above, now with v2 bursts).
+4. **Phase 5 on real radios - the rest.** Done: audio I/O, PTT and an
    over-the-air test on the `mic` port. Still to do: the faster `data`
    port profile (needs a radio data connector), the closed-squelch case
    (everything so far used open squelch), link-margin/range tests, and
    cutting the receiver's CPU use (it re-decodes its buffer every 0.5 s,
    about half a core) before a Raspberry Pi.
-2. **Automatic re-negotiation mid-session.** Stations pick a mode once;
+5. **Automatic re-negotiation mid-session.** Stations pick a mode once;
    they should adapt as the link changes (pairs with live control).
-3. **Soft-decision Viterbi** (~2 dB at the fringe).
-4. **Smarter ARQ for slow fading.** Lost ACKs make a sender give up on a
+6. **Soft-decision Viterbi** (~2 dB at the fringe).
+7. **Smarter ARQ for slow fading.** Lost ACKs make a sender give up on a
    message that was actually delivered.
-5. **Data-port mode 3 fading table**, and possibly a faster data-port
+8. **Data-port mode 3 fading table**, and possibly a faster data-port
    mode (16-QAM @ 2400 baud - a protocol decision).
-6. **GUI `--phy audio` support.**
+9. **GUI `--phy audio` support.**
 
 ## Open (actively relevant — pluggable-PHY / OTA track)
 

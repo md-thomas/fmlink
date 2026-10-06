@@ -169,12 +169,26 @@ Link layer:
             0x02 = ACK
             0x03 = Beacon
             0x04 = Control
+            0x05 = AX.25 (the payload is one AX.25 frame, for a KISS TNC's
+                   host - see below)
 
         ACK frame:
             Packet Type ACK, Flags bit 1 (ACK Response) set, empty
             payload. Its Sequence Number is the Sequence Number of the
             frame being acknowledged; each fragment of a fragmented
             message is acknowledged separately.
+
+        AX.25 frame (packet type 0x05):
+            The payload is one AX.25 frame as KISS carries it (addresses,
+            control, PID, info; no HDLC flags, no AX.25 FCS - the frame's
+            CRC32 protects it). Sent by openwave_tnc.py, the KISS TNC, for
+            packet software running on top (e.g. the Linux kernel AX.25
+            stack). AX.25 does its own addressing, connections and
+            retries, so these frames never request an OpenWave ACK and are
+            never fragmented. A receiver passes every one to its KISS host
+            regardless of Destination ID. Source/Destination ID carry the
+            AX.25 source/destination callsigns when they can be packed, for
+            information only.
 
         Control frame payloads (first byte = op):
             0x01 MODE_REQUEST  [op]

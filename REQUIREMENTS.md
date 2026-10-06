@@ -36,7 +36,7 @@ duplicated between the file-based and live-station code paths.
 
 ## 2. Public API / module map
 
-Only seven modules are actually installed as importable Python packages
+Only eight modules are actually installed as importable Python packages
 (`pyproject.toml`'s `py-modules`); everything else in this repo is a CLI
 script or test, run directly rather than imported.
 
@@ -50,9 +50,12 @@ script or test, run directly rather than imported.
 | `openwave_channel.py` | AWGN channel simulation: `add_awgn` (direct noise voltage), `snr_db_to_noise_voltage` (target-SNR convenience). |
 | `openwave_sync.py` | Tolerant frame synchronization: `find_sync_offsets`/`best_sync_offset` (sliding Hamming-distance correlator for the preamble+sync-word, not an exact-byte match), `iter_frames_correlated`/`describe_frames_correlated`, `extract_frame_at`. |
 | `openwave_audio.py` | Audio-subcarrier PHY for a radio's audio port: `modulate` (symbols → real 48 kHz audio on a carrier, with lead-in), `demodulate` (preamble correlation for timing/phase/level, PLL drift tracking, data-aided SNR), `PORT_PROFILES` (carrier and max symbol rate per radio connection), PCM16 helpers. |
+| `openwave_kiss.py` | KISS framing for the KISS TNC: `encode`, an incremental `Decoder` (escapes, commands, ports, and the SMACK/FlexNet CRC variants Linux's mkiss uses - `crc_smack`, `crc_flexnet`), and AX.25 address helpers (`ax25_endpoints`, `ax25_ui_frame`). |
 | `openwave_fec.py` | Forward error correction: `convolutional_encode`/`viterbi_decode` (numpy-vectorized, parameterized by generator polynomials/constraint length K, not hardcoded to one scheme), `encode_frame`/`decode_frames` (frame-level wrappers used by the CLI), `free_distance`/`find_generators` (principled, Dijkstra-based preset selection), `PRESETS` (13 named rate-1/N configurations, `r1_2_k3` through `r1_6_k9`, plus an empirically-measured SNR-to-preset reference table), coded-bit interleaving per FEC block (`interleave_permutation`, golden-ratio by default - see the spec's FEC section). |
 
 **CLI-only (not pip-installed as a library, run as scripts):**
+`openwave_tnc.py` (OpenWave as a KISS TNC for packet software - see
+[KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)),
 `openwave_cli.py` (file-based link-layer testing — `send`/`dump`/`recv`),
 `modulate.py`/`demodulate.py`/`pulseshape.py`/`channel.py`/
 `matchedfilter.py`/`plot_constellation.py` (the individual PHY-pipeline

@@ -142,6 +142,24 @@ overrides), `ptt_play.py` (key PTT, play a WAV, release), `level_meter.py`
 hardware), and `audio_wav_test.py` (generate/decode burst WAV files
 offline).
 
+**`openwave_kiss.py` / `openwave_tnc.py`**
+OpenWave as a KISS TNC, so standard packet software can use it as its
+modem. `openwave_kiss.py` is the KISS framing codec (plain KISS plus the
+SMACK and FlexNet CRC variants Linux's `mkiss` driver uses) and AX.25
+address helpers. `openwave_tnc.py` serves KISS over TCP and a
+pseudo-terminal (for `kissattach`) on top of the station's modem, over the
+simulator or a real radio. See "Packet radio and Winlink: OpenWave as a KISS
+TNC" below, and [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) for the design and
+milestones.
+
+**Design records**
+- [PROTOCOL_V2_PROPOSAL.md](PROTOCOL_V2_PROPOSAL.md): frame format v2,
+  accepted and implemented (now in the spec).
+- [PAYLOAD_COMPRESSION_PROPOSAL.md](PAYLOAD_COMPRESSION_PROPOSAL.md):
+  payload compression with a preset dictionary. On hold, on the local
+  `compression-draft` branch only.
+- [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md): the KISS TNC.
+
 **`legacy/gnuradio/`**
 The project's original GNU Radio pi/4-QPSK PHY chain (`phy_sim_loopback.grc`,
 `tx_pluto.grc`, `rx_rtlsdr.grc`, and early prototypes) - the initial
@@ -529,6 +547,36 @@ setup and leveling, results and troubleshooting are in
 
 On the other computer swap the two callsigns. This transmits: use a clear
 frequency and low power. Each run writes a session log to `logs/`.
+
+## Packet radio and Winlink: OpenWave as a KISS TNC
+
+`openwave_tnc.py` makes OpenWave a **KISS TNC**: the modem that packet
+software expects underneath it. Linux's AX.25 stack talks to it through
+`kissattach`, and through that stack Pat (Winlink client, including
+peer-to-peer), digipeating and the Linux RMS Gateway can all run over
+OpenWave's modem (FEC, interleaving, audio PHY) instead of 1200-baud AFSK.
+The TNC is just a modem: AX.25 does the addressing, connections and
+retries, so OpenWave's own chat link layer isn't used.
+
+```
+python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
+./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --pty-link /tmp/kiss-a
+./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --pty-link /tmp/kiss-b
+sudo kissattach /tmp/kiss-a owa      # ports owa/owb defined in /etc/ax25/axports
+sudo kissattach /tmp/kiss-b owb
+```
+
+Use `--radio` instead of `--sim-host` on a real radio. Both TNCs must use
+the same `--mode` and `--fec-preset`. KISS is also served over TCP
+(`--kiss-port`, default 8001).
+
+**Status:** Milestone 1 is done. Linux's AX.25 stack runs unmodified over
+two TNCs and the simulated FM link: `beacon` frames and full
+`axcall`/`ax25d` connected sessions, in every KISS framing the kernel uses.
+Next is Pat peer-to-peer over the real radios.
+[KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) has the setup (including
+`axports`/`ax25d` configuration), the test notes and the remaining
+milestones (digipeating, a gateway).
 
 ## Over-The-Air (OTA) Simulator
 

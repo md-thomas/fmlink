@@ -280,3 +280,13 @@ unchanged:
 - **Half duplex:** receiving is paused while keyed and for a short settle
   time afterwards. The station's reply timeouts allow 2 seconds per
   direction for key-up, detection and decode.
+
+## Packet radio (KISS TNC) over the radios
+
+`openwave_tnc.py --callsign <call> --radio --pty-link /tmp/kiss` runs OpenWave
+as a KISS TNC on the same radio and interface, so Linux's AX.25 stack (and
+Pat for Winlink peer-to-peer) can use it via `sudo kissattach /tmp/kiss <port>`.
+Both stations need the same `--mode`, the same frame format (current
+`main`), and `ax25-tools` installed. Not yet tried over the air (Milestone 2
+in [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)); it was verified with the kernel
+AX.25 stack over the simulator.
