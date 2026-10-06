@@ -56,6 +56,17 @@ Done most recently:
   `--auto`, frames decoded at the correlation's marker position, live
   simulator `/commands`, station `/ack`, `/auto`, `/lead-in`.
 
+**KISS TNC (2026-10-05, in progress).** `openwave_tnc.py` makes OpenWave a
+KISS TNC, so standard packet software can use it as its modem: the Linux
+kernel AX.25 stack via `kissattach`, and through it Pat (Winlink
+peer-to-peer), digipeating and Linux RMS Gateway. Two TNCs already
+exchange AX.25 frames over the simulator. Plan,
+milestones and setup: [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md).
+**Milestone 1 done (2026-10-05):** the Linux kernel AX.25 stack runs
+unmodified over two OpenWave TNCs and the simulated FM link - `beacon`
+frames and full `axcall`/`ax25d` connected sessions, in plain, SMACK and
+FlexNet KISS framing. Milestone 2 (Pat over the radios) waits on radio time.
+
 **Frame format v2 (2026-10-05).** Shorter bursts: a 20-byte header (was 32),
 a 16-byte audio preamble (was 32) and 1-byte FEC preset IDs in negotiation
 (`PROTOCOL_V2_PROPOSAL.md`, now in the spec). A mode 0 message + ACK is

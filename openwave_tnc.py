@@ -41,7 +41,7 @@ class KissHub:
     def __init__(self, on_frame, log):
         self._on_frame = on_frame
         self._log = log
-        self._writers = []       # TCP StreamWriters
+        self._writers = {}       # TCP StreamWriter -> its Decoder
         self._pty_master = None  # fd
         self._pty_slave = None   # kept open so the master never sees EOF/EIO
         self._server = None
@@ -53,20 +53,19 @@ class KissHub:
         self.tcp_address = self._server.sockets[0].getsockname()[:2]
 
     async def _handle_tcp(self, reader, writer):
-        self._writers.append(writer)
         decoder = kiss.Decoder()
+        self._writers[writer] = decoder
         self._log(f"[kiss] TCP client connected from {writer.get_extra_info('peername')}")
         try:
             while True:
                 chunk = await reader.read(4096)
                 if not chunk:
                     break
-                self._dispatch(decoder.feed(chunk))
+                self._dispatch(decoder, decoder.feed(chunk))
         except (ConnectionError, asyncio.CancelledError):
             pass
         finally:
-            if writer in self._writers:
-                self._writers.remove(writer)
+            self._writers.pop(writer, None)
             writer.close()
             self._log("[kiss] TCP client disconnected")
 
@@ -76,21 +75,25 @@ class KissHub:
         os.set_blocking(master, False)
         self._pty_master, self._pty_slave = master, slave
         self.pty_path = os.ttyname(slave)
+        self._pty_decoder = kiss.Decoder()
         if link_path:
             if os.path.islink(link_path):
                 os.unlink(link_path)
             os.symlink(self.pty_path, link_path)
-        decoder = kiss.Decoder()
+        decoder = self._pty_decoder
 
         def readable():
             try:
                 chunk = os.read(master, 4096)
             except (BlockingIOError, OSError):
                 return
-            self._dispatch(decoder.feed(chunk))
+            self._dispatch(decoder, decoder.feed(chunk))
         asyncio.get_running_loop().add_reader(master, readable)
 
-    def _dispatch(self, frames):
+    def _dispatch(self, decoder, frames):
+        if frames and decoder.crc_mode != getattr(decoder, 'logged_mode', kiss.CRC_NONE):
+            decoder.logged_mode = decoder.crc_mode
+            self._log(f"[kiss] host is using {decoder.crc_mode} KISS framing - replying the same way")
         for port, command, data in frames:
             if command == kiss.CMD_DATA and port == 0:
                 self._on_frame(data)
@@ -104,12 +107,13 @@ class KissHub:
                 self._log(f"[kiss] host set {name}={data.hex() or '-'} (not applied)")
 
     def broadcast(self, frame):
-        encoded = kiss.encode(frame)
-        for writer in list(self._writers):
-            writer.write(encoded)
+        """Send a received frame to every client, each in the KISS framing
+        (plain, SMACK or FlexNet) that client was last seen using."""
+        for writer, decoder in list(self._writers.items()):
+            writer.write(kiss.encode(frame, crc=decoder.crc_mode))
         if self._pty_master is not None:
             try:
-                os.write(self._pty_master, encoded)
+                os.write(self._pty_master, kiss.encode(frame, crc=self._pty_decoder.crc_mode))
             except OSError:
                 pass
 

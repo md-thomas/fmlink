@@ -1,9 +1,11 @@
 # Scope: OpenWave as a KISS TNC (AX.25 / Winlink)
 
-Status: **Milestone 1 in progress (2026-10-05)** - the TNC works between
-two instances over the simulator (KISS over TCP and a pty, frames
-byte-identical both ways); the Linux kernel AX.25 step is next and needs
-root on a test machine (see "Milestone 1: kernel AX.25 test").
+Status: **Milestone 1 done (2026-10-05).** The Linux kernel AX.25 stack
+runs unmodified over two OpenWave TNCs and the simulated FM link: single
+frames (`beacon`) and full connected sessions (`axcall` to `ax25d`) in
+every KISS framing mkiss uses (plain, SMACK, FlexNet, and its default
+auto mode). Next: Milestone 2, Pat peer-to-peer over the real radios
+(waiting on radio time).
 
 ## Goal
 
@@ -57,6 +59,12 @@ Linux RMS Gateway requires the kernel AX.25 stack.
   (the host's stack filters by address).
 - **One AX.25 frame per burst** (Milestone 1). Fixed mode and FEC per TNC,
   set on the command line; both ends must match.
+- **Plain KISS, SMACK and FlexNet framing are all accepted.** Linux's
+  mkiss driver starts in "auto" mode, probing with SMACK (CRC-16/ARC,
+  flag 0x80) and FlexNet (FlexNet CRC, flag 0x20) frames. A frame only
+  counts as SMACK/FlexNet if its CRC checks out (the flag bits overlap
+  KISS port numbers), and replies to each host use the framing that host
+  was last seen using.
 - **KISS parameter commands are logged, not applied.** The kernel's
   TXDELAY etc. assume an AFSK TNC; the lead-in (`--lead-in-ms`) covers
   key-up and squelch here.
@@ -99,7 +107,19 @@ Done:
 - Manual run: two TNC processes over `ota_sim --channel fm` at mode 2,
   frames delivered byte-identical in ~0.9 s each way.
 
-Next: the kernel AX.25 test below.
+- **Kernel AX.25 test (2026-10-05):** two TNCs (mode 2, r1_2_k7) over
+  `ota_sim --channel fm` at 15 dB CNR, both attached with `kissattach`:
+  - `beacon` UI frames arrived in auto, SMACK and FlexNet mode;
+  - `axcall owa K0MDT-2` to `ax25d` completed in plain, SMACK and FlexNet
+    mode - connect (SABM/UA), the 54-byte greeting I-frame, disconnect
+    (DISC/UA), plus interactive typed lines each acknowledged - with no
+    retries, ~0.6-0.9 s per burst, SNR 17-19 dB;
+  - kernel T1 of 10 s was ample at mode 2 (raise it for mode 0, whose
+    bursts are several seconds).
+- SMACK/FlexNet support added after the first kernel run (the kernel's
+  auto-mode probe frames were initially rejected as "port 8"); tests now
+  cover both CRCs (incl. the standard CRC-16/ARC check value and mkiss's
+  FlexNet table) and a SMACK host getting SMACK replies end to end.
 
 ### Milestone 1: kernel AX.25 test (needs root)
 
@@ -127,6 +147,14 @@ python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
 sudo kissattach /tmp/kiss-a owa
 sudo kissattach /tmp/kiss-b owb
 ```
+
+Notes from running it:
+- **Restarting a TNC gives it a new pty**, which drops the kernel port.
+  Stop the old `kissattach` (`sudo pkill kissattach`), attach the new pty,
+  and restart `ax25d` (`sudo pkill ax25d; sudo ax25d`) so it binds the new
+  port - otherwise connections are accepted but its program never runs.
+- Forcing a framing for testing: `sudo kissparms -p owa -c N` (0 auto,
+  1 plain, 2 FlexNet, 3 SMACK); the default auto mode works as is.
 
 Then:
 - **UI frames:** `sudo axlisten -a` in one terminal, `sudo beacon -s -d K0MDT-2 owa "hello"`

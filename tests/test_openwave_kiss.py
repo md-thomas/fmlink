@@ -48,6 +48,38 @@ class KissFramingTests(unittest.TestCase):
         self.assertEqual(kiss.Decoder().feed(b'junk' + kiss.encode(b'x')), [(0, 0, b'x')])
 
 
+class CrcVariantTests(unittest.TestCase):
+    """SMACK and FlexNet, as Linux's mkiss sends them in its default auto mode."""
+
+    def test_smack_crc_is_crc16_arc(self):
+        self.assertEqual(kiss.crc_smack(b'123456789'), 0xBB3D)  # the standard check value
+
+    def test_flexnet_table_matches_mkiss(self):
+        self.assertEqual(kiss._FLEX_TABLE[:8],
+                         [0x0F87, 0x1E0E, 0x2C95, 0x3D1C, 0x49A3, 0x582A, 0x6AB1, 0x7B38])
+
+    def test_round_trip_and_mode_tracking(self):
+        frame = kiss.ax25_ui_frame('K0MDT-1', 'K0MDT-2', bytes(range(256)))
+        for mode in (kiss.CRC_SMACK, kiss.CRC_FLEXNET, kiss.CRC_NONE):
+            with self.subTest(mode=mode):
+                decoder = kiss.Decoder()
+                self.assertEqual(decoder.feed(kiss.encode(frame, crc=mode)), [(0, kiss.CMD_DATA, frame)])
+                self.assertEqual(decoder.crc_mode, mode)
+
+    def test_flag_bits_without_a_valid_crc_are_ports(self):
+        # A plain frame for port 2 (type 0x20) or port 8 (0x80) must not be
+        # mistaken for FlexNet / SMACK just because the flag bit is set.
+        decoder = kiss.Decoder()
+        self.assertEqual(decoder.feed(kiss.encode(b'port two', port=2)), [(2, 0, b'port two')])
+        self.assertEqual(decoder.feed(kiss.encode(b'port eight', port=8)), [(8, 0, b'port eight')])
+
+    def test_corrupted_crc_is_not_accepted_as_crc_frame(self):
+        encoded = bytearray(kiss.encode(b'hello', crc=kiss.CRC_SMACK))
+        encoded[3] ^= 0x01  # flip a bit in the data
+        (port, command, data), = kiss.Decoder().feed(bytes(encoded))
+        self.assertEqual(port, 8)  # fell back to "plain frame for port 8", which the TNC ignores
+
+
 class Ax25AddressTests(unittest.TestCase):
     def test_ui_frame_endpoints(self):
         frame = kiss.ax25_ui_frame('K0MDT-7', 'W1AW', b'hello')
@@ -128,6 +160,32 @@ class TncRelayTests(unittest.TestCase):
             wa.close()
             a.close(), b.close(), sim.close()
             self.assertEqual(got, [kiss.ax25_ui_frame('W1AW', 'K0MDT', b'from the pty')])
+        asyncio.run(scenario())
+
+    def test_replies_match_a_smack_host(self):
+        async def scenario():
+            sim, a, b = await self._setup()
+            ra, wa = await asyncio.open_connection(*a.hub.tcp_address)
+            rb, wb = await asyncio.open_connection(*b.hub.tcp_address)
+            await asyncio.sleep(0.05)
+            # Host B announces SMACK by sending a SMACK frame; A stays plain.
+            wb.write(kiss.encode(kiss.ax25_ui_frame('K0MDT-2', 'K0MDT-1', b'smack host'), crc=kiss.CRC_SMACK))
+            got_a = await self._read_frames(ra, kiss.Decoder(), 1)
+            wa.write(kiss.encode(kiss.ax25_ui_frame('K0MDT-1', 'K0MDT-2', b'to the smack host')))
+            raw = b''
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 8
+            while raw.count(bytes([kiss.FEND])) < 2 and loop.time() < deadline:
+                raw += await asyncio.wait_for(rb.read(4096), deadline - loop.time())
+            for w in (wa, wb):
+                w.close()
+            a.close(), b.close(), sim.close()
+            self.assertEqual(got_a, [kiss.ax25_ui_frame('K0MDT-2', 'K0MDT-1', b'smack host')])
+            self.assertTrue(raw[1] & 0x80, "reply to a SMACK host must be SMACK-framed")
+            decoder = kiss.Decoder()
+            self.assertEqual(decoder.feed(raw), [(0, 0, kiss.ax25_ui_frame('K0MDT-1', 'K0MDT-2',
+                                                                        b'to the smack host'))])
+            self.assertEqual(decoder.crc_mode, kiss.CRC_SMACK)
         asyncio.run(scenario())
 
     def test_ax25_frames_bypass_the_chat_link_layer(self):
