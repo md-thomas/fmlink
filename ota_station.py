@@ -325,7 +325,7 @@ class Station:
 
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
-                 on_message=None, verbose=False, on_log=None, on_symbols=None,
+                 on_message=None, verbose=False, on_log=None, on_symbols=None, on_ax25=None,
                  phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S):
         self.station_id = station_id
         self.dst_id = dst_id
@@ -339,6 +339,9 @@ class Station:
         # duplicating the RX pipeline to get at received symbols.
         self._on_log = on_log
         self._on_symbols = on_symbols
+        # openwave_tnc.py's hook: called with each received AX.25 frame
+        # (packet type AX.25), which bypasses the chat link layer entirely.
+        self._on_ax25 = on_ax25
         # Ceiling on what --auto is willing to pick (see
         # NARROWBAND_MAX_SYMBOL_RATE/select_mode_for_snr's max_symbol_rate
         # param) - None (wide, the default) considers every mode, matching
@@ -504,6 +507,29 @@ class Station:
         adds its transport's per-direction overhead (PTT, mute, detection)."""
         overhead = getattr(self._sim, 'overhead_s', 0.0)
         return base_s + 2 * self._last_tx_airtime_s + 2 * overhead
+
+    def send_ax25(self, ax25_frame, src_call='', dst_call=''):
+        """Transmit one AX.25 frame (as KISS carries it) as a single
+        OpenWave frame of packet type AX.25, at the current mode/FEC. No
+        OpenWave ACK or fragmentation: AX.25 does its own. src_call /
+        dst_call go in the OpenWave header (callsigns it can pack, else
+        left blank) - informational, the AX.25 frame carries the real
+        addresses. Returns the burst's airtime in seconds."""
+        def packable(call):
+            try:
+                link.pack_callsign(call)
+                return call
+            except ValueError:
+                return ''
+        if len(ax25_frame) > link.MAX_PAYLOAD_LEN:
+            raise ValueError(f"AX.25 frame of {len(ax25_frame)} bytes exceeds {link.MAX_PAYLOAD_LEN}")
+        frame = link.build_frame(
+            ax25_frame, packet_type=link.PACKET_TYPE_AX25, mode_id=self.mode_id, seq=self._seq,
+            src_id=packable(src_call), dst_id=packable(dst_call))
+        self._seq = (self._seq + 1) % link.SEQ_MODULUS
+        self.stats['sent_ax25_frames'] = self.stats.get('sent_ax25_frames', 0) + 1
+        self._transmit_frame(frame)
+        return self._last_tx_airtime_s
 
     # -- simulator connection -----------------------------------------
     async def connect(self, sim_host, sim_port):
@@ -718,6 +744,18 @@ class Station:
 
         for status, header, payload_bytes in frames:
             if status == 'ok':
+                if header['packet_type'] == link.PACKET_TYPE_AX25:
+                    # A KISS TNC passes every frame up, like any TNC: the host's
+                    # AX.25 stack does the addressing, ACKs and ordering.
+                    try:
+                        ax25_frame = link.application_payload(header, payload_bytes)
+                    except ValueError:
+                        self.receiver.counts['bad_extension'] += 1
+                        continue
+                    self.stats['received_ax25_frames'] = self.stats.get('received_ax25_frames', 0) + 1
+                    if self._on_ax25:
+                        self._on_ax25(ax25_frame)
+                    continue
                 if header['packet_type'] == link.PACKET_TYPE_CONTROL:
                     try:
                         control_payload = link.application_payload(header, payload_bytes)
@@ -1548,6 +1586,33 @@ def default_log_path(station_id):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', f'{station_id}-{stamp}.log')
 
 
+async def connect_from_args(station, args):
+    """Connect station to a real radio (args.radio, with args.ptt_line and
+    args.tx_level) or the ota_sim simulator (args.sim_host/args.sim_port);
+    exits with a message on failure. Returns a short description of the
+    link. Shared with openwave_tnc.py."""
+    if args.radio is not None:
+        try:
+            st = dict(radio_stations.pick_local(args.radio or None))
+        except ValueError as exc:
+            sys.exit(f"error: {exc}")
+        if args.ptt_line:
+            st['ptt_line'] = args.ptt_line
+        if not st['ptt_port']:
+            sys.exit(f"error: {st['name']} has no PTT serial port detected, so it can't transmit")
+        await station.connect_radio(st, args.tx_level)
+        return f"on air via {st['name']} (PTT {st['ptt_line'].upper()}, {st['rx_device']})"
+    if SimClient is None:
+        sys.exit("error: ota_sim is not installed - run `pip install -e ../ota_sim` "
+                 "from this repo (see /data/Projects/ota_sim/README.md)")
+    try:
+        await station.connect(args.sim_host, args.sim_port)
+    except OSError as exc:
+        sys.exit(f"error: can't reach the ota_sim simulator at {args.sim_host}:{args.sim_port} "
+                 f"({exc}) - is `python3 -m ota_sim.simulator` running?")
+    return f"relaying via {args.sim_host}:{args.sim_port}"
+
+
 async def run(args):
     # --auto's whole point is picking the mode/FEC for you from the
     # threshold table (see openwave_link.py's MODE_SNR_TABLE), which is
@@ -1566,27 +1631,7 @@ async def run(args):
         os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
         station.open_log_file(log_path)
         station._trace(f"args: {' '.join(sys.argv[1:])}")
-    if args.radio is not None:
-        try:
-            st = dict(radio_stations.pick_local(args.radio or None))
-        except ValueError as exc:
-            sys.exit(f"error: {exc}")
-        if args.ptt_line:
-            st['ptt_line'] = args.ptt_line
-        if not st['ptt_port']:
-            sys.exit(f"error: {st['name']} has no PTT serial port detected, so it can't transmit")
-        await station.connect_radio(st, args.tx_level)
-        link_note = f"on air via {st['name']} (PTT {st['ptt_line'].upper()}, {st['rx_device']})"
-    else:
-        if SimClient is None:
-            sys.exit("error: ota_sim is not installed - run `pip install -e ../ota_sim` "
-                     "from this repo (see /data/Projects/ota_sim/README.md)")
-        try:
-            await station.connect(args.sim_host, args.sim_port)
-        except OSError as exc:
-            sys.exit(f"error: can't reach the ota_sim simulator at {args.sim_host}:{args.sim_port} "
-                     f"({exc}) - is `python3 -m ota_sim.simulator` running?")
-        link_note = f"relaying via {args.sim_host}:{args.sim_port}"
+    link_note = await connect_from_args(station, args)
     bandwidth_note = f" bandwidth={args.bandwidth}" if args.auto else ""
     phy_note = (f"phy=audio ({args.audio_port} port, "
                 f"{audio_phy.PORT_PROFILES[args.audio_port]['carrier_hz']:g} Hz carrier)"

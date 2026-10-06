@@ -103,12 +103,16 @@ PACKET_TYPE_DATA = 0x01
 PACKET_TYPE_ACK = 0x02
 PACKET_TYPE_BEACON = 0x03
 PACKET_TYPE_CONTROL = 0x04
+# The payload is one AX.25 frame (as KISS carries it: addresses, control,
+# PID and info, no flags or FCS) for a KISS host - see openwave_tnc.py.
+PACKET_TYPE_AX25 = 0x05
 
 _PACKET_TYPE_NAMES = {
     PACKET_TYPE_DATA: 'Data',
     PACKET_TYPE_ACK: 'ACK',
     PACKET_TYPE_BEACON: 'Beacon',
     PACKET_TYPE_CONTROL: 'Control',
+    PACKET_TYPE_AX25: 'AX.25',
 }
 
 
