@@ -11,6 +11,15 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Where we are (2026-10-05)
 
+**Stopped here for the night (2026-10-05).** Waiting on radio parts before
+any on-air testing. Pat peer-to-peer over OpenWave works end to end over the
+simulator. When the parts arrive, follow
+[RADIO_SETUP.md: Winlink peer-to-peer (Pat) over OpenWave](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave)
+on both stations (both laptops are on current `main`, with `ax25-tools` and Pat
+installed): TNC on the radio, `kissattach`, the raw `axcall` check, then
+Pat. Radio-free work available meanwhile: soft-decision Viterbi, receiver
+CPU use (before a Raspberry Pi), TNC burst batching and carrier sense.
+
 **The live station now runs over real radios.** Two computers, each with an
 HT on a USB audio interface (an AIOC and a Digirig), run
 `ota_station.py --phy audio --audio-port mic --radio --ack --auto` and
@@ -111,9 +120,10 @@ cost of high peak power through the FM limiter.
 
 Next, roughly in order:
 
-1. **Update both laptops to current `main`** (frame format v2 + KISS TNC;
-   v1 and v2 can't hear each other) and install `ax25-tools` on the second.
-2. **KISS TNC Milestone 2: Pat peer-to-peer over the radios**, then
+1. ~~Update both laptops to current `main` and install `ax25-tools` and
+   Pat~~ - done 2026-10-05.
+2. **KISS TNC Milestone 2: Pat peer-to-peer over the radios** (rehearsed
+   over the simulator 2026-10-05), then
    digipeating and a gateway ([KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)).
 3. **Weak-link testing over the air** (planned above, now with v2 bursts).
 4. **Phase 5 on real radios - the rest.** Done: audio I/O, PTT and an

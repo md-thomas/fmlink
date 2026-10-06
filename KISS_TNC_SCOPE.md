@@ -4,8 +4,10 @@ Status: **Milestone 1 done (2026-10-05).** The Linux kernel AX.25 stack
 runs unmodified over two OpenWave TNCs and the simulated FM link: single
 frames (`beacon`) and full connected sessions (`axcall` to `ax25d`) in
 every KISS framing mkiss uses (plain, SMACK, FlexNet, and its default
-auto mode). Next: Milestone 2, Pat peer-to-peer over the real radios
-(waiting on radio time).
+auto mode). **Milestone 2 rehearsed over the simulator (2026-10-05):** a
+Winlink message from Pat K0MDT-1 to Pat K0MDT-2 through two TNCs and the
+simulated FM link. The on-air run waits on radio parts; the setup is in
+[RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave).
 
 ## Goal
 
@@ -166,6 +168,30 @@ AX.25 timers: the kernel's defaults assume short 1200-baud frames. Check
 `/proc/sys/net/ax25/owa/` (`t1_timeout` is the retry timer, in ms); if
 frames are being retried before the reply could have arrived (several
 seconds per burst at mode 0), raise it.
+
+## Milestone 2 rehearsal (simulator, 2026-10-05)
+
+Pat v1.0.0 on one machine, two instances with their own `--config` and
+`--mbox` (K0MDT-1 on axport `owa`, K0MDT-2 on `owb`), two TNCs at mode 2
+(r1_2_k7) over `ota_sim --channel fm` at 15 dB CNR:
+
+- K0MDT-2 ran `pat --listen ax25 http`; K0MDT-1 composed a P2P-only message
+  and ran `pat connect ax25:///K0MDT-2`.
+- The full B2F exchange (handshake, proposal, `FS +`, transfer, `FF`/`FQ`)
+  took **18.6 s**, about 25 bursts each way (0.6-1.5 s each, SNR 17-18 dB).
+  The message arrived intact in K0MDT-2's inbox.
+- Findings:
+  - Pat accepts SSID callsigns (`K0MDT-1`) as `mycall` for P2P.
+  - Pat needs no root for AX.25; only `kissattach`/`ax25d` do.
+  - The kernel's default AX.25 timers were fine at mode 2.
+  - Pat compresses B2F messages itself (gzip here: 531 -> 390 bytes), which
+    confirms that OpenWave's own payload compression wouldn't help Winlink.
+  - Before connecting, Pat checks Winlink's online account lookup for
+    `mycall`. With an SSID callsign that finds no account, so it prompts
+    "unable to confirm...account is active". Answering `c` is safe for P2P
+    (no gateway is involved, so no account is created); it's remembered
+    for 100 days. A placeholder password doesn't skip it (the check only
+    looks at the lookup and mailbox history).
 
 ## Limits
 

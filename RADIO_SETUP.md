@@ -281,12 +281,125 @@ unchanged:
   time afterwards. The station's reply timeouts allow 2 seconds per
   direction for key-up, detection and decode.
 
-## Packet radio (KISS TNC) over the radios
+## Winlink peer-to-peer (Pat) over OpenWave
 
-`openwave_tnc.py --callsign <call> --radio --pty-link /tmp/kiss` runs OpenWave
-as a KISS TNC on the same radio and interface, so Linux's AX.25 stack (and
-Pat for Winlink peer-to-peer) can use it via `sudo kissattach /tmp/kiss <port>`.
-Both stations need the same `--mode`, the same frame format (current
-`main`), and `ax25-tools` installed. Not yet tried over the air (Milestone 2
-in [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)); it was verified with the kernel
-AX.25 stack over the simulator.
+`openwave_tnc.py` runs OpenWave as a KISS TNC on the radio, Linux's AX.25
+stack attaches to it, and Pat (a Winlink client) sends Winlink messages
+station to station over it. **Rehearsed end to end over the simulator on
+2026-10-05** (Pat K0MDT-1 -> Pat K0MDT-2 through two TNCs and ota_sim's FM
+model, message delivered in 18.6 s); **not yet tried on the air.** Design
+and status: [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md).
+
+Stations used here: **K0MDT-1** and **K0MDT-2**, one per computer. Both TNCs
+must use the same `--mode` and frame format (current `main` on both).
+
+### One-time setup on a laptop (Debian/Ubuntu)
+
+Everything from "One-time setup, per computer" above (repo, numpy/scipy,
+PTT `dialout` permission, `./radio_stations.py`, audio leveling), then:
+
+```bash
+# AX.25 tools and kernel modules (also load them at every boot)
+sudo apt install ax25-tools ax25-apps
+sudo modprobe ax25 && sudo modprobe mkiss
+printf 'ax25\nmkiss\n' | sudo tee /etc/modules-load.d/ax25.conf
+
+# The AX.25 port: name "ow", this station's callsign (K0MDT-2 on the other one)
+printf 'ow\tK0MDT-1\t9600\t255\t2\tOpenWave TNC\n' | sudo tee -a /etc/ax25/axports
+
+# Pat (check `dpkg --print-architecture`: amd64 on Intel/AMD laptops)
+wget https://github.com/la5nta/pat/releases/download/v1.0.0/pat_1.0.0_linux_amd64.deb
+sudo apt install ./pat_1.0.0_linux_amd64.deb
+```
+
+Then `pat configure` and set (leave the rest; K0MDT-2 on the other station):
+
+```json
+"mycall": "K0MDT-1",
+"ax25": { "engine": "linux", "beacon": { "every": 0, "message": "", "destination": "" } },
+"ax25_linux": { "port": "ow" }
+```
+
+`"every": 0` stops Pat beaconing on its own. No Winlink password is needed
+for peer-to-peer.
+
+### One-time setup on a Raspberry Pi
+
+Use **Raspberry Pi OS (Bookworm) 64-bit**: it has Python 3.11 (the radio code
+needs 3.11+ for `tomllib`) and runs Pat's `arm64` build. A Pi 4 or 5 is
+recommended. **The Pi is untested so far:** the receiver re-decodes its audio
+buffer every 0.5 s and uses about half a core on a laptop, so check `top`
+while it runs (a Pi Zero is unlikely to keep up).
+
+```bash
+sudo apt update
+sudo apt install git python3-numpy python3-scipy python3-serial alsa-utils \
+                 ax25-tools ax25-apps
+git clone https://github.com/md-thomas/open_wave.git ~/Projects/open_wave
+cd ~/Projects/open_wave
+sudo usermod -aG dialout $USER          # PTT serial port; log out and back in
+sudo modprobe ax25 && sudo modprobe mkiss
+printf 'ax25\nmkiss\n' | sudo tee /etc/modules-load.d/ax25.conf
+printf 'ow\tK0MDT-2\t9600\t255\t2\tOpenWave TNC\n' | sudo tee -a /etc/ax25/axports
+wget https://github.com/la5nta/pat/releases/download/v1.0.0/pat_1.0.0_linux_arm64.deb
+sudo apt install ./pat_1.0.0_linux_arm64.deb    # 32-bit Pi OS: the _linux_armhf.deb
+./radio_stations.py                     # is the AIOC / Digirig found?
+./level_meter.py                        # level the receive audio (see above)
+```
+
+Then `pat configure` exactly as for a laptop. With a headless Pi, run each of
+the session steps below in its own `ssh` session (or `tmux`).
+
+### Each session
+
+On **both** stations:
+
+```bash
+# 1. The TNC on the radio (leave running; add --tx-level if you use one with ota_station)
+./openwave_tnc.py --callsign K0MDT-1 --radio --mode 2 --kiss-port 0 --pty-link /tmp/kiss-ow
+# 2. Attach it to the kernel (any KISS framing mode works, including the default)
+sudo kissattach /tmp/kiss-ow ow
+```
+
+Optional raw AX.25 check before Pat (good for a first on-air run). On
+K0MDT-2:
+
+```bash
+printf '[K0MDT-2 VIA ow]\nNOCALL   * * * * * *  L\ndefault  * * * * * *  -  root  /bin/echo  echo Connected to K0MDT-2 over the air\n' | sudo tee /etc/ax25/ax25d.conf
+sudo ax25d
+```
+
+and on K0MDT-1 `sudo axcall ow K0MDT-2`: expect "Connected to K0MDT-2 over the
+air", then a disconnect.
+
+The Winlink message. On **K0MDT-2** (the one receiving):
+
+```bash
+pat --listen ax25 interactive        # or: pat --listen ax25 http   (web UI on :8080)
+```
+
+On **K0MDT-1**:
+
+```bash
+pat compose                          # To: K0MDT-2 (or: echo "text" | pat compose -s "Subject" --p2p-only K0MDT-2)
+pat connect ax25:///K0MDT-2
+```
+
+Then `pat read` on K0MDT-2. Pat ran without root in the rehearsal; only
+`kissattach` and `ax25d` need `sudo`.
+
+**Pat's account prompt.** Before connecting, Pat asks Winlink's online lookup
+whether an account named exactly `K0MDT-1` exists. Winlink accounts don't
+carry SSIDs, so it warns "unable to confirm that your Winlink account is
+active" and asks `c(ontinue), a(bort)`. For a peer-to-peer connection answer
+**c**: no Winlink gateway is involved, so no account is created. Pat
+remembers the answer for 100 days (`~/.local/state/pat/.account-confirmed_K0MDT-1.json`).
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `axcall`/Pat connects, then nothing comes back | A TNC was restarted: it gets a new pty, so stop the old `kissattach` (`sudo pkill kissattach`), attach again, and restart `ax25d` / the Pat listener so they bind the new port |
+| Frames are retried before the reply could arrive | Raise the kernel's AX.25 retry timer on both stations: `echo 20000 \| sudo tee /proc/sys/net/ax25/ax0/t1_timeout` (mode 2 was fine at the default 10 s over the simulator; slower modes need more) |
+| One TNC logs `tx` but the other never `rx` | The usual radio checks (levels, PTT, squelch, frequency) from the sections above; both TNCs on the same `--mode`; both computers on the same `main` |
+| TNC logs "ignoring a frame for TNC port 8/2" | An old TNC version without SMACK/FlexNet support: `git pull` |

@@ -573,7 +573,10 @@ the same `--mode` and `--fec-preset`. KISS is also served over TCP
 **Status:** Milestone 1 is done. Linux's AX.25 stack runs unmodified over
 two TNCs and the simulated FM link: `beacon` frames and full
 `axcall`/`ax25d` connected sessions, in every KISS framing the kernel uses.
-Next is Pat peer-to-peer over the real radios.
+**Pat peer-to-peer has been rehearsed over the simulator:** a Winlink
+message from K0MDT-1 to K0MDT-2 in 18.6 s. The on-air run is next; the
+setup for laptops and a Raspberry Pi is in
+[RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave).
 [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) has the setup (including
 `axports`/`ax25d` configuration), the test notes and the remaining
 milestones (digipeating, a gateway).
