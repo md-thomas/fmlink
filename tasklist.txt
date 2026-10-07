@@ -227,6 +227,31 @@ imports, including the LinkReceiver dispatch class - see 2.10) portable.
           the Digirig plays stereo only (use ALSA plughw:); a replier must
           wait a turnaround after hearing a burst. Still open: the data
           port, closed squelch, CAT/VOX PTT, range tests, receiver CPU.
+  [ ] 5.5 Mode-table noise margin per Waveform Mode (audio_margin_sweep.py,
+          measured 2026-10-04, mic port, 30-char message, 24 bursts/point):
+          mode 0 r1_4_k9 breaks near -1 dB, mode 1 r1_2_k3 near 4.5 dB,
+          mode 2 r1_2_k3 near 7 dB (see RADIO_SETUP.md's own table). Used
+          to calibrate select_mode_for_snr()'s probe-rate penalty
+          (10*log10(rate/600)).
+          FLAGGED 2026-10-06, not yet root-caused: a fresh run of
+          audio_margin_sweep.py on another machine, with the exact same
+          default arguments, reproduces mode 0's row closely (-1 to -2 dB)
+          but puts mode 1's 50%-delivered point near ~1.75 dB and mode 2's
+          near ~5.0 dB - 2.5-3 dB more pessimistic, in both a 24-trial and
+          a 100-trial/finer-sigma-step run (so not just averaging out with
+          more trials). Cross-checked against gr-open_modem (a GNU Radio
+          OOT module wrapping this project's PHY): its own reimplementation
+          of build_samples/decode_samples, fed the identical burst and the
+          identical noise array as this script, produced bit-identical
+          output - ruling out a divergence in that project's wrapping as
+          the cause. Candidates, unconfirmed: a numpy version difference
+          changing default_rng(7)'s output sequence, or environment drift
+          since the original measurement. Needs: re-run on the original
+          measurement machine if still available, and/or check numpy
+          version at measurement time vs now, before trusting this table's
+          exact dB values for new link-margin work - the relative ordering
+          (mode 0 most noise-tolerant, then 1, then 2) still held in both
+          runs.
 
 Phase 6: Multi-Modulation Support - IN PROGRESS (CLI pipeline)
 -----------------------------------------------

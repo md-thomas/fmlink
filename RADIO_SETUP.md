@@ -237,6 +237,19 @@ transmitted):
 | 1 (BPSK 1200) | `r1_2_k3` | 4.5 dB |
 | 2 (QPSK 1200) | `r1_2_k3` | 7 dB |
 
+**Flagged 2026-10-06: modes 1/2 didn't reproduce.** Running
+`./audio_margin_sweep.py -m 1 2 --fec r1_2_k3` fresh on this machine, with
+no arguments changed from the defaults used above, reproduces mode 0's
+row closely (-1 to -2 dB) but gives mode 1's 50%-delivered point around
+~1.75 dB and mode 2's around ~5.0 dB - 2.5-3 dB more pessimistic than this
+table, consistently, in a 24-trial run and confirmed again at 100 trials
+with finer noise steps (so not just run-to-run scatter averaging out).
+Not yet root-caused - a numpy version difference affecting
+`default_rng(7)`'s output and environment drift since this was measured
+are both candidates, but unconfirmed. Worth a re-check before relying on
+this table for new link-margin work; see `tasklist.txt` for the
+cross-check that ruled out a modem/FEC code change as the cause.
+
 These SNRs are the station's own data-aided readings. A faster mode sees more
 of the channel's noise at the same signal: at identical noise, mode 1 reads
 about 3.1 dB below mode 0 and mode 2 about 2.5 dB below. `--auto` measures SNR

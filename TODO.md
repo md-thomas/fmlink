@@ -56,6 +56,9 @@ Done most recently:
   Measured cliffs: mode 0 ~-1 dB, mode 1 ~4.5 dB, mode 2 ~7 dB
   (`audio_margin_sweep.py`). Still open: re-measure under real FM noise
   and fading, and the data port's modes 3-5 (penalties of 6-12 dB).
+  **Flagged 2026-10-06, unresolved:** a fresh run of this same script
+  didn't reproduce modes 1/2's numbers (mode 0 matched) - see 5.5 in
+  `tasklist.txt` for the cross-check and candidates.
 - **Lessons learned:** a laptop headphone jack has no usable audio input; the
   CM108's Auto Gain Control must be off (it pumps and clips); the Digirig
   plays only stereo, so playback goes through ALSA `plughw:`; a replying
@@ -96,7 +99,9 @@ near their limits:
   0.12, 0.06, 0.03, with `./radio_listen.py` on the other station (or
   `ota_station.py --tx-level`). Record delivered counts and mean SNR per mode
   per level and compare with the software cliffs (mode 0 ~-1 dB, mode 1
-  ~4.5 dB, mode 2 ~7 dB; `audio_margin_sweep.py`). It tests the real receive
+  ~4.5 dB, mode 2 ~7 dB; `audio_margin_sweep.py` - modes 1/2 flagged
+  2026-10-06 as unreproduced on another machine, see 5.5 in
+  `tasklist.txt`). It tests the real receive
   chain's noise floor, not FM's RF threshold effect.
 - **RF-weak link (uncontrolled):** radios on dummy loads a few feet apart
   will stay very strong (leakage is only tens of dB down from the carrier,
