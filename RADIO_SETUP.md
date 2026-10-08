@@ -84,8 +84,11 @@ before the first run, and again if you change the volume or replug anything.
    ```
 
    (`-c Device` is the Digirig's ALSA card name; `amixer -c 1 ...` also works
-   if it is card 1.) These settings can reset when the Digirig is unplugged;
-   run them again if the meter reads wildly high.
+   if it is card 1.) **These settings reset when the Digirig is unplugged**
+   (AGC back on, capture 100 %); run them again, then re-level. Check with
+   `amixer -c Device scontents`. On 2026-10-07 a replug left AGC on and
+   halved the link: mode 2 into the Digirig fell from ~20 to ~7 dB SNR, and
+   came back to 20.6 dB once AGC was off and capture was 2.
 3. **AIOC:** leave its capture gain at the default 100 % (0 dB); it is
    adjusted with the radio's volume.
 4. Run the meter and turn the **radio's volume knob** until it says `good`:
@@ -114,7 +117,15 @@ before the first run, and again if you change the volume or replug anything.
 - The station normalises each burst's peak to `--tx-level` (default **0.5**)
   before playing it into the radio. That worked without further adjustment
   on both interfaces here. The interface's own playback volume matters too:
-  the AIOC was left at 100 %, the Digirig's `Speaker` playback at 40 %.
+  the AIOC was left at 100 %, the Digirig's `Speaker` playback at 30 %
+  (2026-10-07; was 40 %). Settings used: TIDRADIO mic gain 15 with
+  `--tx-level 0.6`; Baofeng (no mic-gain menu) via Digirig `Speaker` 30 %
+  with `--tx-level 0.5`.
+- **Finding the right TX level:** raise it until the other station's SNR
+  stops improving, then back off a step. A level sweep from the Baofeng
+  (Digirig `Speaker` 16-80 %, an 18 dB range) moved mode 2's SNR only
+  12.5 -> 13.6 dB: that direction is limited by the radios' treble roll-off,
+  not level (see "Frequency response" below).
 - **Check TX level from the other station:** run `./level_meter.py` on the
   receiving station while the other one sends. A burst should show clearly
   above the idle hiss without pinning at `CLIPPING`. If the received burst
@@ -205,7 +216,7 @@ These are for checking one thing at a time. None uses ssh unless noted.
 | `./radio_listen.py` | decode bursts arriving at this station, one line each with mode, SNR and message; Ctrl-C prints a summary; `--wav FILE` replays a recording |
 | `./air_loopback_test.py` | two full stations over an in-memory simulated air; no hardware, nothing transmitted (about a minute) |
 | `python3 audio_wav_test.py gen\|decode` | make a burst WAV / decode a recording, offline |
-| `./radio_link_test.py --src K0MDT --tx aioc --rx digirig ...` | one machine drives both stations over **ssh** and prints pass/fail and SNR per burst. Needs `[scan] hosts = [...]` in `stations.toml` and passwordless ssh; skip it if you control each station separately |
+| `./radio_link_test.py --src K0MDT --tx aioc --rx digirig ...` | one machine drives both stations over **ssh** and prints pass/fail and SNR per burst. Needs `[scan] hosts = [...]` in `stations.toml` and passwordless ssh; skip it if you control each station separately. **When the transmitting station is the remote one, add `--post 5`:** starting its transmitter over ssh is slow enough that the burst otherwise lands after the recording ends (every burst "fails" with sync ~0.35) |
 
 Typical one-way check: run `./radio_listen.py` on one computer, then
 `./radio_send.py --src K0MDT -m 0 1 2 --count 3` on the other.
@@ -230,6 +241,43 @@ Mode 2 (QPSK 1200, `r1_2_k3`); the first message was acknowledged 16 s after
 it was typed, and a second one 3 s after. The QPSK bursts heard after
 negotiating measured 14.8 and 14.7 dB (about 3 dB below the BPSK 600 probe,
 as expected from the doubled symbol rate), all with peaks of 0.45-0.57.
+
+### Frequency response and faster modes (2026-10-07)
+
+Stations: K0MDT-1 = AIOC + TIDRADIO HT, K0MDT-2 = Digirig + Baofeng, low
+power into dummy loads ~2 m apart, open squelch. A 100 Hz - 8 kHz tone sweep
+(level 0.3) through each direction, level relative to the peak:
+
+| Hz | TIDRADIO -> Baofeng | Baofeng -> TIDRADIO |
+|---|---|---|
+| 300 | -21 | -10 |
+| 500-1000 | 0 | 0 |
+| 1650 (mic carrier) | -1.5 | -3.5 |
+| 2000 (data carrier) | -2 | -6 |
+| 2500 | -3.5 | -9 |
+| 3000 | -5.5 | -13 |
+| 3700 | -20 | -28 |
+| 4100 and up | at the noise | -44 and falling |
+
+- **Modes 4 and 5 can't work through an HT's mic/speaker path:** they need
+  audio to ~6.5 and ~13 kHz, and nothing gets through above ~4 kHz.
+- **Mode 3 (QPSK 2400 baud) works on these HTs** with the data profile
+  (2000 Hz carrier; `radio_link_test.py --port data -m 3`), although the
+  `mic` profile caps the mic port at mode 2. After fixing the Digirig
+  (above):
+
+  | Direction | Mode 2 | Mode 3 |
+  |---|---|---|
+  | TIDRADIO -> Baofeng | 5/5, 20.6 dB, sync 1.00 | 5/5, 11.4 dB, sync 0.97 |
+  | Baofeng -> TIDRADIO | 5/5, 12.4 dB, sync 0.97 | 5/5, 7.8 dB, sync 0.92 |
+
+- **Baofeng -> TIDRADIO is distortion-limited.** That direction rolls off
+  about 6 dB per octave above 1 kHz (de-emphasis in the receiver without
+  matching pre-emphasis at the sender, by the look of it). The modem has no
+  equalizer, so the tilt smears the symbols and the SNR stops near 13 dB
+  (mode 2) whatever the TX level, while the noise in that direction is low
+  (55-65 dB in the sweep). A receive equalizer should lift it toward the
+  other direction's 20 dB and give mode 3 real margin.
 
 ### How much SNR each mode needs (software noise test)
 

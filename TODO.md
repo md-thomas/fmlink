@@ -37,10 +37,27 @@ What it took (details in RADIO_SETUP.md's Pat section):
 - Setup gotchas: the pty link must not be in `/tmp` (root can't follow a
   user's symlink there), one `axports` line per port name, restart Pat's
   listener after a stalled session.
-- **Open:** after re-leveling (2026-10-07), K0MDT-1 -> K0MDT-2 dropped from
-  ~13.5 to ~8 dB SNR (still decoding at mode 2, less margin); restore the
-  earlier level. Earlier note: the AIOC TX path has a fixed noise floor (SNR
-  rises with `--tx-level`, same for all modes); 0.6 used on K0MDT-1.
+- **Digirig reset (fixed):** replugging the Digirig turned its AGC back on
+  (capture 100 %), which dropped K0MDT-1 -> K0MDT-2 from ~20 to ~7 dB. AGC
+  off + capture 2 brought mode 2 back to 20.6 dB.
+
+**Radio audio response and mode 3 (2026-10-07).** Tone sweeps through both
+directions: the HTs pass ~300-3000 Hz and nothing above ~4 kHz, so **modes 4
+and 5 can't work through an HT's mic/speaker path.** **Mode 3 (2400 baud)
+does work on these HTs** with the data profile (2000 Hz carrier): 5/5 at
+11.4 dB (TIDRADIO -> Baofeng) and 5/5 at 7.8 dB (Baofeng -> TIDRADIO). The
+Baofeng -> TIDRADIO direction rolls off ~6 dB/octave above 1 kHz and is
+**distortion-limited**: an 18 dB TX-level sweep moved its mode 2 SNR only
+12.5 -> 13.6 dB (this explains the earlier "SNR ~14 dB whatever the TX level"
+note). Details: RADIO_SETUP.md "Frequency response and faster modes".
+Follow-ups:
+- **Receive equalizer** (top candidate): undo the tilt; should lift the
+  weak direction toward 20 dB and give mode 3 margin.
+- **Allow mode 3 on the mic port** (the `mic` profile caps it at 1200 baud):
+  a profile change plus negotiation thresholds, once the equalizer is in.
+- `radio_link_test.py` needs `--post 5` when the remote station transmits
+  (its ssh start-up delay pushes the burst past the recording); make the
+  default allow for it.
 
 **The live station now runs over real radios.** Two computers, each with an
 HT on a USB audio interface (an AIOC and a Digirig), run
