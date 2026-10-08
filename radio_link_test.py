@@ -81,6 +81,30 @@ def transmit(tx, wav_path, key_delay):
     subprocess.run(remote_cmd(tx, ['rm', '-f', remote_wav, remote_helper]), check=False, timeout=30, stdin=subprocess.DEVNULL)
 
 
+def default_post(tx):
+    """Seconds to keep recording after the burst. A remote transmitter
+    starts late (ssh, copying the WAV, Python start-up), which pushed bursts
+    past a 2 s tail on 2026-10-07."""
+    return 2.0 if is_local(tx) else 5.0
+
+
+def pick_stations(detected, tx_name, rx_name, swap=False):
+    """(tx, rx) from the detected stations: named, or with neither named
+    exactly two detected (swap reverses them). Raises ValueError."""
+    if tx_name is None and rx_name is None:
+        if len(detected) != 2:
+            raise ValueError("auto-pick needs exactly two detected stations, found: "
+                             + (', '.join(stations_mod.label(x) for x in detected) or 'none'))
+        tx, rx = detected[::-1] if swap else detected
+    elif tx_name is None or rx_name is None:
+        raise ValueError("give both --tx and --rx, or neither to auto-pick")
+    else:
+        tx, rx = (stations_mod.resolve(n, detected) for n in (tx_name, rx_name))
+    if tx is rx:
+        raise ValueError("--tx and --rx must be different stations")
+    return tx, rx
+
+
 def start_recorder(rx, seconds, path):
     cmd = ['arecord', '-q', '-D', rx['rx_device'], '-f', 'S16_LE', '-r', str(audio.AUDIO_SAMPLE_RATE),
            '-c', str(rx['rx_channels']), '-d', str(seconds), path]
@@ -96,7 +120,8 @@ def run_burst(args, tx, rx, mode, index, workdir):
     rx_wav = os.path.join(workdir, f'rx_m{mode}_{index}.wav')
     write_wav(tx_wav, samples)
 
-    record_s = math.ceil(args.pre + airtime + args.post)
+    post = args.post if args.post is not None else default_post(tx)
+    record_s = math.ceil(args.pre + airtime + post)
     rec_path = rx_wav if is_local(rx) else f'/tmp/radio_link_test_{os.getpid()}_rx.wav'
     rec = start_recorder(rx, record_s, rec_path)
     result = {'mode': mode, 'index': index, 'airtime': airtime, 'text': text}
@@ -161,27 +186,18 @@ def main():
     p.add_argument('--lead-in', type=float, default=0.5, help='silence before the burst, s')
     p.add_argument('--key-delay', type=float, default=0.2, help='seconds between PTT and audio')
     p.add_argument('--pre', type=float, default=3.0, help='record this long before keying, s')
-    p.add_argument('--post', type=float, default=2.0, help='record this long after the burst, s')
+    p.add_argument('--post', type=float,
+                   help='record this long after the burst, s (default 2, or 5 when the '
+                        'transmitting station is remote)')
     p.add_argument('--gap', type=float, default=2.0, help='pause between bursts, s')
     p.add_argument('--keep', metavar='DIR', help='keep the TX/RX WAVs in DIR (default: discard)')
     p.add_argument('--yes', action='store_true', help='do not ask before transmitting')
     args = p.parse_args()
 
-    detected = stations_mod.find_stations(args.stations)
     try:
-        if args.tx is None and args.rx is None:
-            if len(detected) != 2:
-                raise ValueError("auto-pick needs exactly two detected stations, found: "
-                                 + (', '.join(stations_mod.label(x) for x in detected) or 'none'))
-            tx, rx = detected[::-1] if args.swap else detected
-        elif args.tx is None or args.rx is None:
-            raise ValueError("give both --tx and --rx, or neither to auto-pick")
-        else:
-            tx, rx = (stations_mod.resolve(n, detected) for n in (args.tx, args.rx))
+        tx, rx = pick_stations(stations_mod.find_stations(args.stations), args.tx, args.rx, args.swap)
     except ValueError as exc:
         p.error(str(exc))
-    if tx is rx:
-        p.error("--tx and --rx must be different stations")
     tx = dict(tx)
     if args.ptt_line:
         tx['ptt_line'] = args.ptt_line

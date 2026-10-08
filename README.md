@@ -907,10 +907,15 @@ which modes can be used (unlike `--bandwidth`, which only steers
 
 | Port | Carrier | Max symbol rate | Usable modes |
 |---|---|---|---|
-| `mic` (speaker/mic, 300-3000 Hz, emphasis) | 1650 Hz | 1200 | 0, 1, 2 |
+| `mic` (speaker/mic, 300-3000 Hz, emphasis) | 1650 Hz (2000 Hz for mode 3) | 2400 | 0, 1, 2, 3 |
 | `data` (6-pin data port, flat to ~5 kHz) | 2000 Hz | 2400 | 0, 1, 2, 3 |
 
 Modes 4 and 5 (4800/9600 sym/s) don't fit any FM radio's audio passband.
+Mode 3 on the mic port overhangs the nominal 300-3000 Hz, but delivered
+5/5 each way on the air through two HTs (2026-10-07; RADIO_SETUP.md
+"Frequency response and faster modes"), so the mic port allows it and
+`--auto` picks it when the link is good enough (a 600 baud probe at about
+15 dB or more).
 
 **Measured through the FM model** (narrow channel, r1_2_k7, 10 bursts
 per point, % delivered):

@@ -146,8 +146,10 @@ before the first run, and again if you change the volume or replug anything.
 ### 3. Both radios
 
 Same frequency, clear channel, low power, FM, the `mic` audio port (the
-interfaces above connect to the radio's mic/speaker lines; it limits modes to
-1200 symbols/s, i.e. modes 0-2).
+interfaces above connect to the radio's mic/speaker lines). It carries modes
+0-3: modes 0-2 on a 1650 Hz carrier, mode 3 (2400 symbols/s) on 2000 Hz.
+Check a new pair of radios with `./radio_response.py` (below) - mode 3 needs
+audio out to about 3.6 kHz.
 
 ## Running the live stations
 
@@ -216,7 +218,8 @@ These are for checking one thing at a time. None uses ssh unless noted.
 | `./radio_listen.py` | decode bursts arriving at this station, one line each with mode, SNR and message; Ctrl-C prints a summary; `--wav FILE` replays a recording |
 | `./air_loopback_test.py` | two full stations over an in-memory simulated air; no hardware, nothing transmitted (about a minute) |
 | `python3 audio_wav_test.py gen\|decode` | make a burst WAV / decode a recording, offline |
-| `./radio_link_test.py --src K0MDT --tx aioc --rx digirig ...` | one machine drives both stations over **ssh** and prints pass/fail and SNR per burst. Needs `[scan] hosts = [...]` in `stations.toml` and passwordless ssh; skip it if you control each station separately. **When the transmitting station is the remote one, add `--post 5`:** starting its transmitter over ssh is slow enough that the burst otherwise lands after the recording ends (every burst "fails" with sync ~0.35) |
+| `./radio_link_test.py --src K0MDT --tx aioc --rx digirig ...` | one machine drives both stations over **ssh** and prints pass/fail and SNR per burst. Needs `[scan] hosts = [...]` in `stations.toml` and passwordless ssh; skip it if you control each station separately. When the transmitting station is the remote one it records 5 s past the burst (starting a transmitter over ssh is slow); `--post` overrides |
+| `./radio_response.py --tx aioc --rx digirig@lenovo` | the link's **audio frequency response**: a 6 s tone sweep from one station, recorded by the other (local or over ssh like `radio_link_test.py`); prints the level and SNR per frequency and each mode's band edges. Use it on a new pair of radios to see which modes fit |
 
 Typical one-way check: run `./radio_listen.py` on one computer, then
 `./radio_send.py --src K0MDT -m 0 1 2 --count 3` on the other.
@@ -246,7 +249,8 @@ as expected from the doubled symbol rate), all with peaks of 0.45-0.57.
 
 Stations: K0MDT-1 = AIOC + TIDRADIO HT, K0MDT-2 = Digirig + Baofeng, low
 power into dummy loads ~2 m apart, open squelch. A 100 Hz - 8 kHz tone sweep
-(level 0.3) through each direction, level relative to the peak:
+(level 0.3; `./radio_response.py`) through each direction, level relative
+to the peak:
 
 | Hz | TIDRADIO -> Baofeng | Baofeng -> TIDRADIO |
 |---|---|---|
@@ -261,10 +265,10 @@ power into dummy loads ~2 m apart, open squelch. A 100 Hz - 8 kHz tone sweep
 
 - **Modes 4 and 5 can't work through an HT's mic/speaker path:** they need
   audio to ~6.5 and ~13 kHz, and nothing gets through above ~4 kHz.
-- **Mode 3 (QPSK 2400 baud) works on these HTs** with the data profile
-  (2000 Hz carrier; `radio_link_test.py --port data -m 3`), although the
-  `mic` profile caps the mic port at mode 2. After fixing the Digirig
-  (above):
+- **Mode 3 (QPSK 2400 baud) works on these HTs** on a 2000 Hz carrier
+  (measured with `radio_link_test.py --port data -m 3`; the `mic` profile
+  now allows mode 3 on that carrier, so `--auto` uses it). After fixing the
+  Digirig (above):
 
   | Direction | Mode 2 | Mode 3 |
   |---|---|---|

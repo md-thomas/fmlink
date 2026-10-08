@@ -99,12 +99,16 @@ Audio PHY (a radio's audio port, e.g. a VHF/UHF FM transceiver):
                                 audio connection, and both ends must use the
                                 same one:
                                   mic  (microphone/speaker path, ~300-3000 Hz,
-                                       pre/de-emphasis): fc = 1650 Hz,
-                                       max 1200 sym/s - Modes 0-2
+                                       pre/de-emphasis): max 2400 sym/s -
+                                       Modes 0-3. fc = 1650 Hz for 600 and
+                                       1200 sym/s, fc = 2000 Hz for 2400
+                                       sym/s (Mode 3; measured on air
+                                       through two HTs, 2026-10-07)
                                   data (6-pin data port, flat to ~5 kHz):
                                        fc = 2000 Hz, max 2400 sym/s - Modes 0-3
                                 Modes 4-5 don't fit an FM radio's audio
-                                passband.
+                                passband (nothing above ~4 kHz gets
+                                through an HT's mic/speaker path).
     Burst:                      Lead-in silence (default 250 ms; it must
                                 exceed the transmitter's key-up time plus
                                 the far receiver's squelch opening time),

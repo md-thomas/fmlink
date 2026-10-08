@@ -53,11 +53,14 @@ note). Details: RADIO_SETUP.md "Frequency response and faster modes".
 Follow-ups:
 - **Receive equalizer** (top candidate): undo the tilt; should lift the
   weak direction toward 20 dB and give mode 3 margin.
-- **Allow mode 3 on the mic port** (the `mic` profile caps it at 1200 baud):
-  a profile change plus negotiation thresholds, once the equalizer is in.
-- `radio_link_test.py` needs `--post 5` when the remote station transmits
-  (its ssh start-up delay pushes the burst past the recording); make the
-  default allow for it.
+- ~~Allow mode 3 on the mic port~~ - done 2026-10-07: the `mic` profile
+  carries up to 2400 baud, mode 3 on a 2000 Hz carrier (modes 0-2 stay on
+  1650 Hz; `openwave_audio.carrier_for`). The existing MODE_SNR_TABLE row
+  fits: software noise sweep cliffs for mode 3 (all delivered at 8.2 dB,
+  ~half at 5 dB) match mode 2's, so `--auto` picks mode 3 from a 600 baud
+  probe of ~15 dB. Still to confirm on the air with `--auto`.
+- ~~`radio_link_test.py` `--post` with a remote transmitter~~ - defaults to 5 s
+  then. `radio_response.py` added (the sweep as a tool).
 
 **The live station now runs over real radios.** Two computers, each with an
 HT on a USB audio interface (an AIOC and a Digirig), run

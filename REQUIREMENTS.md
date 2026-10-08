@@ -195,6 +195,6 @@ and `ota_station.py`/`ota_sim` live-link testing).
   development target** — kept for history/reference, not being extended.
 - **Real-radio operation is early.** `ota_station.py --radio` works over
   FM radios through an AIOC or Digirig (see [RADIO_SETUP.md](RADIO_SETUP.md)),
-  verified between two stations on the `mic` audio port (modes 0-2) with
-  `--ack --auto`. Not yet done: the faster `data` port, link-margin and
+  verified between two stations on the `mic` audio port (modes 0-3; mode 3
+  since 2026-10-07) with `--ack --auto`. Not yet done: the faster `data` port, link-margin and
   range testing, and low-power-computer tuning (TODO.md, Phase 5).

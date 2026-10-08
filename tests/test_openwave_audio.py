@@ -77,7 +77,8 @@ class ModulateTests(unittest.TestCase):
     def test_spectrum_sits_inside_each_ports_passband(self):
         for port, profile in audio_phy.PORT_PROFILES.items():
             with self.subTest(port=port):
-                rate, fc = profile['max_symbol_rate'], profile['carrier_hz']
+                rate = profile['max_symbol_rate']
+                fc = audio_phy.carrier_for(port, rate)
                 audio = audio_phy.modulate(MODULATORS['qpsk'](_rng_bytes(400)), rate, fc)
                 power = np.abs(np.fft.rfft(audio)) ** 2
                 freqs = np.fft.rfftfreq(len(audio), 1 / FS)
@@ -260,7 +261,7 @@ class FMChannelTests(unittest.TestCase):
     def decode_through_fm(self, port, mode_id, cnr_db, seed=1, **fm_kwargs):
         info = link.WAVEFORM_MODES[mode_id]
         modulation, rate = info['modulation'], info['symbol_rate']
-        fc = audio_phy.PORT_PROFILES[port]['carrier_hz']
+        fc = audio_phy.carrier_for(port, rate)
         generators, k = fec.PRESETS['r1_2_k7']
         payload = b'audio phy over FM ' * 4
         frame = link.build_frame(payload, seq=1, mode_id=mode_id)

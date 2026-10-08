@@ -41,16 +41,27 @@ import openwave_pulse as pulse
 AUDIO_SAMPLE_RATE = 48000
 
 # Where each radio audio connection puts the carrier, and the highest
-# symbol rate whose RRC spectrum (symbol_rate * (1 + alpha) wide) fits its
-# passband (see ota_sim's PORT_PRESETS):
-#   mic:  300-3000 Hz, so 1650 Hz centers 1200 baud at 840-2460 Hz;
-#         2400 baud (3240 Hz wide) can't fit.
+# symbol rate it carries. An RRC signal is symbol_rate * (1 + alpha) wide.
+#   mic:  nominally 300-3000 Hz (ota_sim's PORT_PRESETS). 1650 Hz centers
+#         600/1200 baud (1200 baud at 840-2460 Hz). 2400 baud (380-3620 Hz)
+#         overhangs that, but measured through two HTs' mic/speaker paths
+#         (2026-10-07: flat to ~2.3 kHz, -5 to -13 dB at 3 kHz, nothing
+#         above ~4 kHz) mode 3 on a 2000 Hz carrier delivered 5/5 each way
+#         at 11.4 and 7.8 dB, so the mic port allows it, on 2000 Hz.
 #   data: ~10 Hz-5 kHz flat, so 2000 Hz carries 2400 baud at 380-3620 Hz,
 #         clear of the upper roll-off.
+# carrier_hz is the port's carrier; carriers_by_rate overrides it for a
+# symbol rate (see carrier_for()).
 PORT_PROFILES = {
-    'mic': {'carrier_hz': 1650.0, 'max_symbol_rate': 1200},
+    'mic': {'carrier_hz': 1650.0, 'max_symbol_rate': 2400, 'carriers_by_rate': {2400: 2000.0}},
     'data': {'carrier_hz': 2000.0, 'max_symbol_rate': 2400},
 }
+
+
+def carrier_for(port, symbol_rate):
+    """The carrier (Hz) a port uses at symbol_rate."""
+    prof = PORT_PROFILES[port]
+    return prof.get('carriers_by_rate', {}).get(symbol_rate, prof['carrier_hz'])
 
 # Silence before the burst's first symbol: the receiver loses ~100-300 ms
 # to transmitter key-up (TXDELAY) plus squelch opening, and a frame's own

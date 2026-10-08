@@ -363,7 +363,6 @@ class Station:
         if phy == 'audio':
             if audio_port not in audio_phy.PORT_PROFILES:
                 raise ValueError(f"phy='audio' needs audio_port, one of {sorted(audio_phy.PORT_PROFILES)}")
-            self._carrier_hz = audio_phy.PORT_PROFILES[audio_port]['carrier_hz']
             self._phy_max_symbol_rate = audio_phy.PORT_PROFILES[audio_port]['max_symbol_rate']
             if link.WAVEFORM_MODES[mode_id]['symbol_rate'] > self._phy_max_symbol_rate:
                 raise ValueError(f"{link.format_mode(mode_id)} doesn't fit the {audio_port} audio port "
@@ -487,6 +486,10 @@ class Station:
         if f is not None:
             f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
+    def _carrier_for(self, symbol_rate):
+        """Audio carrier for a symbol rate on this station's port."""
+        return audio_phy.carrier_for(self.audio_port, symbol_rate)
+
     def _ceiling_for(self, bandwidth):
         """Effective max symbol rate for a --bandwidth setting: the
         narrowband ceiling (if narrow) and the audio port's (if any),
@@ -549,7 +552,7 @@ class Station:
             return [(modulation, rate, use_fec, gens, k)
                     for modulation, rate, _demod, use_fec, gens, k in self._demod_attempts()]
         self._sim = await radio.RadioTransport(
-            self._burst_received, attempts, self._carrier_hz,
+            self._burst_received, attempts, self._carrier_for,
             capture or (lambda: radio.arecord_chunks(station['rx_device'], station['rx_channels'])),
             player or radio.make_player(station), asyncio.get_running_loop(), tx_level, self._log,
             trace=self._trace,
@@ -616,7 +619,7 @@ class Station:
             if (modulation, symbol_rate) not in cache:
                 bps = BITS_PER_SYMBOL[modulation]
                 symbols, info = audio_phy.demodulate(
-                    audio, symbol_rate, self._carrier_hz,
+                    audio, symbol_rate, self._carrier_for(symbol_rate),
                     MODULATORS[modulation](link.AUDIO_MARKER),
                     constellation=modem._CONSTELLATIONS[modulation])
                 symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
@@ -1201,7 +1204,7 @@ class Station:
                    if use_fec else frame_bytes)
         symbols = modulate_fn(encoded)
         if self.phy == 'audio':
-            samples = audio_phy.modulate(symbols, symbol_rate, self._carrier_hz,
+            samples = audio_phy.modulate(symbols, symbol_rate, self._carrier_for(symbol_rate),
                                          lead_in_s=self.lead_in_s)
             out = audio_phy.audio_to_pcm16(samples)
             airtime_s = len(samples) / audio_phy.AUDIO_SAMPLE_RATE
@@ -1636,8 +1639,12 @@ async def run(args):
         station._trace(f"args: {' '.join(sys.argv[1:])}")
     link_note = await connect_from_args(station, args)
     bandwidth_note = f" bandwidth={args.bandwidth}" if args.auto else ""
+    carriers = sorted({audio_phy.carrier_for(args.audio_port, m['symbol_rate'])
+                       for m in link.WAVEFORM_MODES.values()
+                       if m['symbol_rate'] <= audio_phy.PORT_PROFILES[args.audio_port]['max_symbol_rate']}) \
+        if args.phy == 'audio' else []
     phy_note = (f"phy=audio ({args.audio_port} port, "
-                f"{audio_phy.PORT_PROFILES[args.audio_port]['carrier_hz']:g} Hz carrier)"
+                f"{' / '.join(f'{c:g}' for c in carriers)} Hz carrier)"
                 if args.phy == 'audio' else "phy=iq")
     print(f"[{args.station_id}] {phy_note} ack={'on' if args.ack else 'off'} "
           f"auto={'on' if args.auto else 'off'}{bandwidth_note} - connected, {link_note}.",
@@ -1738,9 +1745,9 @@ def main():
                               "port - run ota_sim with --channel fm and the matching --port. Both "
                               "stations and the simulator must agree.")
     parser.add_argument('--audio-port', choices=sorted(audio_phy.PORT_PROFILES),
-                         help="with --phy audio: which radio connection - mic (300-3000 Hz, "
-                              "modes up to 1200 sym/s) or data (flat 6-pin data port, up to "
-                              "2400 sym/s). A hard mode ceiling, unlike --bandwidth.")
+                         help="with --phy audio: which radio connection - mic (300-3000 Hz; "
+                              "modes 0-3, mode 3 on a 2000 Hz carrier) or data (flat 6-pin data "
+                              "port, modes 0-3). A hard mode ceiling, unlike --bandwidth.")
     parser.add_argument('--lead-in-ms', type=float, default=audio_phy.DEFAULT_LEAD_IN_S * 1000,
                          help='with --phy audio: silence before each burst so the far radio\'s '
                               'squelch is open before the frame starts - must exceed TX key-up '

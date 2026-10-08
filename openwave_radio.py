@@ -92,6 +92,8 @@ class BurstDetector:
     around it."""
 
     def __init__(self, attempts_fn, carrier_hz, on_burst, threshold=0.4, max_burst_s=8.0):
+        # carrier_hz: Hz, or a function symbol_rate -> Hz (a port whose
+        # carrier depends on the rate - see openwave_audio.carrier_for)
         self.attempts_fn, self.carrier_hz, self.on_burst = attempts_fn, carrier_hz, on_burst
         self.threshold, self.max_burst = threshold, int(max_burst_s * RATE)
         self.reset()
@@ -113,7 +115,8 @@ class BurstDetector:
         """The best burst in x: (result, decoded) or (None, False)."""
         tries = []
         for attempt in self.attempts_fn():
-            r = decode_burst(x, *attempt, self.carrier_hz)
+            carrier = self.carrier_hz(attempt[1]) if callable(self.carrier_hz) else self.carrier_hz
+            r = decode_burst(x, *attempt, carrier)
             r['attempt'] = attempt
             tries.append(r)
         ok = [r for r in tries if r['status'] == 'ok']

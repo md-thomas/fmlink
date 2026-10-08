@@ -26,8 +26,7 @@ BITS = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
 def mode_params(mode, fec_preset=None, port='mic'):
     m = link.WAVEFORM_MODES[mode]
     gens, k = fec.PRESETS[fec_preset or m['fec_preset']]
-    prof = audio.PORT_PROFILES[port]
-    return m['modulation'], m['symbol_rate'], gens, k, prof['carrier_hz']
+    return m['modulation'], m['symbol_rate'], gens, k, audio.carrier_for(port, m['symbol_rate'])
 
 
 def build_samples(text, mode=0, fec_preset=None, port='mic', src='TEST', level=0.5, lead_in=0.5):

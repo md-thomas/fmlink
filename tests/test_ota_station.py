@@ -892,7 +892,8 @@ class AudioPhyStationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Station(station_id='K0MDT', dst_id='W1AW', phy='audio', audio_port='speaker')
         with self.assertRaises(ValueError):
-            Station(station_id='K0MDT', dst_id='W1AW', mode_id=3, phy='audio', audio_port='mic')
+            Station(station_id='K0MDT', dst_id='W1AW', mode_id=4, phy='audio', audio_port='mic')
+        Station(station_id='K0MDT', dst_id='W1AW', mode_id=3, phy='audio', audio_port='mic')
         Station(station_id='K0MDT', dst_id='W1AW', mode_id=3, phy='audio', audio_port='data')
 
     def test_port_ceiling_is_hard_and_bandwidth_cannot_lift_it(self):
@@ -900,10 +901,10 @@ class AudioPhyStationTests(unittest.TestCase):
             logs = []
             mic = Station(station_id='K0MDT', dst_id='W1AW', mode_id=2, phy='audio',
                           audio_port='mic', on_log=logs.append)
-            self.assertEqual(mic.max_symbol_rate, 1200)
+            self.assertEqual(mic.max_symbol_rate, 2400)
             await _handle_command(mic, '/bandwidth wide')
-            self.assertEqual(mic.max_symbol_rate, 1200)
-            await _handle_command(mic, '/mode 3')
+            self.assertEqual(mic.max_symbol_rate, 2400)
+            await _handle_command(mic, '/mode 4')
             self.assertEqual(mic.mode_id, 2)
             self.assertTrue(any('mic audio port' in line for line in logs), logs)
 
