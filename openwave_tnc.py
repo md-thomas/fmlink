@@ -11,12 +11,12 @@ retries and ordering, so OpenWave's own chat link layer (ACKs, fragmentation,
 negotiation) isn't used. Both TNCs must use the same mode and FEC preset.
 
   # simulator (start `python3 -m ota_sim.simulator --channel fm --port mic` first)
-  ./openwave_tnc.py --callsign K0MDT --sim-host 127.0.0.1 --pty-link /tmp/kiss-k0mdt
+  ./openwave_tnc.py --callsign K0MDT --sim-host 127.0.0.1 --pty-link ~/kiss-k0mdt
   # real radio
-  ./openwave_tnc.py --callsign K0MDT --radio --pty-link /tmp/kiss-k0mdt
+  ./openwave_tnc.py --callsign K0MDT --radio --pty-link ~/kiss-k0mdt
 
 Then attach the kernel AX.25 stack (see KISS_TNC_SCOPE.md):
-  sudo kissattach /tmp/kiss-k0mdt ow0
+  sudo kissattach ~/kiss-k0mdt ow0
 
 KISS is also served over TCP (--kiss-port, default 8001) for software that
 speaks KISS-over-TCP. See KISS_TNC_SCOPE.md for the design and test plan.
@@ -171,6 +171,8 @@ async def run(args):
     fec_preset = args.fec_preset or link.WAVEFORM_MODES[args.mode]['fec_preset']
     tnc = Tnc(args.callsign, args.mode, fec_preset, args.phy, args.audio_port,
               args.lead_in_ms / 1000, args.verbose)
+    if args.log_file:
+        tnc.station.open_log_file(args.log_file)
     link_note = await ota_station.connect_from_args(tnc.station, args)
     if args.kiss_port:
         await tnc.hub.serve_tcp(args.kiss_host, args.kiss_port)
@@ -208,6 +210,10 @@ def main():
                              'of the simulator')
     parser.add_argument('--ptt-line', choices=('dtr', 'rts'), help="override the interface's PTT line")
     parser.add_argument('--tx-level', type=float, default=0.5, help='transmit audio level (default: 0.5)')
+    parser.add_argument('--turnaround-ms', type=float, default=None,
+                        help='with --radio: wait this long after a received burst before keying up '
+                             '(default: 600); raise it for a radio whose transmit audio is late after '
+                             'receiving (a TIDRADIO HT needed 3000)')
     parser.add_argument('--phy', choices=('audio', 'iq'), default='audio',
                         help='audio (default; a radio or --channel fm) or iq (--channel iq)')
     parser.add_argument('--audio-port', choices=sorted(audio_phy.PORT_PROFILES), default='mic',
@@ -224,6 +230,8 @@ def main():
     parser.add_argument('--pty-link', metavar='PATH',
                         help='serve KISS on a pseudo-terminal and symlink it here (implies --pty)')
     parser.add_argument('--verbose', '-v', action='store_true', help='show modem-level detail')
+    parser.add_argument('--log-file', metavar='PATH',
+                        help='append a timestamped log here, with per-burst receive/transmit detail')
     args = parser.parse_args()
     try:
         link.pack_callsign(args.callsign)

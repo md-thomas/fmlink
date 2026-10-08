@@ -38,6 +38,7 @@ STEP_S = 0.5          # how often the buffer is searched for a burst
 KEEP_S = 2.5          # audio kept while nothing has been heard
 LEAD_S = 0.5          # audio kept ahead of a burst's marker when handing it over
 TAIL_S = 0.3          # ... and after its end
+GUARD_S = 0.05        # audio left out ahead of a marker when looking for an earlier burst
 MIN_QUALITY = 0.15    # below this, "no burst" (see openwave_audio.demodulate)
 
 
@@ -108,30 +109,46 @@ class BurstDetector:
         cut = min(max(0, absolute - self.base), len(self.buf))
         self.buf, self.base = self.buf[cut:], self.base + cut
 
+    def _search(self, x):
+        """The best burst in x: (result, decoded) or (None, False)."""
+        tries = []
+        for attempt in self.attempts_fn():
+            r = decode_burst(x, *attempt, self.carrier_hz)
+            r['attempt'] = attempt
+            tries.append(r)
+        ok = [r for r in tries if r['status'] == 'ok']
+        heard = [r for r in tries if r['quality'] >= self.threshold and r['timing'] is not None]
+        if ok:
+            return max(ok, key=lambda r: r['quality']), True
+        if heard:
+            return max(heard, key=lambda r: r['quality']), False
+        return None, False
+
     def step(self):
-        """Hand over every complete burst in the buffer."""
+        """Hand over every complete burst in the buffer, in order."""
         while len(self.buf) > RATE:
-            tries = []
-            for attempt in self.attempts_fn():
-                r = decode_burst(self.buf, *attempt, self.carrier_hz)
-                r['attempt'] = attempt
-                tries.append(r)
-            ok = [r for r in tries if r['status'] == 'ok']
-            heard = [r for r in tries if r['quality'] >= self.threshold and r['timing'] is not None]
-            if ok:
-                r = max(ok, key=lambda r: r['quality'])
+            r, decoded = self._search(self.buf)
+            # The search finds the strongest marker, not the first: with two
+            # bursts back to back in the buffer it can pick the second, and
+            # trimming past it would drop the first. So decode the audio
+            # before it too, until there's no earlier burst that decodes.
+            while r is not None:
+                before, before_decoded = self._search(self.buf[:max(0, r['timing'] - int(GUARD_S * RATE))])
+                if not before_decoded:
+                    break
+                r, decoded = before, True
+            if r is None:
+                self._trim_to(self.end() - int(KEEP_S * RATE))
+                return
+            if decoded:
                 length = burst_air_samples(*r['attempt'], r['header']['payload_len'])
                 self._deliver(r, length)
                 self._trim_to(self.base + r['timing'] + length + int(TAIL_S * RATE))
-            elif heard:
-                r = max(heard, key=lambda r: r['quality'])
+            else:
                 if self.end() - (self.base + r['timing']) < self.max_burst:
                     return  # it may still be arriving: wait for more audio
                 self._deliver(r, 2 * RATE)   # heard but never decoded: let the station report it
                 self._trim_to(self.base + r['timing'] + int(0.5 * RATE))
-            else:
-                self._trim_to(self.end() - int(KEEP_S * RATE))
-                return
 
     def _deliver(self, result, length):
         start = max(0, result['timing'] - int(LEAD_S * RATE))
@@ -179,12 +196,17 @@ class RadioTransport:
     loop's thread for each incoming burst."""
 
     # Allowance, per direction, for what the simulator doesn't have: PTT
-    # key-up and tail, the receive mute, detector step and decode time.
-    # ota_station adds it to its reply timeouts.
-    overhead_s = 2.0
+    # key-up and tail, the receive mute, detector step and decode time, plus
+    # any turnaround beyond the default. ota_station adds it to its reply
+    # timeouts.
+    DEFAULT_TURNAROUND_S = 0.6
+
+    @property
+    def overhead_s(self):
+        return 2.0 + max(0.0, self.turnaround_s - self.DEFAULT_TURNAROUND_S)
 
     def __init__(self, on_burst, attempts_fn, carrier_hz, capture, player, loop, tx_level=0.5,
-                 log=print, settle_s=0.4, turnaround_s=0.6, trace=None):
+                 log=print, settle_s=0.4, turnaround_s=DEFAULT_TURNAROUND_S, trace=None):
         self._on_burst, self._loop, self._player = on_burst, loop, player
         self._capture, self._log = capture, log
         self._trace = trace or (lambda msg: None)   # detail for a log file, not the terminal
@@ -253,8 +275,11 @@ class RadioTransport:
                 pcm = audio.audio_to_pcm16(x * (self.tx_level / peak))
             # Turnaround: the far station has just finished transmitting and
             # is briefly deaf (PTT release, its receive mute) - don't key up
-            # on top of that.
-            time.sleep(min(2.0, max(0.0, self._last_rx_end + self.turnaround_s - time.monotonic())))
+            # on top of that. Some radios need longer: a TIDRADIO HT sends a
+            # carrier without its mic audio for 2-3 s after receiving
+            # (--turnaround-ms).
+            time.sleep(min(max(2.0, self.turnaround_s),
+                           max(0.0, self._last_rx_end + self.turnaround_s - time.monotonic())))
             self._transmitting = True
             started = time.monotonic()
             self._trace(f"[radio tx] keying, {len(pcm) / 2 / RATE:.2f} s of audio at peak "

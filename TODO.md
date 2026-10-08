@@ -9,16 +9,38 @@ genuinely still open right now in one place, per
 `tasklist.txt` disagree, `tasklist.txt` is authoritative — it's updated
 far more frequently and carries the full reasoning behind each item.
 
-## Where we are (2026-10-05)
+## Where we are (2026-10-07)
 
-**Stopped here for the night (2026-10-05).** Waiting on radio parts before
-any on-air testing. Pat peer-to-peer over OpenWave works end to end over the
-simulator. When the parts arrive, follow
-[RADIO_SETUP.md: Winlink peer-to-peer (Pat) over OpenWave](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave)
-on both stations (both laptops are on current `main`, with `ax25-tools` and Pat
-installed): TNC on the radio, `kissattach`, the raw `axcall` check, then
-Pat. Radio-free work available meanwhile: soft-decision Viterbi, receiver
-CPU use (before a Raspberry Pi), TNC burst batching and carrier sense.
+**Winlink over the air works (2026-10-07).** Pat on K0MDT-1 (server1, AIOC +
+TIDRADIO HT) sent a peer-to-peer message to Pat on K0MDT-2 (`lenovo`, Digirig
++ Baofeng) through two OpenWave TNCs at mode 2: handshake to disconnect in
+42 s, message intact in K0MDT-2's inbox. Radios on low power into dummy
+loads about 2 m apart; SNR about 13-14 dB each way. KISS TNC Milestone 2 is
+done. Raw bursts (9/9 each way) and `axcall` to `ax25d` passed first.
+
+What it took (details in RADIO_SETUP.md's Pat section):
+
+- **The TIDRADIO HT sends a carrier without its mic audio for 2-3 s after it
+  has been receiving.** The first frames K0MDT-1 sent after hearing K0MDT-2
+  arrived as a blank carrier, so the 73-byte I-frame of the B2F proposal never
+  got through and the session stalled at `>F>`. Fixed for now with a longer
+  turnaround on that station: `--turnaround-ms 3000` (new option on
+  `openwave_tnc.py` and `ota_station.py`; default 600). Not caused by dual
+  watch, squelch, STE, VOX, mic gain or battery save. **Open:** find the
+  radio setting (firmware HAM_230923, probably a TD-H8) - the 3 s costs time
+  at every turn.
+- **Receiver fix:** with two bursts back to back in the buffer the detector
+  could decode the second (stronger marker) and drop the first. It now looks
+  for an earlier burst before the one it found (`tests/test_openwave_radio.py`).
+- `openwave_tnc.py --log-file` writes the per-burst trace (heard or not, SNR,
+  sync quality) - how the above was found.
+- Setup gotchas: the pty link must not be in `/tmp` (root can't follow a
+  user's symlink there), one `axports` line per port name, restart Pat's
+  listener after a stalled session.
+- **Open:** after re-leveling (2026-10-07), K0MDT-1 -> K0MDT-2 dropped from
+  ~13.5 to ~8 dB SNR (still decoding at mode 2, less margin); restore the
+  earlier level. Earlier note: the AIOC TX path has a fixed noise floor (SNR
+  rises with `--tx-level`, same for all modes); 0.6 used on K0MDT-1.
 
 **The live station now runs over real radios.** Two computers, each with an
 HT on a USB audio interface (an AIOC and a Digirig), run
@@ -77,7 +99,8 @@ milestones and setup: [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md).
 **Milestone 1 done (2026-10-05):** the Linux kernel AX.25 stack runs
 unmodified over two OpenWave TNCs and the simulated FM link - `beacon`
 frames and full `axcall`/`ax25d` connected sessions, in plain, SMACK and
-FlexNet KISS framing. Milestone 2 (Pat over the radios) waits on radio time.
+FlexNet KISS framing. **Milestone 2 done on the air (2026-10-07):** Pat
+K0MDT-1 -> K0MDT-2 over two HTs (see "Where we are").
 
 **Frame format v2 (2026-10-05).** Shorter bursts: a 20-byte header (was 32),
 a 16-byte audio preamble (was 32) and 1-byte FEC preset IDs in negotiation
@@ -127,9 +150,10 @@ Next, roughly in order:
 
 1. ~~Update both laptops to current `main` and install `ax25-tools` and
    Pat~~ - done 2026-10-05.
-2. **KISS TNC Milestone 2: Pat peer-to-peer over the radios** (rehearsed
-   over the simulator 2026-10-05), then
-   digipeating and a gateway ([KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)).
+2. ~~KISS TNC Milestone 2: Pat peer-to-peer over the radios~~ - done on the
+   air 2026-10-07. Next: the TIDRADIO turnaround setting, then digipeating
+   and a gateway ([KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)). Burst batching
+   would also help: a turn currently costs a turnaround per frame.
 3. **Weak-link testing over the air** (planned above, now with v2 bursts).
 4. **Phase 5 on real radios - the rest.** Done: audio I/O, PTT and an
    over-the-air test on the `mic` port. Still to do: the faster `data`

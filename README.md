@@ -560,10 +560,10 @@ retries, so OpenWave's own chat link layer isn't used.
 
 ```
 python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
-./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --pty-link /tmp/kiss-a
-./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --pty-link /tmp/kiss-b
-sudo kissattach /tmp/kiss-a owa      # ports owa/owb defined in /etc/ax25/axports
-sudo kissattach /tmp/kiss-b owb
+./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --pty-link ~/kiss-a
+./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --pty-link ~/kiss-b
+sudo kissattach ~/kiss-a owa      # ports owa/owb defined in /etc/ax25/axports
+sudo kissattach ~/kiss-b owb
 ```
 
 Use `--radio` instead of `--sim-host` on a real radio. Both TNCs must use
@@ -573,9 +573,9 @@ the same `--mode` and `--fec-preset`. KISS is also served over TCP
 **Status:** Milestone 1 is done. Linux's AX.25 stack runs unmodified over
 two TNCs and the simulated FM link: `beacon` frames and full
 `axcall`/`ax25d` connected sessions, in every KISS framing the kernel uses.
-**Pat peer-to-peer has been rehearsed over the simulator:** a Winlink
-message from K0MDT-1 to K0MDT-2 in 18.6 s. The on-air run is next; the
-setup for laptops and a Raspberry Pi is in
+**Pat peer-to-peer works over the air (2026-10-07):** a Winlink message
+from K0MDT-1 to K0MDT-2 over two HTs in 42 s (18.6 s over the simulator).
+The setup for laptops and a Raspberry Pi is in
 [RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave).
 [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) has the setup (including
 `axports`/`ax25d` configuration), the test notes and the remaining

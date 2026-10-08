@@ -122,9 +122,15 @@ before the first run, and again if you change the volume or replug anything.
   weak, raise it (try 0.7). An FM radio's mic path limits and
   pre-emphasises, so too much level shows up as distortion, not volume.
 - **Squelch:** everything so far was tested with the receiving radio's
-  squelch open. With squelch closed, the first part of a burst can be lost
-  while the squelch opens; raise `--lead-in-ms` (default 250) to cover your
-  radio's squelch-open time.
+  squelch open (the Baofeng at squelch 0 for the Pat run). With squelch
+  closed, the first part of a burst can be lost while the squelch opens;
+  raise `--lead-in-ms` (default 250) to cover your radio's squelch-open time.
+- **Turnaround:** after hearing a burst, a station waits 0.6 s before keying
+  up (`--turnaround-ms`, default 600). Raise it if your radio's transmit
+  audio is late right after receiving. **The TIDRADIO HT here needs 3000:**
+  for 2-3 s after it has been receiving it transmits a carrier without its
+  mic audio, so the other station hears an empty carrier (see the Pat
+  section's troubleshooting for how that shows up).
 
 ### 3. Both radios
 
@@ -298,10 +304,10 @@ unchanged:
 
 `openwave_tnc.py` runs OpenWave as a KISS TNC on the radio, Linux's AX.25
 stack attaches to it, and Pat (a Winlink client) sends Winlink messages
-station to station over it. **Rehearsed end to end over the simulator on
-2026-10-05** (Pat K0MDT-1 -> Pat K0MDT-2 through two TNCs and ota_sim's FM
-model, message delivered in 18.6 s); **not yet tried on the air.** Design
-and status: [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md).
+station to station over it. **Works on the air (2026-10-07):** Pat K0MDT-1
+(AIOC + TIDRADIO HT) -> Pat K0MDT-2 (Digirig + Baofeng) at mode 2, low power
+into dummy loads, message delivered in 42 s (18.6 s over the simulator).
+Design and status: [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md).
 
 Stations used here: **K0MDT-1** and **K0MDT-2**, one per computer. Both TNCs
 must use the same `--mode` and frame format (current `main` on both).
@@ -369,10 +375,24 @@ On **both** stations:
 
 ```bash
 # 1. The TNC on the radio (leave running; add --tx-level if you use one with ota_station)
-./openwave_tnc.py --callsign K0MDT-1 --radio --mode 2 --kiss-port 0 --pty-link /tmp/kiss-ow
+./openwave_tnc.py --callsign K0MDT-1 --radio --mode 2 --kiss-port 0 --pty-link ~/kiss-ow \
+    --log-file ~/tnc-K0MDT-1.log
 # 2. Attach it to the kernel (any KISS framing mode works, including the default)
-sudo kissattach /tmp/kiss-ow ow
+sudo kissattach ~/kiss-ow ow
 ```
+
+As run on 2026-10-07: K0MDT-1 added `--tx-level 0.6 --turnaround-ms 3000`
+(the TIDRADIO, see "Turnaround" above), K0MDT-2 used the defaults.
+
+- **Keep the pty link in your home directory, not `/tmp`:** the kernel won't
+  let root follow a symlink you own in `/tmp` (`fs.protected_symlinks`), so
+  `kissattach` fails with "Permission denied".
+- **`--log-file`** records every burst heard (decoded or not, SNR, sync
+  quality) and every transmission, timestamped. Compare both stations' logs
+  when something stalls.
+- **Restarting a TNC gives it a new pty:** `sudo pkill kissattach; sleep 2;
+  sudo kissattach ~/kiss-ow ow`, then restart the Pat listener. Without the
+  pause, the old `kissattach` can take the new port down as it exits.
 
 Optional raw AX.25 check before Pat (good for a first on-air run). On
 K0MDT-2:
@@ -416,3 +436,7 @@ remembers the answer for 100 days (`~/.local/state/pat/.account-confirmed_K0MDT-
 | Frames are retried before the reply could arrive | Raise the kernel's AX.25 retry timer on both stations: `echo 20000 \| sudo tee /proc/sys/net/ax25/ax0/t1_timeout` (mode 2 was fine at the default 10 s over the simulator; slower modes need more) |
 | One TNC logs `tx` but the other never `rx` | The usual radio checks (levels, PTT, squelch, frequency) from the sections above; both TNCs on the same `--mode`; both computers on the same `main` |
 | TNC logs "ignoring a frame for TNC port 8/2" | An old TNC version without SMACK/FlexNet support: `git pull` |
+| `kissattach ... Permission denied` on the pty | The pty link is in `/tmp`; use `--pty-link ~/kiss-ow` |
+| `cannot find port ow in axports`, or the port has the wrong callsign | One line per port name in `/etc/ax25/axports` with this station's own callsign; a duplicate `ow` line makes `kissattach` take the first |
+| Pat connects and sends `>FD ...` / `>F>`, then stalls; the TNC logs show the first frame of each retry never arrives | The sending radio's audio is late after receiving (the TIDRADIO): raise `--turnaround-ms` on that station (3000 worked) |
+| A new `pat connect` gets no greeting | The listener is still in the stalled session: restart `pat --listen` |

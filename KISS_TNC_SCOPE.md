@@ -6,7 +6,9 @@ frames (`beacon`) and full connected sessions (`axcall` to `ax25d`) in
 every KISS framing mkiss uses (plain, SMACK, FlexNet, and its default
 auto mode). **Milestone 2 rehearsed over the simulator (2026-10-05):** a
 Winlink message from Pat K0MDT-1 to Pat K0MDT-2 through two TNCs and the
-simulated FM link. The on-air run waits on radio parts; the setup is in
+simulated FM link. **Milestone 2 done on the air (2026-10-07):** the same
+over two HTs (AIOC + TIDRADIO, Digirig + Baofeng) in 42 s. Setup and the
+on-air findings are in
 [RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave).
 
 ## Goal
@@ -144,10 +146,10 @@ Run (one machine, both TNCs through the simulator):
 
 ```bash
 python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
-./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link /tmp/kiss-a
-./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link /tmp/kiss-b
-sudo kissattach /tmp/kiss-a owa
-sudo kissattach /tmp/kiss-b owb
+./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link ~/kiss-a
+./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link ~/kiss-b
+sudo kissattach ~/kiss-a owa
+sudo kissattach ~/kiss-b owb
 ```
 
 Notes from running it:

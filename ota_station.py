@@ -538,7 +538,7 @@ class Station:
         it ever sends anything."""
         self._sim = await SimClient(self.station_id, self._burst_received).connect(sim_host, sim_port)
 
-    async def connect_radio(self, station, tx_level=0.5, capture=None, player=None):
+    async def connect_radio(self, station, tx_level=0.5, capture=None, player=None, turnaround_s=None):
         """Use a radio's audio interface (a radio_stations.py station)
         instead of a simulator. capture / player replace the real audio
         in and out (openwave_radio.SimulatedAir uses that for testing)."""
@@ -553,6 +553,7 @@ class Station:
             capture or (lambda: radio.arecord_chunks(station['rx_device'], station['rx_channels'])),
             player or radio.make_player(station), asyncio.get_running_loop(), tx_level, self._log,
             trace=self._trace,
+            **({} if turnaround_s is None else {'turnaround_s': turnaround_s}),
         ).connect()
 
     def close(self):
@@ -1600,7 +1601,9 @@ async def connect_from_args(station, args):
             st['ptt_line'] = args.ptt_line
         if not st['ptt_port']:
             sys.exit(f"error: {st['name']} has no PTT serial port detected, so it can't transmit")
-        await station.connect_radio(st, args.tx_level)
+        turnaround_ms = getattr(args, 'turnaround_ms', None)
+        await station.connect_radio(st, args.tx_level,
+                                    turnaround_s=None if turnaround_ms is None else turnaround_ms / 1000)
         return f"on air via {st['name']} (PTT {st['ptt_line'].upper()}, {st['rx_device']})"
     if SimClient is None:
         sys.exit("error: ota_sim is not installed - run `pip install -e ../ota_sim` "
@@ -1695,6 +1698,10 @@ def main():
                          help='with --radio: peak TX audio level into the radio, 0-1 (default 0.5)')
     parser.add_argument('--ptt-line', choices=('dtr', 'rts'),
                          help="with --radio: override the interface's PTT line")
+    parser.add_argument('--turnaround-ms', type=float, default=None,
+                         help='with --radio: wait this long after a received burst before keying '
+                              'up (default 600); raise it for a radio whose transmit audio is late '
+                              'after receiving (a TIDRADIO HT needed 3000)')
     parser.add_argument('--mode', type=int, default=0, choices=sorted(link.WAVEFORM_MODES),
                          help='Waveform Mode ID - selects modulation/symbol rate (see Waveform '
                               'Modes table below; default: 0)')
