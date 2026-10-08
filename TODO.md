@@ -11,6 +11,17 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Where we are (2026-10-07)
 
+**Stopped here for the night (2026-10-07); pick up tomorrow.** Mode 3 on the
+mic port is live on air: `ota_station.py --phy audio --audio-port mic
+--radio --ack --auto` negotiated mode 3 both ways with no extra switches
+(TIDRADIO -> Baofeng 11.4 dB, Baofeng -> TIDRADIO 7.6 dB). **Next: the
+receive equalizer** - the Baofeng -> TIDRADIO direction's treble tilt costs
+~7 dB that negotiation can't see (its 600 baud probe read 20.6 dB, so it
+predicted ~14.6 dB at mode 3), leaving mode 3 thin margin there. Station
+setup to resume: K0MDT-1 = server1 (AIOC + TIDRADIO, `--tx-level 0.6
+--turnaround-ms 3000`), K0MDT-2 = `lenovo` (Digirig + Baofeng; check
+`amixer -c Device scontents` shows AGC off / capture 2 after any replug).
+
 **Winlink over the air works (2026-10-07).** Pat on K0MDT-1 (server1, AIOC +
 TIDRADIO HT) sent a peer-to-peer message to Pat on K0MDT-2 (`lenovo`, Digirig
 + Baofeng) through two OpenWave TNCs at mode 2: handshake to disconnect in
