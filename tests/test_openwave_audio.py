@@ -211,6 +211,41 @@ class MarkerUnderNoiseTests(unittest.TestCase):
         self.assertEqual([(s, p) for s, _, p in known][:1], [('ok', payload)])
 
 
+class EqualizerTests(unittest.TestCase):
+    """The receive equalizer, judged on the payload symbols (not the marker
+    it was fitted to)."""
+
+    def payload_snr_db(self, channel, equalize, rate=2400, fc=2000.0, seed=0, noise=0.003):
+        payload = _rng_bytes(300, seed=seed)
+        tx = MODULATORS['qpsk'](_burst('qpsk', payload))
+        audio = channel(audio_phy.modulate(tx, rate, fc))
+        audio = audio + np.random.default_rng(seed).normal(0, noise, len(audio))
+        symbols, info = audio_phy.demodulate(
+            audio, rate, fc, MODULATORS['qpsk'](MARKER), pre_symbols=24 * 4,
+            constellation=modem._CONSTELLATIONS['qpsk'], equalize=equalize)
+        start = info['marker_index'] + len(MARKER) * 4
+        got, want = symbols[start:start + len(payload) * 4], tx[24 * 4 + len(MARKER) * 4:][:len(payload) * 4]
+        return 10 * np.log10(1 / np.mean(np.abs(got - want) ** 2)), info['snr_db']
+
+    def test_undoes_a_treble_rolloff(self):
+        # ~6 dB/octave from 700 Hz, like the Baofeng -> TIDRADIO direction
+        # measured on 2026-10-07 (-6 dB at 2 kHz, -13 dB at 3 kHz).
+        from scipy import signal as sps
+        b, a = sps.butter(1, 700, fs=FS)
+        tilt = lambda x: sps.lfilter(b, a, x) * 3  # noqa: E731
+        plain, _ = self.payload_snr_db(tilt, equalize=False)
+        equalized, reported = self.payload_snr_db(tilt, equalize=True)
+        self.assertGreater(equalized, plain + 6)
+        self.assertLess(abs(reported - equalized), 3)  # the marker SNR stays honest
+
+    def test_costs_almost_nothing_on_a_flat_channel(self):
+        # At a realistic ~25 dB (a 9-tap fit to 64 marker symbols adds a
+        # little noise of its own, which only shows on very clean links).
+        plain, _ = self.payload_snr_db(lambda x: x, equalize=False, noise=0.03)
+        equalized, _ = self.payload_snr_db(lambda x: x, equalize=True, noise=0.03)
+        self.assertGreater(equalized, plain - 0.5)
+
+
 class PcmTests(unittest.TestCase):
     def test_round_trip_and_clipping(self):
         audio = np.array([0.0, 0.5, -0.5, 0.999, -1.0, 1.7])

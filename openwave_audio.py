@@ -85,6 +85,15 @@ SPAN_SYMBOLS = 11
 LOOP_BANDWIDTH = 0.005
 LOOP_DAMPING = 0.707
 
+# Receive equalizer: an FIR on the matched-filter output with taps every
+# half symbol, EQ_SPAN_SYMBOLS symbols each side of the centre, fitted by
+# least squares to the burst's known marker symbols (EQ_RIDGE keeps the
+# fit from chasing noise). It undoes the radios' audio response - an HT's
+# mic/speaker path tilts several dB across the band (see RADIO_SETUP.md
+# "Frequency response"), which otherwise smears symbols into each other.
+EQ_SPAN_SYMBOLS = 2
+EQ_RIDGE = 0.001
+
 
 def frame_for_audio(frame_bytes):
     """A build_frame()-style frame as the audio PHY sends it: the 16-byte-
@@ -132,7 +141,7 @@ def modulate(symbols, symbol_rate, carrier_hz, sample_rate=AUDIO_SAMPLE_RATE,
 
 
 def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
-               constellation=None, sample_rate=AUDIO_SAMPLE_RATE):
+               constellation=None, sample_rate=AUDIO_SAMPLE_RATE, equalize=True):
     """Real audio -> (symbols, info), symbols normalized so the known
     reference lands on its ideal points (unit-energy constellation, zero
     phase). reference_symbols is the frame's marker as transmitted (e.g.
@@ -186,10 +195,14 @@ def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
     gain = corr[timing] / ref_energy  # complex channel gain (level + carrier phase)
     if abs(gain) < 1e-12:
         return empty
+    y = y / gain
+    eq_taps = 0
+    if equalize:
+        y, eq_taps = _equalize(y, timing, sps, ref)
     # Symbols before the marker (the frame's lead pad) at the marker's
     # one-shot timing/phase - only a few dozen, so drift is negligible.
     n_pre = min(pre_symbols, timing // sps)
-    before = y[timing - n_pre * sps:timing:sps] / gain
+    before = y[timing - n_pre * sps:timing:sps]
 
     # Residual carrier frequency across the marker (radians/symbol): the
     # phase change between the marker's first and second halves, once the
@@ -198,7 +211,7 @@ def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
     # without de-rotating, a long marker under drift reads its phase error
     # as noise (measured: ~5 dB low at 100 ppm, 600 baud). Halves rather
     # than neighbouring symbols: the estimate is ~N/2 times less noisy.
-    marker = y[timing:timing + len(ref) * sps:sps] / gain
+    marker = y[timing:timing + len(ref) * sps:sps]
     residual = marker * np.conj(ref)
     half = len(ref) // 2
     freq = (float(np.angle(np.sum(residual[half:2 * half]) * np.conj(np.sum(residual[:half])))) / half
@@ -206,22 +219,53 @@ def demodulate(audio, symbol_rate, carrier_hz, reference_symbols, pre_symbols=0,
     center = (len(ref) - 1) / 2
     derotated = marker * np.exp(-1j * freq * (np.arange(len(ref)) - center))
     noise = np.mean(np.abs(derotated - ref) ** 2)
+    if eq_taps:
+        # The equalizer was fitted to these very symbols, which flatters
+        # them: a least-squares fit of p taps to N points leaves about
+        # (N - p) / N of the true error. Undo that, so the SNR (and the
+        # mode --auto picks from it) reflects the rest of the burst.
+        noise *= len(ref) / max(len(ref) - eq_taps, 1)
     signal = np.mean(np.abs(ref) ** 2)
     snr_db = float(10 * np.log10(signal / max(noise, 1e-12)))
 
     if constellation is None:
-        after = y[timing::sps] / gain
+        after = y[timing::sps]
     else:
         # The tracker starts from zero, not from freq: over a marker this
         # short, freq is good enough to de-rotate an SNR measurement but far
         # too noisy to seed the loop (it also steers symbol timing, and a
         # bad seed walks the timing off - measured: mode 2 delivery under
         # fading fell from 333/360 to 217/360 when seeded).
-        after = _track(y / gain, timing, sps, ref, np.asarray(list(constellation), dtype=complex),
+        after = _track(y, timing, sps, ref, np.asarray(list(constellation), dtype=complex),
                        -symbol_rate / (2 * np.pi * carrier_hz))
     symbols = np.concatenate([before, after])
     return symbols, {'quality': float(quality[timing]), 'snr_db': snr_db, 'timing': timing,
                      'marker_index': n_pre}
+
+
+def _equalize(y, timing, sps, ref):
+    """y (matched-filter output, already scaled by the marker's gain) put
+    through an FIR fitted to the marker: taps every sps/2 samples,
+    EQ_SPAN_SYMBOLS symbols each side, least squares (ridge EQ_RIDGE) from
+    the samples around each marker symbol to the symbol transmitted.
+    Returns (equalized y, number of taps), or (y, 0) unchanged when the
+    marker is too close to either end of the audio."""
+    step = max(1, sps // 2)
+    offsets = np.arange(-2 * EQ_SPAN_SYMBOLS, 2 * EQ_SPAN_SYMBOLS + 1) * step
+    centers = timing + np.arange(len(ref)) * sps
+    if centers[0] + offsets[0] < 0 or centers[-1] + offsets[-1] >= len(y):
+        return y, 0
+    a = y[centers[:, None] + offsets[None, :]]
+    gram = a.conj().T @ a
+    ridge = EQ_RIDGE * np.real(np.trace(gram)) / len(offsets)
+    w = np.linalg.solve(gram + ridge * np.eye(len(offsets)), a.conj().T @ ref)
+    out = np.zeros_like(y)
+    for tap, d in zip(w, offsets):
+        if d >= 0:
+            out[:len(y) - d] += tap * y[d:]
+        else:
+            out[-d:] += tap * y[:len(y) + d]
+    return out, len(offsets)
 
 
 def _fft_convolve(x, taps):
