@@ -31,6 +31,12 @@ done. Raw bursts (9/9 each way) and `axcall` to `ax25d` passed first.
 
 What it took (details in RADIO_SETUP.md's Pat section):
 
+- **Re-test in a few days (noted 2026-10-08, low priority):** was it really the
+  TIDRADIO, or the Digirig's AGC? The Digirig's AGC was found on later the
+  same evening (it resets on replug), and on 2026-10-08 a live chat session
+  with AGC off ran fine at the default turnaround. Repeat the Pat test with
+  K0MDT-1's TNC at the default `--turnaround-ms`; if it delivers, drop the
+  3000 ms workaround and correct the notes below and in RADIO_SETUP.md.
 - **The TIDRADIO HT sends a carrier without its mic audio for 2-3 s after it
   has been receiving.** The first frames K0MDT-1 sent after hearing K0MDT-2
   arrived as a blank carrier, so the 73-byte I-frame of the B2F proposal never

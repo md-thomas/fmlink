@@ -78,17 +78,45 @@ before the first run, and again if you change the volume or replug anything.
    pumps during a burst, and neither the radio volume nor the capture gain
    seems to do anything:
 
+   **Check** (the last line must end in `[off]`):
+
+   ```
+   amixer -c Device sget "Auto Gain Control"
+   amixer -c Device scontents                   # every setting at once
+   ```
+
+   **Set** (AGC off, capture gain 2, playback 30 %):
+
    ```
    amixer -c Device sset "Auto Gain Control" off
    amixer -c Device sset Mic cap 2
+   amixer -c Device sset Speaker 30%            # the Digirig's TX audio level into the radio
    ```
 
-   (`-c Device` is the Digirig's ALSA card name; `amixer -c 1 ...` also works
-   if it is card 1.) **These settings reset when the Digirig is unplugged**
-   (AGC back on, capture 100 %); run them again, then re-level. Check with
-   `amixer -c Device scontents`. On 2026-10-07 a replug left AGC on and
-   halved the link: mode 2 into the Digirig fell from ~20 to ~7 dB SNR, and
-   came back to 20.6 dB once AGC was off and capture was 2.
+   `-c Device` is the Digirig's ALSA card name; `amixer -c 1 ...` also works
+   if it is card 1 (`arecord -l` lists the cards). What `scontents` should
+   show when it's right:
+
+   ```
+   Simple mixer control 'Speaker',0      ... Playback 45 [30%] [-19.94dB] [on]
+   Simple mixer control 'Mic',0          ... Capture 2 [12%] [2.97dB] [on]
+   Simple mixer control 'Auto Gain Control',0
+     Mono: Playback [off]
+   ```
+
+   **Or interactively with `alsamixer -c Device`:** F3 shows the playback
+   controls (`Speaker`, and `Auto Gain Control` - press **M** on it to toggle
+   it to `MM`/off), F4 the capture control (`Mic`: arrow keys to 2), F5
+   everything; Esc quits.
+
+   **These settings reset when the Digirig is unplugged** (AGC back on,
+   capture 100 %): check them after any replug, set them again, then
+   re-level. `sudo alsactl store` saves the current settings, and Linux
+   normally restores saved settings when a sound card appears, so that may
+   make them survive a replug - check with `sget` afterwards to be sure.
+   On 2026-10-07 a replug left AGC on and halved the link: mode 2 into the
+   Digirig fell from ~20 to ~7 dB SNR, and came back to 20.6 dB once AGC was
+   off and capture was 2.
 3. **AIOC:** leave its capture gain at the default 100 % (0 dB); it is
    adjusted with the radio's volume.
 4. Run the meter and turn the **radio's volume knob** until it says `good`:
@@ -177,6 +205,25 @@ cd ~/Projects/open_wave
     --phy audio --audio-port mic --radio --ack --auto
 ```
 
+**As run on 2026-10-08** (mode 3 negotiated automatically, every burst
+decoded both ways):
+
+| Station | Computer | Interface + radio | Before starting |
+|---|---|---|---|
+| K0MDT-1 | server1 | AIOC + TIDRADIO | - |
+| K0MDT-2 | lenovo | Digirig + Baofeng (squelch 0) | `amixer -c Device sget "Auto Gain Control"` shows `[off]` |
+
+```
+# K0MDT-1 (server1)
+./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 --phy audio --audio-port mic --radio --ack --auto
+# K0MDT-2 (lenovo)
+./ota_station.py --station-id K0MDT-2 --dst K0MDT-1 --phy audio --audio-port mic --radio --ack --auto
+```
+
+The station keeps its sound card open, so stop it (Ctrl-C) before running
+`./level_meter.py` on that computer, or the meter reports "Device or
+resource busy".
+
 Type a line and press Enter to send it; messages from the other station
 print as they arrive. `/help` lists the commands (`/mode`, `/fec`, `/ping`,
 `/ping survey`, `/renegotiate`, ...). Ctrl-C exits and prints a session
@@ -202,9 +249,10 @@ summary.
   `--mode 0 --fec --ack` without `--auto`.
 - `--tx-level 0.5` is the default; `--ptt-line dtr|rts` overrides the
   interface's PTT line; `-v` prints per-message detail.
-- If a mode needs a faster symbol rate than the `mic` port allows, the station
-  refuses it. The `data` port profile (up to 2400 baud) needs a radio data
-  connector and has not been tried.
+- The `mic` port carries modes 0-3 (mode 3, 2400 baud, on a 2000 Hz
+  carrier); `--auto` picks mode 3 when the link is good enough. A mode faster
+  than the port allows (4, 5) is refused. The `data` port profile needs a
+  radio data connector and has not been tried.
 
 ## Simpler tests and tools
 
@@ -327,6 +375,8 @@ threshold effect and fades, so keep some extra margin.
 | `aplay: Channels count non available` | stereo-only sound card (the Digirig). Fixed by playing through `plughw:`; `git pull` if you still see it |
 | meter reads near silence (below about -50 dBFS) | squelch closed, radio volume too low, or the cable is in a jack with no audio input (see "What does not work") |
 | meter pinned at `CLIPPING` whatever the volume | Digirig AGC is on: `amixer -c Device sset "Auto Gain Control" off` |
+| `level_meter.py`: `audio open error: Device or resource busy` | a station, TNC or test is using that sound card: stop it first |
+| SNR into the Digirig suddenly much lower (e.g. 20 -> 7 dB) | the Digirig was replugged and its AGC came back on: `amixer -c Device sget "Auto Gain Control"`, then the settings above |
 | `radio_stations.py` shows nothing | check `lsusb` for the adapter and `arecord -l` for its sound card |
 | stations hear nothing from each other | wrong PTT line (try `--ptt-line dtr` or `rts`; the radio's TX light shows it keying), TX level too low or too high, different frequencies, or squelch closed |
 | the sender keeps retrying and the peer reports "duplicate" | the peer's ACK is not getting back: check the levels and PTT in that direction; the transport already waits a 0.6 s turnaround before replying |
