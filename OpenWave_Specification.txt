@@ -117,11 +117,14 @@ Audio PHY (a radio's audio port, e.g. a VHF/UHF FM transceiver):
                                 20 ms of silence for the filter tail. One
                                 frame per burst.
     Receiver (informative):     Correlate against the marker for timing,
-                                phase and level; decode at that position;
-                                track sound-card clock drift (which shifts
-                                carrier phase and symbol timing together)
-                                with a decision-directed PLL. See
-                                openwave_audio.py.
+                                phase and level; equalize the radios'
+                                audio response with a short FIR fitted to
+                                the known marker symbols (least squares,
+                                taps every half symbol); decode at that
+                                position; track sound-card clock drift
+                                (which shifts carrier phase and symbol
+                                timing together) with a decision-directed
+                                PLL. See openwave_audio.py.
 
 Link layer:
     Frame format version:       2 (since 2026-10). v1 had a 32-byte header,

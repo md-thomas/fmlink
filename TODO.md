@@ -9,7 +9,19 @@ genuinely still open right now in one place, per
 `tasklist.txt` disagree, `tasklist.txt` is authoritative — it's updated
 far more frequently and carries the full reasoning behind each item.
 
-## Where we are (2026-10-07)
+## Where we are (2026-10-08)
+
+**Receive equalizer done (2026-10-08, `9d78fc7`).** A 9-tap FIR fitted to
+each burst's marker undoes the HTs' audio tilt. On the same on-air
+recordings, mode 3 went from 11.6 to 22.2 dB (TIDRADIO -> Baofeng) and
+from 7.6 to 13.3 dB (Baofeng -> TIDRADIO); mode 2 gained 3-8 dB. Table in
+RADIO_SETUP.md "Receive equalizer". Also 2026-10-08: the message length
+test (all intact at mode 3, ~160 chars/s on long messages).
+
+Next candidates: burst batching (several segments per turn - long
+messages wait for an ACK per 1024 characters), re-test Pat at the default
+turnaround (AGC theory), digipeating/gateway, weak-link tests.
+
 
 **Stopped here for the night (2026-10-07); pick up tomorrow.** Mode 3 on the
 mic port is live on air: `ota_station.py --phy audio --audio-port mic
@@ -68,8 +80,8 @@ Baofeng -> TIDRADIO direction rolls off ~6 dB/octave above 1 kHz and is
 12.5 -> 13.6 dB (this explains the earlier "SNR ~14 dB whatever the TX level"
 note). Details: RADIO_SETUP.md "Frequency response and faster modes".
 Follow-ups:
-- **Receive equalizer** (top candidate): undo the tilt; should lift the
-  weak direction toward 20 dB and give mode 3 margin.
+- ~~Receive equalizer~~ - done 2026-10-08: +5.7 dB (weak direction) and
+  +10.7 dB (strong direction) at mode 3 on air.
 - ~~Allow mode 3 on the mic port~~ - done 2026-10-07: the `mic` profile
   carries up to 2400 baud, mode 3 on a 2000 Hz carrier (modes 0-2 stay on
   1650 Hz; `openwave_audio.carrier_for`). The existing MODE_SNR_TABLE row

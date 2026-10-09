@@ -323,13 +323,35 @@ to the peak:
   | TIDRADIO -> Baofeng | 5/5, 20.6 dB, sync 1.00 | 5/5, 11.4 dB, sync 0.97 |
   | Baofeng -> TIDRADIO | 5/5, 12.4 dB, sync 0.97 | 5/5, 7.8 dB, sync 0.92 |
 
-- **Baofeng -> TIDRADIO is distortion-limited.** That direction rolls off
-  about 6 dB per octave above 1 kHz (de-emphasis in the receiver without
-  matching pre-emphasis at the sender, by the look of it). The modem has no
-  equalizer, so the tilt smears the symbols and the SNR stops near 13 dB
-  (mode 2) whatever the TX level, while the noise in that direction is low
-  (55-65 dB in the sweep). A receive equalizer should lift it toward the
-  other direction's 20 dB and give mode 3 real margin.
+- **Both directions were distortion-limited, not noise-limited.** Baofeng
+  -> TIDRADIO rolls off about 6 dB per octave above 1 kHz (de-emphasis in
+  the receiver without matching pre-emphasis at the sender, by the look of
+  it). Without an equalizer the tilt smeared the symbols and the SNR stopped
+  near 13 dB (mode 2) whatever the TX level, while the noise in that
+  direction is low (55-65 dB in the sweep).
+
+### Receive equalizer (2026-10-08)
+
+The receiver now equalizes each burst: a 9-tap FIR (taps every half
+symbol, +-2 symbols) fitted by least squares to the burst's known marker,
+applied before the tracking loop (`openwave_audio.demodulate`, on by
+default). Same on-air recordings (5 bursts per row, `radio_link_test.py
+--keep`), decoded with it off and on; SNR over every symbol after the
+marker, against what was transmitted:
+
+| Direction | Mode | Equalizer off | On | Gain |
+|---|---|---|---|---|
+| TIDRADIO -> Baofeng | 2 | 19.4 dB | 27.3 dB | +7.9 dB |
+| TIDRADIO -> Baofeng | 3 | 11.6 dB | 22.2 dB | +10.7 dB |
+| Baofeng -> TIDRADIO | 2 | 14.4 dB | 17.8 dB | +3.3 dB |
+| Baofeng -> TIDRADIO | 3 | 7.6 dB | 13.3 dB | +5.7 dB |
+
+Mode 3 now has 5-15 dB of margin over its ~8 dB cliff in both directions.
+The SNR a station reports (from the marker, corrected for the fitted taps)
+matches the whole-burst figure within ~0.5 dB, so `--auto` sees the
+equalized link. Through `ota_sim`'s FM model (a flat channel) it changes
+nothing: static, Rayleigh fading at 30/80 km/h and 100 ppm clock offset all
+delivered the same with it off and on.
 
 ### Message length test (2026-10-08)
 
