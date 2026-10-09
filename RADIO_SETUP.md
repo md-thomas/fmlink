@@ -227,8 +227,11 @@ resource busy".
 
 Type a line and press Enter to send it; messages from the other station
 print as they arrive. `/help` lists the commands (`/mode`, `/fec`, `/ping`,
-`/ping survey`, `/renegotiate`, ...). Ctrl-C exits and prints a session
-summary.
+`/ping survey`, `/renegotiate`, ...). Settings can be changed while the
+station runs: `/tx-level 0.6`, `/turnaround 3000` (ms), `/lead-in 300` (ms),
+`/max-tx 20` (s), `/batch on|off`, `/ack`, `/auto`, `/bandwidth`; mode, FEC
+and batching changes are passed to the peer. Ctrl-C exits and prints a
+session summary.
 
 - **Every run writes a log, with no switch needed**: a new timestamped file
   `logs/<station-id>-<date>-<time>.log` in the repo (gitignored), whose path is

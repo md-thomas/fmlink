@@ -1265,3 +1265,100 @@ class RadioEventTests(unittest.TestCase):
             self.assertTrue(all(e['rms_dbfs'] <= 0 and 'transmitting' in e for e in levels))
 
         asyncio.run(scenario())
+
+
+class LiveSettingsTests(unittest.TestCase):
+    """Station.update_settings(): settings changed while running, all-or-nothing."""
+
+    def _station(self, **kw):
+        events = []
+        st = Station('K0MDT', 'W1AW', mode_id=2, use_fec=True, phy='audio', audio_port='mic',
+                     on_log=lambda m: None, on_event=events.append, **kw)
+        return st, events
+
+    def test_invalid_changes_apply_nothing(self):
+        async def scenario():
+            st, _ = self._station()
+            before = st.link_state()
+            for bad in ({'nonsense': 1}, {'mode_id': 9}, {'mode_id': 4}, {'max_tx_s': 0.5},
+                        {'ack': 'yes'}, {'bandwidth': 'huge'}, {'fec_preset': 'r9_9'},
+                        {'tx_level': 0.5},                       # no radio connected
+                        {'lead_in_s': 0.3, 'max_tx_s': 1000}):   # one good, one bad
+                with self.subTest(bad=bad):
+                    with self.assertRaises(ValueError):
+                        await st.update_settings(**bad)
+                    self.assertEqual(st.link_state(), before)
+            with self.assertRaises(ValueError) as ctx:
+                await st.update_settings(max_tx_s=-1, ack='x')
+            self.assertIn('max_tx_s', str(ctx.exception))
+            self.assertIn('ack', str(ctx.exception))   # every problem named at once
+        asyncio.run(scenario())
+
+    def test_local_settings_apply_and_emit_link(self):
+        async def scenario():
+            st, events = self._station()
+            state = await st.update_settings(lead_in_s=0.4, max_tx_s=20, ack=True, auto=True,
+                                             bandwidth='narrow', batching=False)
+            self.assertEqual((state['lead_in_s'], state['max_tx_s'], state['ack'], state['auto'],
+                              state['bandwidth'], state['batching']),
+                             (0.4, 20.0, True, True, 'narrow', False))
+            self.assertEqual(st.max_symbol_rate, NARROWBAND_MAX_SYMBOL_RATE)
+            self.assertEqual(events[-1]['type'], 'link')
+            self.assertEqual(events[-1]['max_tx_s'], 20.0)
+        asyncio.run(scenario())
+
+    def test_radio_settings(self):
+        import openwave_radio as radio
+
+        async def scenario():
+            st, _ = self._station()
+            port = radio.SimulatedAir().port()
+            await st.connect_radio({'rx_device': None, 'rx_channels': 1}, capture=port.capture,
+                                   player=port.player)
+            state = await st.update_settings(tx_level=0.6, turnaround_s=3.0)
+            st.close()
+            self.assertEqual((state['tx_level'], state['turnaround_s']), (0.6, 3.0))
+            self.assertEqual(st._sim.tx_level, 0.6)
+        asyncio.run(scenario())
+
+    def test_commands(self):
+        async def scenario():
+            logs = []
+            st = Station('K0MDT', 'W1AW', phy='audio', audio_port='mic', on_log=logs.append)
+            await _handle_command(st, '/max-tx 20')
+            await _handle_command(st, '/batch off')
+            await _handle_command(st, '/tx-level')
+            await _handle_command(st, '/turnaround 3000')
+            self.assertEqual((st.max_tx_s, st.batching), (20.0, False))
+            self.assertTrue(any('n/a (no radio)' in line for line in logs), logs)
+            self.assertTrue(any('only apply to a real radio' in line for line in logs), logs)
+        asyncio.run(scenario())
+
+
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
+class LiveSettingsOverFMTests(unittest.TestCase):
+    def test_mode_and_batching_changes_reach_the_peer(self):
+        async def scenario():
+            sim = await _create_simulator(FMLink('mic', base_cnr_db=25, latency_s=0.01, jitter_s=0.0,
+                                                 seed=8))
+            quiet = lambda msg: None  # noqa: E731
+            a = await _create_station('K0MDT', 'W1AW', use_ack=True, auto=True, phy='audio',
+                                      audio_port='mic', on_log=quiet)
+            b = await _create_station('W1AW', 'K0MDT', use_ack=True, auto=True, phy='audio',
+                                      audio_port='mic', on_log=quiet)
+            await a.connect(*sim.address)
+            await b.connect(*sim.address)
+            await asyncio.sleep(0.05)
+            await asyncio.wait_for(a.negotiate(), timeout=40)
+            a._auto_negotiate_done = True
+            self.assertTrue(a.batch_active and b.batch_active)
+
+            await asyncio.wait_for(a.update_settings(mode_id=2, fec_preset='r1_2_k7'), timeout=30)
+            self.assertEqual((b.mode_id, b.fec_preset), (2, 'r1_2_k7'))      # the peer followed
+            await asyncio.wait_for(a.update_settings(batching=False), timeout=30)
+            self.assertFalse(a.batch_active)
+            self.assertFalse(b.batch_active)                                 # and agrees
+            a.close()
+            b.close()
+            sim.close()
+        asyncio.run(scenario())

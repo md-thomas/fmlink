@@ -169,6 +169,10 @@ EARLIER_BURST_MIN_S = 0.5
 BATCH_GAP_S = 0.05
 DEFAULT_MAX_TX_S = 30.0
 
+# What Station.update_settings() can change while running.
+SETTINGS = ('mode_id', 'fec_preset', 'bandwidth', 'ack', 'auto', 'lead_in_s', 'tx_level',
+            'turnaround_s', 'max_tx_s', 'batching')
+
 
 def _human_size(num_bytes, short=False):
     """num_bytes -> auto-scaled 'N.NN KB (N bytes)' label, matching
@@ -328,6 +332,10 @@ def _help_text():
         "  /ack [on|off]               show or set whether this station's messages request ACKs/retries",
         "  /auto [on|off]              show or set automatic mode negotiation (on: negotiates on next send)",
         "  /lead-in [MS]               --phy audio: show or set the silence before each burst",
+        "  /tx-level [0-1]             --radio: show or set the transmit audio level",
+        "  /turnaround [MS]            --radio: show or set the wait after receiving before keying up",
+        "  /max-tx [S]                 show or set the longest single transmission (burst batching)",
+        "  /batch [on|off]             show or set burst batching (tells the peer)",
         "  /help (or /?)               show this list",
         "  /quit (or /exit)            close this station",
     ])
@@ -1142,6 +1150,106 @@ class Station:
         finally:
             self._negotiating = False
 
+    # -- settings changed while running (open_wave_web, /commands) -----
+    def _mode_not_allowed(self, mode_id):
+        """Why mode_id can't be used now (a str), or None if it can."""
+        if mode_id not in link.WAVEFORM_MODES:
+            return f"{mode_id!r} is not a Waveform Mode ID"
+        symbol_rate = link.WAVEFORM_MODES[mode_id]['symbol_rate']
+        if self.max_symbol_rate is not None and symbol_rate > self.max_symbol_rate:
+            return (f"{link.format_mode(mode_id)} needs {symbol_rate} sym/s, over the "
+                    f"{self._ceiling_reason()} ceiling of {self.max_symbol_rate} sym/s")
+        return None
+
+    def _check_settings(self, changes):
+        """ValueError (with every problem) unless all of changes can apply."""
+        problems = []
+        radio_only = ('tx_level', 'turnaround_s')
+
+        def number(key, low, high):
+            value = changes[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not low <= value <= high:
+                problems.append(f"{key} must be a number from {low:g} to {high:g}")
+
+        for key in changes:
+            if key not in SETTINGS:
+                problems.append(f"unknown setting {key!r} (one of {', '.join(SETTINGS)})")
+        if 'mode_id' in changes:
+            why = (self._mode_not_allowed(changes['mode_id'])
+                   if isinstance(changes['mode_id'], int) and not isinstance(changes['mode_id'], bool)
+                   else f"{changes['mode_id']!r} is not a Waveform Mode ID")
+            if why:
+                problems.append(f"mode_id: {why}")
+        if 'fec_preset' in changes and changes['fec_preset'] not in fec.PRESETS:
+            problems.append(f"fec_preset must be one of {', '.join(sorted(fec.PRESETS))}")
+        if 'bandwidth' in changes and changes['bandwidth'] not in ('narrow', 'wide'):
+            problems.append("bandwidth must be 'narrow' or 'wide'")
+        for key in ('ack', 'auto', 'batching'):
+            if key in changes and not isinstance(changes[key], bool):
+                problems.append(f"{key} must be true or false")
+        if 'lead_in_s' in changes:
+            number('lead_in_s', 0, 2)
+            if self.phy != 'audio':
+                problems.append("lead_in_s only applies to the audio PHY")
+        if 'tx_level' in changes:
+            number('tx_level', 0.01, 1)
+        if 'turnaround_s' in changes:
+            number('turnaround_s', 0, 10)
+        if 'max_tx_s' in changes:
+            number('max_tx_s', 1, 300)
+        if any(key in changes for key in radio_only) and not isinstance(self._sim, radio.RadioTransport):
+            problems.append(f"{' and '.join(k for k in radio_only if k in changes)} "
+                            f"only apply to a real radio (--radio)")
+        if problems:
+            raise ValueError('; '.join(problems))
+
+    async def update_settings(self, **changes):
+        """Change settings while running: any of SETTINGS. All are checked
+        first - a ValueError naming every problem, and nothing applied, if
+        one is invalid. Mode and FEC changes are announced to the peer (as
+        /mode and /fec do); so is a batching change, once a session with the
+        peer exists, so both stations agree on it. Emits a 'link' event and
+        returns link_state()."""
+        self._check_settings(changes)
+        if 'bandwidth' in changes:
+            self.bandwidth = changes['bandwidth']
+            self.max_symbol_rate = self._ceiling_for(self.bandwidth)
+        if 'ack' in changes:
+            self.use_ack = changes['ack']
+            if self.use_ack and self.retry_mgr is None:
+                self.retry_mgr = link.RetryManager()
+        if 'auto' in changes:
+            self.auto = changes['auto']
+            if self.auto:
+                self._auto_negotiate_done = False
+        if 'lead_in_s' in changes:
+            self.lead_in_s = float(changes['lead_in_s'])
+        if 'tx_level' in changes:
+            self._sim.tx_level = float(changes['tx_level'])
+        if 'turnaround_s' in changes:
+            self._sim.turnaround_s = float(changes['turnaround_s'])
+        if 'max_tx_s' in changes:
+            self.max_tx_s = float(changes['max_tx_s'])
+        batching_changed = 'batching' in changes and changes['batching'] != self.batching
+        if 'batching' in changes:
+            self.batching = changes['batching']
+            self.receiver.selective = self.batch_active
+        if 'mode_id' in changes or 'fec_preset' in changes:
+            if 'fec_preset' in changes:
+                self.use_fec = True
+            await self._announce_mode(changes.get('mode_id', self.mode_id),
+                                      changes.get('fec_preset', self.fec_preset if
+                                                  'mode_id' not in changes else None))
+            self._auto_negotiate_done = True
+        elif batching_changed and self._auto_negotiate_done:
+            await self._announce_mode(self.mode_id, self.fec_preset)   # carries the new capabilities
+        changed = ', '.join(f"{key}={value}" for key, value in changes.items())
+        self._log(f"[settings] {changed}")
+        state = self.link_state()
+        self._emit('link', **state)
+        return state
+
     async def _announce_mode(self, mode_id, fec_preset=None):
         """Applies mode_id/fec_preset to THIS station immediately, then
         authoritatively tells the peer to do the same (MODE_SET, retried
@@ -1907,6 +2015,29 @@ async def _handle_command(station, line):
         station.lead_in_s = ms / 1000
         station._log(f"[cmd] lead-in: {before:g} -> {ms:g} ms (must cover the transmitter's key-up "
                      f"plus the far squelch's opening time)")
+
+    elif cmd in ('tx-level', 'turnaround', 'max-tx', 'batch'):
+        key, unit, scale = {'tx-level': ('tx_level', '', 1.0),
+                            'turnaround': ('turnaround_s', ' ms', 1000.0),
+                            'max-tx': ('max_tx_s', ' s', 1.0),
+                            'batch': ('batching', '', None)}[cmd]
+        current = station.link_state()[key]
+        if len(parts) < 2:
+            shown = (('on' if current else 'off') if scale is None
+                     else 'n/a (no radio)' if current is None else f"{current * scale:g}{unit}")
+            station._log(f"[cmd] {cmd}: {shown} - usage: /{cmd} "
+                         + ('on|off' if scale is None else f"VALUE{unit}"))
+            return True
+        try:
+            if scale is None:
+                if parts[1].lower() not in ('on', 'off'):
+                    raise ValueError(f"{parts[1]!r} must be 'on' or 'off'")
+                value = parts[1].lower() == 'on'
+            else:
+                value = float(parts[1]) / scale
+            await station.update_settings(**{key: value})
+        except ValueError as exc:
+            station._log(f"[cmd] /{cmd}: {exc}")
 
     elif cmd in ('help', '?'):
         station._log(_help_text())
