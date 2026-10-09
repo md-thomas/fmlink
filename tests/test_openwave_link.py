@@ -498,7 +498,19 @@ class ControlFrameTests(unittest.TestCase):
         self.assertEqual(parser.last_header['seq'], 7)
         parsed = link.parse_control_payload(payload)
         self.assertEqual(parsed, {'op': link.CONTROL_OP_MODE_SET, 'mode_id': 4,
-                                   'fec_preset': 'r1_2_k3'})
+                                   'fec_preset': 'r1_2_k3', 'capabilities': 0})
+
+    def test_capabilities_byte_and_older_stations(self):
+        payload = link.build_mode_set_frame(seq=1, chosen_mode_id=3, fec_preset='r1_2_k3',
+                                            capabilities=link.CAP_BATCH)
+        start = self._header_start(payload)
+        parser = link.FrameParser()
+        _, body = self._feed_all(parser, payload[start:])
+        self.assertEqual(link.parse_control_payload(body)['capabilities'], link.CAP_BATCH)
+        # A station that predates the byte sends none: no capabilities.
+        self.assertEqual(link.parse_control_payload(body[:-1])['capabilities'], 0)
+        grant_old = bytes([link.CONTROL_OP_MODE_GRANT]) + body[1:1] + b'\x41\x90\x00\x00\x03\x01'
+        self.assertEqual(link.parse_control_payload(grant_old)['capabilities'], 0)
 
     def test_mode_set_ack_frame_round_trips(self):
         frame = link.build_mode_set_ack_frame(seq=7)
@@ -1272,3 +1284,103 @@ class LinkReceiverTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SelectiveAckTests(unittest.TestCase):
+    def test_round_trip(self):
+        frame = link.build_selective_ack_frame(500, 10, {0, 1, 2, 5, 9})
+        at = frame.find(link.SYNC_WORD) + len(link.SYNC_WORD)
+        header = link.parse_header(frame[at:at + link.HEADER_LEN])
+        payload = frame[at + link.HEADER_LEN:][:header['payload_len']]
+        self.assertTrue(link.is_ack(header))
+        self.assertEqual(header['seq'], 500)
+        self.assertEqual(link.parse_selective_ack(payload), (10, {0, 1, 2, 5, 9}))
+        self.assertEqual(len(payload), 3)   # count + 2 bitmap bytes
+
+    def test_malformed(self):
+        for bad in (b'', b'\x00', b'\x10\xff', bytes([link.MAX_FRAGMENTS + 1]) + bytes(9)):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    link.parse_selective_ack(bad)
+
+
+class SelectiveReassemblerTests(unittest.TestCase):
+    def segments(self, payload=b'0123456789' * 5, chunk=10, seq_start=40):
+        frames, _ = link.build_fragmented_frames(payload, seq_start=seq_start, chunk_size=chunk,
+                                                 src_id=b'K0MDT')
+        out = []
+        for frame in frames:
+            at = frame.find(link.SYNC_WORD) + len(link.SYNC_WORD)
+            header = link.parse_header(frame[at:at + link.HEADER_LEN])
+            out.append((header, frame[at + link.HEADER_LEN:][:header['payload_len']]))
+        return payload, out
+
+    def test_any_order_with_duplicates(self):
+        payload, segs = self.segments()
+        r = link.SelectiveReassembler()
+        order = [4, 0, 2, 0, 1]
+        self.assertEqual([r.feed(*segs[i])[0] for i in order],
+                         ['waiting', 'waiting', 'waiting', 'duplicate', 'waiting'])
+        self.assertEqual(r.status(b'K0MDT', 40), (5, {0, 1, 2, 4}))
+        self.assertEqual(r.feed(*segs[3]), ('complete', payload))
+        self.assertEqual(r.status(b'K0MDT', 40), (5, {0, 1, 2, 3, 4}))
+        self.assertEqual(r.feed(*segs[2])[0], 'duplicate')   # a late resend: not delivered again
+
+    def test_count_before_the_last_segment_arrives(self):
+        _, segs = self.segments()
+        r = link.SelectiveReassembler()
+        r.feed(*segs[0]); r.feed(*segs[2])
+        self.assertEqual(r.status(b'K0MDT', 40), (3, {0, 2}))
+        self.assertIsNone(r.status(b'K0MDT', 99))
+
+    def test_a_new_message_abandons_the_unfinished_one(self):
+        _, first = self.segments(seq_start=40)
+        payload2, second = self.segments(b'abcdefghij' * 2, seq_start=45)
+        r = link.SelectiveReassembler()
+        r.feed(*first[0])
+        r.feed(*second[1])
+        self.assertEqual(r.abort_count, 1)
+        self.assertEqual(r.feed(*second[0]), ('complete', payload2))
+
+    def test_never_delivers_a_truncated_message(self):
+        _, segs = self.segments(b'Z' * 100, chunk=10)
+        r = link.SelectiveReassembler(max_fragments=3)
+        statuses = [r.feed(h, p)[0] for h, p in segs]
+        self.assertNotIn('complete', statuses)
+        self.assertIn('overflow', statuses)
+        self.assertTrue(all(s in ('waiting', 'overflow', 'discarded') for s in statuses))
+
+
+class SelectiveReceiverTests(unittest.TestCase):
+    def test_batched_segments_reach_the_station_hooks(self):
+        frames, _ = link.build_fragmented_frames(b'x' * 30, seq_start=7, chunk_size=10,
+                                                 src_id=b'K0MDT', dst_id=b'W1AW',
+                                                 flags=link.FLAG_ACK_REQUESTED)
+        plain, _ = link.build_fragmented_frames(b'x' * 30, seq_start=7, chunk_size=10,
+                                                src_id=b'K0MDT', dst_id=b'W1AW')
+        messages, ack_calls, plain_acks = [], [], []
+        rx = link.LinkReceiver('W1AW', on_message=messages.append, on_ack_needed=plain_acks.append,
+                               on_selective_ack_needed=lambda src, s, now: ack_calls.append((s, now)))
+        rx.selective = True
+
+        def pair(frame):
+            at = frame.find(link.SYNC_WORD) + len(link.SYNC_WORD)
+            header = link.parse_header(frame[at:at + link.HEADER_LEN])
+            return header, frame[at + link.HEADER_LEN:][:header['payload_len']]
+
+        rx.feed_frame(*pair(plain[1]))
+        rx.feed_frame(*pair(plain[0]))
+        rx.feed_frame(*pair(frames[2]))             # the batch's last frame asks for the ACK
+        self.assertEqual(messages, ['x' * 30])
+        self.assertEqual(ack_calls, [(7, False), (7, False), (7, True)])
+        self.assertEqual(plain_acks, [])
+        self.assertEqual(rx.selective_reassembler.status(b'K0MDT', 7), (3, {0, 1, 2}))
+
+    def test_a_selective_ack_is_reported(self):
+        frame = link.build_selective_ack_frame(7, 3, {0, 2}, src_id=b'W1AW', dst_id=b'K0MDT')
+        got = []
+        rx = link.LinkReceiver('K0MDT', on_selective_ack_received=lambda *a: got.append(a))
+        at = frame.find(link.SYNC_WORD) + len(link.SYNC_WORD)
+        header = link.parse_header(frame[at:at + link.HEADER_LEN])
+        rx.feed_frame(header, frame[at + link.HEADER_LEN:][:header['payload_len']])
+        self.assertEqual(got, [(7, 3, {0, 2})])

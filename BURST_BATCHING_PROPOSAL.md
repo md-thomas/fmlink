@@ -1,7 +1,22 @@
 # Proposal: burst batching
 
-Status: **accepted (2026-10-08). Part 1 implemented (2026-10-08), not yet
-tried on the air; part 2 next.** Decisions at the end.
+Status: **accepted (2026-10-08). Parts 1 and 2 implemented (2026-10-08);
+not yet tried on the air.** Decisions at the end.
+
+Part 2 as built: `openwave_link.build_selective_ack_frame` /
+`parse_selective_ack`, `SelectiveReassembler`, `CAP_BATCH` in the
+capabilities byte; `Station._send_batched` (batches up to `--max-tx-s`,
+resends only missing segments, gives up after the retry limit of rounds
+without progress) and the receiver's selective ACKs, with the quiet-period
+ACK (`_batch_quiet_s`: a full segment's airtime + transport overhead + 1 s).
+`--no-batch` turns it off. Measured over `SimulatedAir` (the real radio
+transport, in memory) at mode 3: 8000 characters in 31.2 s vs 50.8 s
+stop-and-wait (257 vs 157 chars/s), 4000 in 16.9 s vs 25.3 s - in line with
+the estimate below. Getting there needed one receiver fix: the burst
+detector handed each burst over with 0.3 s of audio after it, which in a
+batch already holds the next burst's marker; it now keeps 40 ms, and the
+station looks for an earlier burst even when the strongest marker didn't
+decode.
 
 Part 1 as built: the batching lives in `ota_station.Station`
 (`_queue_burst` / `_flush_tx_batch`), so it covers both the radio and the
@@ -173,9 +188,9 @@ segment per transmission, as today.
    `--max-tx-s`. Test: the KISS TNC over the simulator with the kernel's
    window at 7, then Pat on the air.
 2. Part 2: selective ACK, out-of-order reassembly, batched sending,
-   capability bit. Test over the simulator (including lost segments), then
-   repeat the on-air message length test and compare with the 2026-10-08
-   numbers.
+   capability bit. Test over the simulator (including lost segments) - done -
+   then repeat the on-air message length test and compare with the
+   2026-10-08 numbers.
 3. Spec, RADIO_SETUP and MODEM_ARCHITECTURE updates.
 
 ## Decisions (2026-10-08)

@@ -1026,3 +1026,153 @@ class PingSurveySummaryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
+class BatchingOverFMTests(unittest.TestCase):
+    """Burst batching part 2 (BURST_BATCHING_PROPOSAL.md): --auto --ack
+    stations through ota_sim's FM model send a multi-segment message in
+    batches and acknowledge it with selective ACKs."""
+
+    TEXT = ''.join(f"segment test line {i:03d}. " for i in range(40))   # ~1000 chars
+
+    async def _pair(self, a_kw=None, b_kw=None, seed=3):
+        sim = await _create_simulator(FMLink('mic', base_cnr_db=25, latency_s=0.01, jitter_s=0.0,
+                                             seed=seed))
+        received = []
+        quiet = lambda msg: None  # noqa: E731
+        a = await _create_station('K0MDT', 'W1AW', use_ack=True, auto=True, phy='audio',
+                                  audio_port='mic', on_log=quiet, **(a_kw or {}))
+        b = await _create_station('W1AW', 'K0MDT', use_ack=True, auto=True, phy='audio',
+                                  audio_port='mic', on_message=received.append, on_log=quiet,
+                                  **(b_kw or {}))
+        for s in (a, b):
+            await s.connect(*sim.address)
+        await asyncio.sleep(0.05)
+        return sim, a, b, received
+
+    @staticmethod
+    def _count_data_frames(station):
+        sent = []
+        original = station._transmit_frame
+        def counting(frame_bytes, *args, **kw):
+            at = frame_bytes.find(link.IQ_MARKER) + len(link.IQ_MARKER)
+            header = link.parse_header(frame_bytes[at:at + link.HEADER_LEN])
+            if header['packet_type'] == link.PACKET_TYPE_DATA:
+                sent.append(header['fragment_index'])
+            return original(frame_bytes, *args, **kw)
+        station._transmit_frame = counting
+        return sent
+
+    def _finish(self, sim, a, b):
+        a.close()
+        b.close()
+        sim.close()
+
+    def test_a_message_goes_in_one_batch_and_one_selective_ack(self):
+        async def scenario():
+            sim, a, b, received = await self._pair()
+            await asyncio.wait_for(a.negotiate(), timeout=40)
+            a._auto_negotiate_done = True
+            a.max_fragment_chars = 200      # 5 segments of short bursts (negotiation resets it)
+            sent = self._count_data_frames(a)
+            acks = []
+            original_ack = b._send_selective_ack
+            b._send_selective_ack = lambda *args: (acks.append(1), original_ack(*args))
+            await asyncio.wait_for(a.send_text(self.TEXT), timeout=60)
+            ok = await _wait_for(lambda: received, timeout_s=10)
+            self._finish(sim, a, b)
+            self.assertTrue(a.batch_active and b.batch_active)
+            self.assertTrue(ok)
+            self.assertEqual(received, [self.TEXT])
+            self.assertEqual(sorted(sent), [0, 1, 2, 3, 4])    # each segment sent once
+            self.assertEqual(len(acks), 1)                     # one ACK for the batch
+        asyncio.run(scenario())
+
+    def test_only_the_lost_segment_is_resent(self):
+        self._lose_one_segment(2, seed=4)
+
+    def test_losing_the_segment_that_asks_for_the_ack(self):
+        # The receiver never sees the ACK request, so it acknowledges once
+        # the batch has gone quiet; the sender then resends just that one.
+        self._lose_one_segment(4, seed=6)
+
+    def _lose_one_segment(self, lost_index, seed):
+        async def scenario():
+            sim, a, b, received = await self._pair(seed=seed)
+            await asyncio.wait_for(a.negotiate(), timeout=40)
+            a._auto_negotiate_done = True
+            a.max_fragment_chars = 200      # 5 segments of short bursts (negotiation resets it)
+            sent = self._count_data_frames(a)
+            dropped = []
+            original_feed = b.receiver.feed_frame
+            def lossy(header, payload):
+                if header['packet_type'] == link.PACKET_TYPE_DATA \
+                        and header['fragment_index'] == lost_index and not dropped:
+                    dropped.append(1)      # this segment is lost on the air, once
+                    return
+                original_feed(header, payload)
+            b.receiver.feed_frame = lossy
+            await asyncio.wait_for(a.send_text(self.TEXT), timeout=90)
+            ok = await _wait_for(lambda: received, timeout_s=10)
+            self._finish(sim, a, b)
+            self.assertTrue(ok)
+            self.assertEqual(received, [self.TEXT])
+            self.assertEqual(sorted(sent), sorted([0, 1, 2, 3, 4, lost_index]))  # just that one again
+        asyncio.run(scenario())
+
+    def test_a_station_without_batching_gets_stop_and_wait(self):
+        async def scenario():
+            sim, a, b, received = await self._pair(b_kw={'batching': False}, seed=5)
+            await asyncio.wait_for(a.negotiate(), timeout=40)
+            a._auto_negotiate_done = True
+            a.max_fragment_chars = 200      # 5 segments of short bursts (negotiation resets it)
+            await asyncio.wait_for(a.send_text(self.TEXT), timeout=120)
+            ok = await _wait_for(lambda: received, timeout_s=10)
+            self._finish(sim, a, b)
+            self.assertFalse(a.batch_active or b.batch_active)
+            self.assertTrue(ok)
+            self.assertEqual(received, [self.TEXT])
+        asyncio.run(scenario())
+
+
+class BatchingOverRadioTests(unittest.TestCase):
+    """A batched message through the real radio transport over an in-memory
+    'air' (openwave_radio.SimulatedAir): the burst detector must hand the
+    station each segment of one transmission cleanly, so the whole message
+    goes in one round with no resends."""
+
+    def test_one_round_no_resends(self):
+        import openwave_radio as radio
+
+        async def scenario():
+            air = radio.SimulatedAir(noise_rms=0.02)
+            received = []
+            quiet = lambda msg: None  # noqa: E731
+
+            def make(name, peer, sink=None):
+                return Station(name, peer, mode_id=3, use_fec=True, fec_preset='r1_2_k3',
+                               use_ack=True, phy='audio', audio_port='mic', on_message=sink,
+                               on_log=quiet)
+
+            a, b = make('K0AAA', 'K0BBB'), make('K0BBB', 'K0AAA', received.append)
+            for station in (a, b):
+                port = air.port()
+                await station.connect_radio({'rx_device': None, 'rx_channels': 1},
+                                            capture=port.capture, player=port.player)
+            for station in (a, b):                  # as negotiation would leave them
+                station._set_peer_capabilities(link.CAP_BATCH)
+            a.max_fragment_chars = 300
+            text = ''.join(f"radio batch line {i:03d}. " for i in range(50))[:1200]   # 4 segments
+            sent = []
+            original = a._transmit_frame
+            a._transmit_frame = lambda f, *args, **kw: (sent.append(1), original(f, *args, **kw))
+            await asyncio.wait_for(a.send_text(text), timeout=60)
+            ok = await _wait_for(lambda: received, timeout_s=10)
+            a.close()
+            b.close()
+            self.assertTrue(ok)
+            self.assertEqual(received, [text])
+            self.assertEqual(len(sent), 4)          # every segment once: no resend round
+
+        asyncio.run(scenario())

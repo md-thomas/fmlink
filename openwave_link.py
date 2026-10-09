@@ -390,6 +390,35 @@ def build_ack_frame(acked_seq, lead_pad=24, end_pad=24, **header_kwargs):
     return build_frame(b'', lead_pad=lead_pad, end_pad=end_pad, seq=acked_seq, **header_kwargs)
 
 
+def build_selective_ack_frame(first_seq, count, received, lead_pad=24, end_pad=24, **header_kwargs):
+    """A selective ACK for a batched message (BURST_BATCHING_PROPOSAL.md):
+    an ACK frame whose Sequence Number is the message's first segment's and
+    whose payload says which of its segments arrived - one count byte (1..
+    MAX_FRAGMENTS), then a bitmap, bit i (LSB first) = fragment index i.
+    An ACK with an empty payload stays a plain single-frame ACK."""
+    if not 1 <= count <= MAX_FRAGMENTS:
+        raise ValueError(f'selective ACK count {count} out of range 1..{MAX_FRAGMENTS}')
+    bitmap = bytearray((count + 7) // 8)
+    for index in received:
+        if 0 <= index < count:
+            bitmap[index // 8] |= 1 << (index % 8)
+    header_kwargs.setdefault('packet_type', PACKET_TYPE_ACK)
+    header_kwargs['flags'] = header_kwargs.get('flags', 0) | FLAG_ACK_RESPONSE
+    return build_frame(bytes([count]) + bytes(bitmap), lead_pad=lead_pad, end_pad=end_pad,
+                       seq=first_seq, **header_kwargs)
+
+
+def parse_selective_ack(payload):
+    """A selective ACK's payload -> (count, set of fragment indices received).
+    Raises ValueError if it's malformed."""
+    if not payload:
+        raise ValueError('empty selective ACK payload')
+    count = payload[0]
+    if not 1 <= count <= MAX_FRAGMENTS or len(payload) < 1 + (count + 7) // 8:
+        raise ValueError(f'malformed selective ACK (count {count}, {len(payload)} bytes)')
+    return count, {i for i in range(count) if payload[1 + i // 8] >> (i % 8) & 1}
+
+
 # Payload format for PACKET_TYPE_CONTROL frames - ota_station.py's --auto
 # mode-negotiation handshake (see its negotiate()/_handle_control_frame()).
 # Not part of OpenWave_Specification.txt's spec yet - this is a v1 protocol
@@ -421,6 +450,10 @@ CONTROL_OP_PONG = 6
 
 _CONTROL_GRANT_STRUCT = struct.Struct('>BfBB')  # op, snr_db (float32), mode_id, fec preset ID
 _CONTROL_SET_STRUCT = struct.Struct('>BBB')  # op, mode_id, fec preset ID
+# Optional trailing capabilities byte on MODE_GRANT and MODE_SET (added
+# 2026-10-08). Stations that predate it ignore trailing bytes and send none,
+# which reads as 0: no optional features.
+CAP_BATCH = 0x01  # burst batching with selective ACKs (BURST_BATCHING_PROPOSAL.md)
 
 # 1-byte wire IDs for openwave_fec.py's PRESETS, used in MODE_GRANT/MODE_SET
 # payloads (v1 sent the preset's name as ASCII, ~7 bytes). This numbering
@@ -462,7 +495,7 @@ def build_mode_request_frame(seq, lead_pad=24, end_pad=24, **header_kwargs):
 
 
 def build_mode_grant_frame(seq, granted_mode_id, fec_preset, snr_db, lead_pad=24, end_pad=24,
-                            **header_kwargs):
+                            capabilities=0, **header_kwargs):
     """A station's reply to a mode request: the mode_id/fec_preset it
     selected for the requester to use (see select_mode_for_snr()), plus the
     snr_db estimate that selection was based on (purely informational - the
@@ -477,11 +510,12 @@ def build_mode_grant_frame(seq, granted_mode_id, fec_preset, snr_db, lead_pad=24
     sends."""
     header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
     payload = _CONTROL_GRANT_STRUCT.pack(CONTROL_OP_MODE_GRANT, snr_db, granted_mode_id,
-                                         _fec_preset_id(fec_preset))
+                                         _fec_preset_id(fec_preset)) + bytes([capabilities])
     return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
 
 
-def build_mode_set_frame(seq, chosen_mode_id, fec_preset, lead_pad=24, end_pad=24, **header_kwargs):
+def build_mode_set_frame(seq, chosen_mode_id, fec_preset, lead_pad=24, end_pad=24, capabilities=0,
+                         **header_kwargs):
     """The initiator's authoritative announcement, after measuring its OWN
     reception of the peer's mode_grant_frame reply: "use this mode/FEC for
     BOTH directions" - unlike build_mode_grant_frame's snr_db, this
@@ -495,7 +529,8 @@ def build_mode_set_frame(seq, chosen_mode_id, fec_preset, lead_pad=24, end_pad=2
     mode), unrelated to chosen_mode_id, which is payload content naming
     the mode both stations are about to switch to."""
     header_kwargs.setdefault('packet_type', PACKET_TYPE_CONTROL)
-    payload = _CONTROL_SET_STRUCT.pack(CONTROL_OP_MODE_SET, chosen_mode_id, _fec_preset_id(fec_preset))
+    payload = (_CONTROL_SET_STRUCT.pack(CONTROL_OP_MODE_SET, chosen_mode_id, _fec_preset_id(fec_preset))
+               + bytes([capabilities]))
     return build_frame(payload, lead_pad=lead_pad, end_pad=end_pad, seq=seq, **header_kwargs)
 
 
@@ -548,13 +583,18 @@ def parse_control_payload(payload):
             raise ValueError(f'mode grant payload too short ({len(payload)} bytes)')
         _, snr_db, mode_id, preset_id = _CONTROL_GRANT_STRUCT.unpack(payload[:_CONTROL_GRANT_STRUCT.size])
         return {'op': op, 'mode_id': mode_id, 'fec_preset': _fec_preset_name(preset_id),
-                'snr_db': snr_db}
+                'snr_db': snr_db, 'capabilities': _trailing_byte(payload, _CONTROL_GRANT_STRUCT.size)}
     if op == CONTROL_OP_MODE_SET:
         if len(payload) < _CONTROL_SET_STRUCT.size:
             raise ValueError(f'mode set payload too short ({len(payload)} bytes)')
         _, mode_id, preset_id = _CONTROL_SET_STRUCT.unpack(payload[:_CONTROL_SET_STRUCT.size])
-        return {'op': op, 'mode_id': mode_id, 'fec_preset': _fec_preset_name(preset_id)}
+        return {'op': op, 'mode_id': mode_id, 'fec_preset': _fec_preset_name(preset_id),
+                'capabilities': _trailing_byte(payload, _CONTROL_SET_STRUCT.size)}
     raise ValueError(f'unrecognized Control op {op}')
+
+
+def _trailing_byte(payload, at):
+    return payload[at] if len(payload) > at else 0
 
 
 def needs_ack(header):
@@ -690,9 +730,17 @@ class LinkReceiver:
     """
 
     def __init__(self, station_id='', on_message=None, on_ack_needed=None,
-                 on_ack_received=None, on_raw_message=None):
+                 on_ack_received=None, on_raw_message=None,
+                 on_selective_ack_needed=None, on_selective_ack_received=None):
         self.station_id = station_id
         self.reassembler = FragmentReassembler()
+        # Burst batching (BURST_BATCHING_PROPOSAL.md), once both stations
+        # have negotiated it: segments reassemble in any order and are
+        # acknowledged by selective ACKs (see feed_frame()).
+        self.selective = False
+        self.selective_reassembler = SelectiveReassembler()
+        self._on_selective_ack_needed = on_selective_ack_needed or (lambda src, first_seq, now: None)
+        self._on_selective_ack_received = on_selective_ack_received or (lambda seq, count, got: None)
         self.counts = {'ok': 0, 'crc_fail': 0, 'bad_length': 0, 'truncated': 0, 'dup': 0,
                         'lost': 0, 'acks_rx': 0, 'frag_aborted': 0, 'frag_overflow': 0,
                         'frag_discarded': 0, 'not_for_us': 0, 'bad_extension': 0}
@@ -768,7 +816,15 @@ class LinkReceiver:
 
         if is_ack(header):
             self.counts['acks_rx'] += 1
-            self._on_ack_received(header['seq'])
+            if payload:
+                try:
+                    count, received = parse_selective_ack(payload)
+                except ValueError:
+                    self.counts['bad_extension'] += 1
+                    return
+                self._on_selective_ack_received(header['seq'], count, received)
+            else:
+                self._on_ack_received(header['seq'])
             return
 
         # A malformed header-extension block can't be trusted to say where the
@@ -778,6 +834,20 @@ class LinkReceiver:
             payload = application_payload(header, payload)
         except ValueError:
             self.counts['bad_extension'] += 1
+            return
+
+        if self.selective and parse_flags(header['flags'])['fragmented']:
+            # A batched segment: any order, resends welcome. Acknowledge
+            # (selectively) only after it's been taken in - now if it asks
+            # for an ACK, else let the station decide when the batch is over.
+            frag_status, reassembled = self.selective_reassembler.feed(header, payload)
+            self.counts['frag_aborted'] = self.selective_reassembler.abort_count
+            self.counts['frag_overflow'] = self.selective_reassembler.overflow_count
+            self.counts['frag_discarded'] = self.selective_reassembler.discarded_count
+            if frag_status == 'complete':
+                self._publish(header, reassembled)
+            first_seq = (header['seq'] - header['fragment_index']) % SEQ_MODULUS
+            self._on_selective_ack_needed(header['src_id'], first_seq, needs_ack(header))
             return
 
         if needs_ack(header):
@@ -1268,3 +1338,86 @@ class FragmentReassembler:
             return 'complete', result
 
         return 'waiting', None
+
+
+class SelectiveReassembler:
+    """Reassembles a batched message (BURST_BATCHING_PROPOSAL.md), whose
+    segments can arrive in any order: a batch resends only the segments the
+    receiver reported missing. Segments belong together when they share a
+    source and a first sequence number (seq - fragment_index); a message is
+    delivered only when every index 0..last is present, last being the one
+    without the More Fragments flag - so, like FragmentReassembler, it can
+    never deliver a truncated message. One message is assembled at a time
+    (a sender doesn't start the next until this one is acknowledged): a
+    segment of a different message abandons the current one, except a late
+    resend of the message just completed, which is a duplicate.
+
+    status(src_id, first_seq) gives what a selective ACK reports.
+    """
+
+    def __init__(self, max_fragments=MAX_FRAGMENTS):
+        self.max_fragments = max_fragments
+        self.abort_count = 0
+        self.overflow_count = 0
+        self.discarded_count = 0
+        self.duplicate_count = 0
+        self._done = None        # (key, count) of the message last completed
+        self._abandoned = None   # key of a message given up on (overflow)
+        self.reset()
+
+    def reset(self):
+        self._key = None
+        self._chunks = {}
+        self._last = None
+
+    @property
+    def in_progress(self):
+        return self._key is not None
+
+    def feed(self, header, payload):
+        """Returns (status, result): ('waiting', None), ('complete', bytes),
+        ('duplicate', None) for a segment already held or of the message
+        already delivered, ('overflow', None) and ('discarded', None) as in
+        FragmentReassembler."""
+        index = header['fragment_index']
+        key = (header['src_id'], (header['seq'] - index) % SEQ_MODULUS)
+        if self._done is not None and key == self._done[0]:
+            self.duplicate_count += 1
+            return 'duplicate', None
+        if key == self._abandoned:
+            self.discarded_count += 1
+            return 'discarded', None
+        if index >= self.max_fragments:
+            if self._key == key:
+                self.reset()
+            self._abandoned = key
+            self.overflow_count += 1
+            return 'overflow', None
+        if key != self._key:
+            if self.in_progress:
+                self.abort_count += 1
+            self.reset()
+            self._key = key
+        if index in self._chunks:
+            self.duplicate_count += 1
+            return 'duplicate', None
+        self._chunks[index] = payload
+        if not parse_flags(header['flags'])['more_fragments']:
+            self._last = index
+        if self._last is not None and len(self._chunks) == self._last + 1:
+            result = b''.join(self._chunks[i] for i in range(self._last + 1))
+            self._done = (key, self._last + 1)
+            self.reset()
+            return 'complete', result
+        return 'waiting', None
+
+    def status(self, src_id, first_seq):
+        """(count, set of fragment indices held) for a selective ACK of the
+        message from src_id starting at first_seq, or None if unknown."""
+        key = (src_id, first_seq % SEQ_MODULUS)
+        if self._done is not None and key == self._done[0]:
+            return self._done[1], set(range(self._done[1]))
+        if key == self._key and self._chunks:
+            count = self._last + 1 if self._last is not None else max(self._chunks) + 1
+            return count, set(self._chunks)
+        return None

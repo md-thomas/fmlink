@@ -247,6 +247,13 @@ summary.
   format v1. v2's bursts are 17-31% shorter, so expect less now. Both
   stations must run v2 code to hear each other.) Both are optional: for the simplest possible test use
   `--mode 0 --fec --ack` without `--auto`.
+- **Burst batching** (on by default with `--auto --ack`, when both stations
+  have it): a long message's segments go out several per transmission with
+  one selective ACK per batch, and only missing segments are resent. Over
+  the simulated radio, 8000 characters at mode 3 take ~31 s instead of
+  ~51 s. A transmission is capped at `--max-tx-s` (default 30 s; keep it
+  under your radio's transmit time-out). `--no-batch` turns it off
+  (BURST_BATCHING_PROPOSAL.md).
 - `--tx-level 0.5` is the default; `--ptt-line dtr|rts` overrides the
   interface's PTT line; `-v` prints per-message detail.
 - The `mic` port carries modes 0-3 (mode 3, 2400 baud, on a 2000 Hz

@@ -26,10 +26,12 @@ test (all intact at mode 3, ~160 chars/s on long messages).
 
 **Burst batching (BURST_BATCHING_PROPOSAL.md, accepted 2026-10-08).**
 Part 1 done: bursts queued together share one key-up (`--max-tx-s`, 30 s),
-so an AX.25 window goes out in one transmission; tested over the
-simulator, not yet on the air (try Pat with the `axports` window raised to
-7). Part 2 next: batched chat segments with a selective ACK, out-of-order
-reassembly, negotiated capability bit.
+so an AX.25 window goes out in one transmission. Part 2 done: batched
+message segments with one selective ACK per batch, out-of-order
+reassembly, negotiated `CAP_BATCH` (on by default; `--no-batch`). Over the
+simulated radio, 8000 characters at mode 3 take 31 s instead of 51 s.
+**Next: on the air** - repeat the message length test, and Pat with the
+`axports` window raised to 7.
 
 Other candidates: re-test Pat at the default turnaround (AGC theory),
 digipeating/gateway, weak-link tests.

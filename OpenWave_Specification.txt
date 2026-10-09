@@ -185,6 +185,27 @@ Link layer:
             frame being acknowledged; each fragment of a fragmented
             message is acknowledged separately.
 
+        Selective ACK (burst batching; only between stations that both
+        offered CAP_BATCH in negotiation - see Control frame payloads):
+            Packet Type ACK, Flags bit 1 set, with a payload:
+                [count: 1 byte, 1-64][bitmap: ceil(count / 8) bytes]
+            Its Sequence Number is the first fragment's Sequence Number
+            (seq - fragment index) of the message being acknowledged.
+            Bit i of the bitmap (byte i // 8, LSB first) is set if the
+            fragment with Fragment Index i has been received. count is
+            the number of fragments the bitmap covers (the message's
+            total once its last fragment has arrived). An ACK with an
+            empty payload is always a plain ACK.
+            A batching sender sends several fragments in one
+            transmission with only the last one's ACK Requested flag
+            set, then resends only the fragments a selective ACK reports
+            missing. The receiver sends a selective ACK when a fragment
+            with ACK Requested arrives, and also once the batch has gone
+            quiet without one (its last fragment was lost); it
+            reassembles fragments in any order and delivers a message
+            only when fragments 0 to the last (the one without More
+            Fragments) are all present.
+
         AX.25 frame (packet type 0x05):
             The payload is one AX.25 frame as KISS carries it (addresses,
             control, PID, info; no HDLC flags, no AX.25 FCS - the frame's
@@ -202,14 +223,20 @@ Link layer:
                  Probe sent by the station starting negotiation, so the
                  peer has something to measure and reply to.
             0x02 MODE_GRANT    [op][SNR: float32, big-endian][mode: 1 byte]
-                               [FEC preset ID: 1 byte]
+                               [FEC preset ID: 1 byte][capabilities: 1 byte]
                  Reply to a MODE_REQUEST, with the same Sequence Number.
                  The SNR and mode/preset are the replier's own
                  non-binding opinion; the requester decides from its own
                  measurement of this reply.
             0x03 MODE_SET      [op][mode: 1 byte][FEC preset ID: 1 byte]
+                               [capabilities: 1 byte]
                  The requester's decision. Both stations use this
                  mode/FEC in both directions from then on.
+            Capabilities (optional trailing byte of MODE_GRANT and
+            MODE_SET; absent = 0, and receivers ignore trailing bytes,
+            so stations without it still interoperate):
+                 bit 0  CAP_BATCH - burst batching with selective ACKs.
+                        Used only when both stations set it.
             0x04 MODE_SET_ACK  [op]
                  Confirms a MODE_SET, with the same Sequence Number.
             0x05 PING          [op]

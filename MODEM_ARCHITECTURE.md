@@ -174,10 +174,18 @@ sequenceDiagram
     A->>B: MODE_SET (mode, FEC preset)
     B->>A: MODE_SET_ACK
     Note over A,B: data, at the negotiated mode (e.g. mode 3, QPSK 2400, r1_2_k3)
-    loop each segment (<= 1024 bytes), stop-and-wait
-        A->>B: DATA segment i of n (own seq, fragment index)
-        B->>A: ACK (seq)
-        Note over A: no ACK in time: resend the segment (with --ack)
+    alt both offered batching (capabilities byte in GRANT / SET)
+        loop until every segment is acknowledged
+            A->>B: one transmission: segments ... (only the last asks for an ACK)
+            B->>A: selective ACK (bitmap of segments received)
+            Note over A: next batch = only the missing segments
+        end
+    else stop-and-wait (a station without batching)
+        loop each segment (<= 1024 bytes)
+            A->>B: DATA segment i of n (own seq, fragment index)
+            B->>A: ACK (seq)
+            Note over A: no ACK in time: resend the segment (with --ack)
+        end
     end
 ```
 
@@ -185,12 +193,17 @@ sequenceDiagram
   reassembles by sequence number and fragment index
   (`openwave_link.LinkReceiver`, `FragmentReassembler`) and suppresses
   duplicates from retries.
-- **ACK and retry** (`--ack`): stop-and-wait, one segment at a time. Each
-  segment has its own sequence number and must be acknowledged before the
-  next is sent; the reply timeout allows for airtime, the radio transport's
-  overhead and the turnaround. This is why long messages settle near
-  160 chars/s at mode 3 (RADIO_SETUP.md, "Message length test"); sending
-  several segments per turn (burst batching) is the planned improvement.
+- **ACK and retry** (`--ack`), two ways:
+  - **Batched** (both stations negotiated `CAP_BATCH`; the default): as
+    many segments as fit in `--max-tx-s` go out in one transmission, only
+    the last asking for an ACK. The receiver answers with one selective ACK
+    (a bitmap of segments received), or sends it anyway once the batch goes
+    quiet if that last segment was lost. The sender resends only what's
+    missing. Segments reassemble in any order (`SelectiveReassembler`).
+  - **Stop-and-wait** (otherwise, or `--no-batch`): one segment at a time,
+    each acknowledged before the next. This settles near 160 chars/s on long
+    messages at mode 3; batching reaches ~257 chars/s (8000 characters in
+    31 s instead of 51 s, over the simulated radio).
 - **Mode negotiation** (`--auto`, `Station.negotiate`): the first time a
   station has something to send, it probes the link on the robust control
   channel and both stations switch to one mode/FEC.

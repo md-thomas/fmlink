@@ -343,9 +343,16 @@ class Station:
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
                  on_message=None, verbose=False, on_log=None, on_symbols=None, on_ax25=None,
                  phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S,
-                 max_tx_s=DEFAULT_MAX_TX_S):
+                 max_tx_s=DEFAULT_MAX_TX_S, batching=True):
         self.station_id = station_id
         self.max_tx_s = max_tx_s
+        # Batched messages with selective ACKs (BURST_BATCHING_PROPOSAL.md
+        # part 2): offered in negotiation when batching is on, used once the
+        # peer offers it too (see batch_active).
+        self.batching = batching
+        self._peer_capabilities = 0
+        self._batch_wait = None      # the batch awaiting a selective ACK, while sending
+        self._batch_ack_timer = None # pending "batch is over" selective ACK, while receiving
         self._tx_batch = []          # (pcm16 bytes, lead-in samples) waiting to be sent
         self._tx_flush = None        # the scheduled _flush_tx_batch, if any
         self.dst_id = dst_id
@@ -415,6 +422,8 @@ class Station:
             on_message=self._handle_message,
             on_ack_needed=self._on_ack_needed,
             on_ack_received=self._on_ack_received,
+            on_selective_ack_needed=self._on_selective_ack_needed,
+            on_selective_ack_received=self._on_selective_ack_received,
         )
         self.retry_mgr = link.RetryManager() if use_ack else None
         self._suppress_next_message = False
@@ -580,6 +589,9 @@ class Station:
         ).connect()
 
     def close(self):
+        if self._batch_ack_timer is not None:
+            self._batch_ack_timer.cancel()
+            self._batch_ack_timer = None
         if self._tx_batch:
             self._flush_tx_batch()
         if self._sim is not None:
@@ -762,7 +774,9 @@ class Station:
                 self._ping_last_rx_status = 'no_sync'
             return
 
-        if self.phy == 'audio' and matched is not None:
+        if self.phy == 'audio':
+            # Even when nothing decoded: the strongest marker can belong to a
+            # burst cut off at the end of this audio, with a whole one before it.
             self._handle_earlier_bursts(payload, recover, matched_modulation, phy_params[0])
 
         self._last_rx_snr_db = (snr_db if snr_db is not None
@@ -915,6 +929,7 @@ class Station:
             proposed_mode_id, proposed_fec_preset = self._select_mode()
             grant = link.build_mode_grant_frame(
                 header['seq'], proposed_mode_id, proposed_fec_preset, self._last_rx_snr_db,
+                capabilities=self._capabilities(),
                 mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
                 dst_id=self.dst_id.encode(),
             )
@@ -928,6 +943,7 @@ class Station:
         if parsed['op'] == link.CONTROL_OP_MODE_GRANT:
             if self._negotiation_event is None or header['seq'] != self._negotiation_seq:
                 return  # stale/unmatched reply (e.g. a retried request's earlier reply) - ignore
+            self._set_peer_capabilities(parsed['capabilities'])
             # self._last_rx_snr_db is OUR OWN measurement of this frame -
             # negotiate() decides from that, not from parsed['mode_id']/
             # fec_preset (the peer's own opinion, logged only).
@@ -954,6 +970,7 @@ class Station:
             # decode despite negotiate() having just reported success.
             self.use_fec = True
             self._apply_mode(parsed['mode_id'], parsed['fec_preset'])
+            self._set_peer_capabilities(parsed['capabilities'])
             self._auto_negotiate_done = True
             ack = link.build_mode_set_ack_frame(
                 header['seq'], mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
@@ -1081,7 +1098,7 @@ class Station:
         self._mode_set_event = asyncio.Event()
 
         set_frame = link.build_mode_set_frame(
-            seq, mode_id, self.fec_preset, mode_id=CONTROL_MODE_ID,
+            seq, mode_id, self.fec_preset, capabilities=self._capabilities(), mode_id=CONTROL_MODE_ID,
             src_id=self.station_id.encode(), dst_id=self.dst_id.encode())
 
         confirmed = False
@@ -1401,14 +1418,25 @@ class Station:
             return
 
         started_at = time.monotonic()
-        for i, frame in enumerate(frames):
-            seq = (first_seq + i) % link.SEQ_MODULUS
-            if not await self._send_with_retry(seq, frame):
-                self._log(f"[ack] gave up on message segment {i + 1}/{len(frames)} (seq {seq}) - "
-                          f"message incomplete, aborting remaining segments")
+        if self.batch_active and len(frames) > 1:
+            # The same segments without the ACK request, for all but the
+            # last of each batch (see _send_batched).
+            plain, _ = link.build_fragmented_frames(
+                text_bytes, seq_start=first_seq, mode_id=self.mode_id,
+                chunk_size=self.max_fragment_chars,
+                src_id=self.station_id.encode(), dst_id=self.dst_id.encode(),
+            )
+            if not await self._send_batched(first_seq, frames, plain):
                 return
-            if self.verbose and len(frames) > 1:
-                self._log(f"[ack] message segment {i + 1}/{len(frames)} delivered")
+        else:
+            for i, frame in enumerate(frames):
+                seq = (first_seq + i) % link.SEQ_MODULUS
+                if not await self._send_with_retry(seq, frame):
+                    self._log(f"[ack] gave up on message segment {i + 1}/{len(frames)} (seq {seq}) - "
+                              f"message incomplete, aborting remaining segments")
+                    return
+                if self.verbose and len(frames) > 1:
+                    self._log(f"[ack] message segment {i + 1}/{len(frames)} delivered")
 
         elapsed = time.monotonic() - started_at
         note = ""
@@ -1431,6 +1459,119 @@ class Station:
     def _on_ack_received(self, seq):
         if self.retry_mgr:
             self.retry_mgr.note_ack(seq)
+
+    # -- burst batching with selective ACKs (BURST_BATCHING_PROPOSAL.md) --
+    def _capabilities(self):
+        return link.CAP_BATCH if self.batching else 0
+
+    def _set_peer_capabilities(self, capabilities):
+        self._peer_capabilities = capabilities
+        self.receiver.selective = self.batch_active
+        if self.verbose:
+            self._log(f"[negotiate] batching {'on' if self.batch_active else 'off'} "
+                      f"(peer {'offers' if capabilities & link.CAP_BATCH else 'does not offer'} it)")
+
+    @property
+    def batch_active(self):
+        """Both stations offered batching when they last negotiated."""
+        return bool(self.batching and self._peer_capabilities & link.CAP_BATCH)
+
+    def _payload_airtime_s(self, payload_len):
+        """Airtime of one data burst of payload_len bytes at the current mode,
+        lead-in included (0 on the IQ PHY, which has no airtime)."""
+        if self.phy != 'audio':
+            return 0.0
+        samples = radio.burst_air_samples(self.modulation, self._symbol_rate, self.use_fec,
+                                          self._fec_generators, self._fec_k, payload_len)
+        return self.lead_in_s + samples / audio_phy.AUDIO_SAMPLE_RATE
+
+    def _batch_quiet_s(self):
+        """How long a receiver waits after a batched segment before deciding
+        the batch is over: a full segment's airtime plus the transport's
+        overhead and a margin."""
+        return (self._payload_airtime_s(link.MAX_PAYLOAD_LEN)
+                + 2 * getattr(self._sim, 'overhead_s', 0.0) + 1.0)
+
+    async def _send_batched(self, first_seq, acked_frames, plain_frames):
+        """Send a message's segments in batches - as many per transmission as
+        max_tx_s allows, only the last asking for an ACK - and resend just
+        the ones the selective ACK says are missing. Gives up after the
+        retry limit's worth of rounds in a row with no progress. Returns
+        True when every segment is acknowledged."""
+        n = len(acked_frames)
+        pending = list(range(n))
+        stalls = 0
+        payload_lens = [link.parse_header(f[f.find(link.IQ_MARKER) + len(link.IQ_MARKER):]
+                                          [:link.HEADER_LEN])['payload_len'] for f in acked_frames]
+        overhead = getattr(self._sim, 'overhead_s', 0.0)
+        while pending:
+            batch, airtime = [], 0.0
+            for i in pending:
+                burst = self._payload_airtime_s(payload_lens[i])
+                extra = burst if not batch else burst - self.lead_in_s + BATCH_GAP_S
+                if batch and airtime + extra > self.max_tx_s:
+                    break
+                batch.append(i)
+                airtime += extra
+            wait = {'first_seq': first_seq, 'event': asyncio.Event(), 'received': set()}
+            self._batch_wait = wait
+            for i in batch[:-1]:
+                self._transmit_frame(plain_frames[i])
+            self._transmit_frame(acked_frames[batch[-1]])
+            timeout = (self.retry_mgr.timeout_s + airtime + self._batch_quiet_s()
+                       + 2 * overhead + self._payload_airtime_s(1 + link.MAX_FRAGMENTS // 8))
+            try:
+                await asyncio.wait_for(wait['event'].wait(), timeout)
+            except asyncio.TimeoutError:
+                pass
+            self._batch_wait = None
+            got = [i for i in pending if i in wait['received']]
+            pending = [i for i in pending if i not in wait['received']]
+            if not pending:
+                break
+            stalls = 0 if got else stalls + 1
+            if stalls > self.retry_mgr.max_retries:
+                self._log(f"[ack] gave up: {n - len(pending)}/{n} message segments acknowledged, "
+                          f"no progress in {stalls} tries - message incomplete")
+                return False
+            if self.verbose:
+                self._log(f"[ack] {n - len(pending)}/{n} message segments acknowledged - "
+                          f"resending {len(pending)}")
+        return True
+
+    def _on_selective_ack_received(self, seq, count, received):
+        wait = self._batch_wait
+        if wait is not None and seq == wait['first_seq']:
+            wait['received'] |= received
+            wait['event'].set()
+
+    def _on_selective_ack_needed(self, src_id, first_seq, now):
+        """A batched segment arrived. If it asked for an ACK it ended its
+        batch: acknowledge now. Otherwise the batch may still be arriving -
+        acknowledge once _batch_quiet_s() passes with nothing more, in case
+        the batch's last segment was lost."""
+        if self._batch_ack_timer is not None:
+            self._batch_ack_timer.cancel()
+            self._batch_ack_timer = None
+        if now:
+            self._send_selective_ack(src_id, first_seq)
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._batch_ack_timer = loop.call_later(self._batch_quiet_s(), self._send_selective_ack,
+                                                src_id, first_seq)
+
+    def _send_selective_ack(self, src_id, first_seq):
+        self._batch_ack_timer = None
+        status = self.receiver.selective_reassembler.status(src_id, first_seq)
+        if status is None:
+            return
+        count, received = status
+        self._transmit_frame(link.build_selective_ack_frame(
+            first_seq, count, received, mode_id=self.mode_id,
+            src_id=self.station_id.encode(), dst_id=self.dst_id.encode()))
 
     async def _send_with_retry(self, seq, frame_bytes):
         """Transmit frame_bytes (seq already baked into its header) and
@@ -1747,7 +1888,7 @@ async def run(args):
         use_fec=args.fec or args.auto, fec_preset=args.fec_preset, use_ack=args.ack,
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
         phy=args.phy, audio_port=args.audio_port, lead_in_s=args.lead_in_ms / 1000,
-        max_tx_s=args.max_tx_s,
+        max_tx_s=args.max_tx_s, batching=not args.no_batch,
     )
     log_path = None
     if not args.no_log:
@@ -1866,6 +2007,10 @@ def main():
                          help="with --phy audio: which radio connection - mic (300-3000 Hz; "
                               "modes 0-3, mode 3 on a 2000 Hz carrier) or data (flat 6-pin data "
                               "port, modes 0-3). A hard mode ceiling, unlike --bandwidth.")
+    parser.add_argument('--no-batch', action='store_true',
+                         help='with --auto --ack: don\'t offer burst batching (several message '
+                              'segments per transmission, one selective ACK) - send each segment '
+                              'and wait for its ACK, as stations without batching do')
     parser.add_argument('--max-tx-s', type=float, default=DEFAULT_MAX_TX_S,
                          help='with --phy audio: longest single transmission. Bursts sent together '
                               'share one key-up and lead-in, up to this many seconds '

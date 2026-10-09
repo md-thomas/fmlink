@@ -37,7 +37,8 @@ CHUNK_S = 0.25        # audio read at a time
 STEP_S = 0.5          # how often the buffer is searched for a burst
 KEEP_S = 2.5          # audio kept while nothing has been heard
 LEAD_S = 0.5          # audio kept ahead of a burst's marker when handing it over
-TAIL_S = 0.3          # ... and after its end
+TAIL_S = 0.04         # ... and after its end: enough for the filters' ringing, short of
+                      # the next burst when several share a transmission (50 ms apart)
 GUARD_S = 0.05        # audio left out ahead of a marker when looking for an earlier burst
 MIN_QUALITY = 0.15    # below this, "no burst" (see openwave_audio.demodulate)
 
