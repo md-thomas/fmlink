@@ -24,9 +24,15 @@ from 7.6 to 13.3 dB (Baofeng -> TIDRADIO); mode 2 gained 3-8 dB. Table in
 RADIO_SETUP.md "Receive equalizer". Also 2026-10-08: the message length
 test (all intact at mode 3, ~160 chars/s on long messages).
 
-Next candidates: burst batching (several segments per turn - long
-messages wait for an ACK per 1024 characters), re-test Pat at the default
-turnaround (AGC theory), digipeating/gateway, weak-link tests.
+**Burst batching (BURST_BATCHING_PROPOSAL.md, accepted 2026-10-08).**
+Part 1 done: bursts queued together share one key-up (`--max-tx-s`, 30 s),
+so an AX.25 window goes out in one transmission; tested over the
+simulator, not yet on the air (try Pat with the `axports` window raised to
+7). Part 2 next: batched chat segments with a selective ACK, out-of-order
+reassembly, negotiated capability bit.
+
+Other candidates: re-test Pat at the default turnaround (AGC theory),
+digipeating/gateway, weak-link tests.
 
 
 **Stopped here for the night (2026-10-07); pick up tomorrow.** Mode 3 on the

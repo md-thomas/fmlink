@@ -25,6 +25,7 @@ except ImportError:
 
 if OTA_SIM_AVAILABLE:
     from ota_station import Station, _ping_survey_summary, _handle_command, NARROWBAND_MAX_SYMBOL_RATE
+    import ota_station
 
 TIMEOUT_S = 5.0
 
@@ -873,12 +874,67 @@ class AudioPhyStationTests(unittest.TestCase):
             a._sim = _Recorder()
             frame = link.build_frame(b'x', seq=1, mode_id=2)
             a._transmit_frame(frame)
+            await asyncio.sleep(2 * ota_station.BATCH_COLLECT_S)   # let it go out on its own
             await _handle_command(a, '/lead-in 750')
             a._transmit_frame(frame)
+            await asyncio.sleep(2 * ota_station.BATCH_COLLECT_S)
             first, second = (len(p) / 2 / audio_phy.AUDIO_SAMPLE_RATE for p in a._sim.sent)
             self.assertAlmostEqual(second - first, 0.5, places=3)
 
         self._run(scenario())
+
+    def _batch_station(self, **kw):
+        class _Recorder:
+            connected = True
+
+            def __init__(self):
+                self.sent = []
+
+            def send(self, payload):
+                self.sent.append(payload)
+
+        a = Station(station_id='K0MDT', dst_id='W1AW', mode_id=2, phy='audio', audio_port='mic',
+                    on_log=lambda msg: None, **kw)
+        a._sim = _Recorder()
+        return a
+
+    def test_bursts_sent_together_share_one_transmission(self):
+        async def scenario():
+            a = self._batch_station()
+            frame = link.build_frame(b'x' * 50, seq=1, mode_id=2)
+            a._transmit_frame(frame)
+            await asyncio.sleep(2 * ota_station.BATCH_COLLECT_S)
+            single = len(a._sim.sent[0])
+            a._sim.sent.clear()
+            for _ in range(3):
+                a._transmit_frame(frame)
+            self.assertEqual(a._sim.sent, [])           # held for the collection window
+            await asyncio.sleep(2 * ota_station.BATCH_COLLECT_S)
+            self.assertEqual(len(a._sim.sent), 1)       # one key-up for all three
+            rate = audio_phy.AUDIO_SAMPLE_RATE
+            lead = int(round(a.lead_in_s * rate))
+            gap = int(round(ota_station.BATCH_GAP_S * rate))
+            expected = single + 2 * (single - 2 * lead + 2 * gap)
+            self.assertEqual(len(a._sim.sent[0]), expected)  # later bursts: a gap, not a lead-in
+
+        self._run(scenario())
+
+    def test_max_tx_s_splits_a_batch(self):
+        async def scenario():
+            a = self._batch_station(max_tx_s=0.8)
+            frame = link.build_frame(b'x' * 50, seq=1, mode_id=2)   # ~0.6 s each, two won't fit
+            for _ in range(3):
+                a._transmit_frame(frame)
+            await asyncio.sleep(2 * ota_station.BATCH_COLLECT_S)
+            self.assertEqual(len(a._sim.sent), 3)
+            self.assertTrue(all(len(p) / 2 / audio_phy.AUDIO_SAMPLE_RATE <= 0.8 for p in a._sim.sent))
+
+        self._run(scenario())
+
+    def test_without_an_event_loop_bursts_go_straight_out(self):
+        a = self._batch_station()
+        a._transmit_frame(link.build_frame(b'x', seq=1, mode_id=2))
+        self.assertEqual(len(a._sim.sent), 1)
 
     def test_reply_timeout_tracks_airtime(self):
         iq = Station(station_id='K0MDT', dst_id='W1AW')

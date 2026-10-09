@@ -59,6 +59,7 @@ Known v1 limitations:
 """
 import argparse
 import asyncio
+import itertools
 import os
 import signal
 import sys
@@ -152,6 +153,21 @@ PING_TIMEOUT_S = 2.0
 # still has a BPSK sibling one step down, i.e. the same "1200 sym/s
 # ceiling" a classic packet-radio-style narrowband channel would impose.
 NARROWBAND_MAX_SYMBOL_RATE = 1200
+
+# Burst batching (BURST_BATCHING_PROPOSAL.md, part 1): on the audio PHY,
+# bursts queued within BATCH_COLLECT_S of each other go out as ONE
+# transmission - one PTT key-up and one lead-in - instead of each keying
+# the radio separately. Later bursts in a batch start BATCH_GAP_S after the
+# previous one instead of after a full lead-in; the receiver decodes
+# back-to-back bursts in order. A batch stops growing at max_tx_s of
+# airtime (a radio's transmit time-out; a shared channel needs gaps).
+BATCH_COLLECT_S = 0.05
+# Receiving a whole batched transmission at once (the simulator): audio
+# before the decoded burst is searched for earlier bursts only when there's
+# more of it than a lone burst's lead-in and key-up.
+EARLIER_BURST_MIN_S = 0.5
+BATCH_GAP_S = 0.05
+DEFAULT_MAX_TX_S = 30.0
 
 
 def _human_size(num_bytes, short=False):
@@ -326,8 +342,12 @@ class Station:
     def __init__(self, station_id, dst_id, mode_id=0, use_fec=False,
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
                  on_message=None, verbose=False, on_log=None, on_symbols=None, on_ax25=None,
-                 phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S):
+                 phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S,
+                 max_tx_s=DEFAULT_MAX_TX_S):
         self.station_id = station_id
+        self.max_tx_s = max_tx_s
+        self._tx_batch = []          # (pcm16 bytes, lead-in samples) waiting to be sent
+        self._tx_flush = None        # the scheduled _flush_tx_batch, if any
         self.dst_id = dst_id
         self.use_fec = use_fec
         self.use_ack = use_ack
@@ -560,6 +580,8 @@ class Station:
         ).connect()
 
     def close(self):
+        if self._tx_batch:
+            self._flush_tx_batch()
         if self._sim is not None:
             self._sim.close()
         if getattr(self, '_log_file', None) is not None:
@@ -614,6 +636,7 @@ class Station:
 
         audio = audio_phy.pcm16_to_audio(payload)
         cache = {}
+        timings = {}   # (modulation, symbol rate) -> the marker's sample index
 
         def recover(modulation, symbol_rate):
             if (modulation, symbol_rate) not in cache:
@@ -624,7 +647,9 @@ class Station:
                     constellation=modem._CONSTELLATIONS[modulation])
                 symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
                 cache[(modulation, symbol_rate)] = (symbols, info['snr_db'], info['marker_index'])
+                timings[(modulation, symbol_rate)] = info['timing']
             return cache[(modulation, symbol_rate)]
+        recover.timings = timings
         return recover
 
     def _burst_quality(self, frames, modulation, symbols, marker_index, symbol_rate,
@@ -673,7 +698,10 @@ class Station:
                      f"in dropouts, burst average ~{self._last_rx_quality['snr_db']:.1f}dB)")
         return note
 
-    def _handle_received_samples(self, payload):
+    def _handle_received_samples(self, payload, trailing=False):
+        """trailing: payload is what followed an already-decoded burst in the
+        same transmission (see _handle_trailing_bursts) - stay quiet if it
+        holds no burst."""
         self.stats['received_air_bytes'] += len(payload)
         recover = self._symbol_recoverer(payload)
 
@@ -707,9 +735,13 @@ class Station:
                 first_marker_bit = (None if marker_index is None
                                     else marker_index * BITS_PER_SYMBOL[modulation])
                 marker = link.AUDIO_MARKER if self.phy == 'audio' else None
-                candidate = (list(fec.decode_frames(recovered, fec_generators, fec_k,
-                                                    first_marker_bit=first_marker_bit, marker=marker))
-                             if use_fec else list(sync.iter_frames_correlated(recovered, marker=marker)))
+                found = (fec.decode_frames(recovered, fec_generators, fec_k,
+                                           first_marker_bit=first_marker_bit, marker=marker)
+                         if use_fec else sync.iter_frames_correlated(recovered, marker=marker))
+                # An audio burst carries one frame; any burst after it in the
+                # same transmission gets its own sync (_handle_trailing_bursts),
+                # so don't read on into it from this burst's symbols.
+                candidate = list(itertools.islice(found, 1)) if self.phy == 'audio' else list(found)
             except Exception:
                 candidate = []
             attempt = (candidate, modulation, symbols, snr_db, marker_index,
@@ -722,11 +754,16 @@ class Station:
         frames, matched_modulation, symbols, snr_db, marker_index, phy_params = matched or fallback
 
         if not frames:
+            if trailing:
+                return
             self._log("[rx] no frame found in this burst - link too weak to even find sync "
                       "(try a shorter --distance-km or a higher --base-snr-db on the simulator)")
             if self._ping_event is not None:
                 self._ping_last_rx_status = 'no_sync'
             return
+
+        if self.phy == 'audio' and matched is not None:
+            self._handle_earlier_bursts(payload, recover, matched_modulation, phy_params[0])
 
         self._last_rx_snr_db = (snr_db if snr_db is not None
                                 else modem.estimate_snr_db(symbols, matched_modulation))
@@ -793,6 +830,40 @@ class Station:
                 self.receiver.feed_crc_failure(status)
                 if self._ping_event is not None:
                     self._ping_last_rx_status = status
+
+        if self.phy == 'audio' and matched is not None:
+            self._handle_trailing_bursts(payload, recover, matched_modulation, phy_params, frames)
+
+    def _handle_earlier_bursts(self, payload, recover, modulation, symbol_rate):
+        """The demodulator locks onto the STRONGEST marker in the audio, which
+        in a batched transmission (see _handle_trailing_bursts) needn't be
+        the first. Decode the audio before it first, so bursts are handled
+        in the order they were sent. A lone burst has only its lead-in
+        before it, under EARLIER_BURST_MIN_S, so this costs nothing then."""
+        timing = recover.timings.get((modulation, symbol_rate))
+        if timing is None:
+            return
+        sps = audio_phy.samples_per_symbol(symbol_rate)
+        cut = timing - audio_phy.SPAN_SYMBOLS * sps - int(0.01 * audio_phy.AUDIO_SAMPLE_RATE)
+        if cut >= EARLIER_BURST_MIN_S * audio_phy.AUDIO_SAMPLE_RATE:
+            self.stats['received_air_bytes'] -= 2 * cut   # counted again below
+            self._handle_received_samples(payload[:2 * cut], trailing=True)
+
+    def _handle_trailing_bursts(self, payload, recover, modulation, phy_params, frames):
+        """A transmission can carry several bursts back to back (burst
+        batching). Over a real radio openwave_radio's BurstDetector splits
+        them before they get here; the simulator delivers the whole
+        transmission at once. So after decoding a burst, decode whatever
+        follows it in the same audio, if there's enough left to hold one."""
+        timing = recover.timings.get((modulation, phy_params[0]))
+        decoded = [header for status, header, _ in frames if status == 'ok']
+        if timing is None or not decoded:
+            return
+        end = timing + radio.burst_air_samples(modulation, *phy_params, decoded[-1]['payload_len'])
+        rest = payload[2 * end:]
+        if len(rest) // 2 >= audio_phy.AUDIO_SAMPLE_RATE // 4:
+            self.stats['received_air_bytes'] -= len(rest)   # counted again below
+            self._handle_received_samples(rest, trailing=True)
 
     def _log_fragment_events(self, counts_before):
         """FragmentReassembler (via LinkReceiver) tracks aborted/overflowed/
@@ -1215,9 +1286,55 @@ class Station:
         if self._sim is None or not self._sim.connected:
             self._log("[tx error] not connected to the simulator - burst NOT sent")
             return
-        self._sim.send(out)
+        if self.phy == 'audio':
+            self._queue_burst(out, int(round(self.lead_in_s * audio_phy.AUDIO_SAMPLE_RATE)))
+        else:
+            self._sim.send(out)
         self._last_tx_airtime_s = airtime_s
         self.stats['sent_air_bytes'] += len(out)
+
+    def _queue_burst(self, pcm, lead_samples):
+        """Hold an audio burst for BATCH_COLLECT_S so any sent right after it
+        join the same transmission (see BATCH_COLLECT_S)."""
+        self._tx_batch.append((pcm, lead_samples))
+        if self._tx_flush is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._flush_tx_batch()  # no event loop to wait on: send now
+            return
+        self._tx_flush = loop.call_later(BATCH_COLLECT_S, self._flush_tx_batch)
+
+    def _flush_tx_batch(self):
+        """Send the queued bursts, as few transmissions as max_tx_s allows."""
+        if self._tx_flush is not None:
+            self._tx_flush.cancel()
+        self._tx_flush = None
+        bursts, self._tx_batch = self._tx_batch, []
+        if not bursts:
+            return
+        rate = audio_phy.AUDIO_SAMPLE_RATE
+        gap = bytes(2 * int(round(BATCH_GAP_S * rate)))
+        transmissions, current = [], b''
+        for pcm, lead_samples in bursts:
+            if not current:
+                current = pcm
+                continue
+            follow = gap + pcm[2 * lead_samples:]   # no lead-in: the radio is already keyed
+            if (len(current) + len(follow)) / 2 / rate > self.max_tx_s:
+                transmissions.append(current)
+                current = pcm
+            else:
+                current += follow
+        transmissions.append(current)
+        if len(bursts) > 1:
+            self._trace(f"[tx] batched {len(bursts)} bursts into {len(transmissions)} transmission(s)")
+        for pcm in transmissions:
+            if self._sim is None or not self._sim.connected:
+                self._log("[tx error] not connected - burst NOT sent")
+                return
+            self._sim.send(pcm)
 
     def _transmit_control_frame(self, frame_bytes):
         self._transmit_frame(frame_bytes, modulate_fn=self._control_modulate, use_fec=True,
@@ -1630,6 +1747,7 @@ async def run(args):
         use_fec=args.fec or args.auto, fec_preset=args.fec_preset, use_ack=args.ack,
         auto=args.auto, bandwidth=args.bandwidth, verbose=args.verbose,
         phy=args.phy, audio_port=args.audio_port, lead_in_s=args.lead_in_ms / 1000,
+        max_tx_s=args.max_tx_s,
     )
     log_path = None
     if not args.no_log:
@@ -1748,6 +1866,11 @@ def main():
                          help="with --phy audio: which radio connection - mic (300-3000 Hz; "
                               "modes 0-3, mode 3 on a 2000 Hz carrier) or data (flat 6-pin data "
                               "port, modes 0-3). A hard mode ceiling, unlike --bandwidth.")
+    parser.add_argument('--max-tx-s', type=float, default=DEFAULT_MAX_TX_S,
+                         help='with --phy audio: longest single transmission. Bursts sent together '
+                              'share one key-up and lead-in, up to this many seconds '
+                              f'(default: {DEFAULT_MAX_TX_S:g}; keep it under your radio\'s '
+                              'transmit time-out)')
     parser.add_argument('--lead-in-ms', type=float, default=audio_phy.DEFAULT_LEAD_IN_S * 1000,
                          help='with --phy audio: silence before each burst so the far radio\'s '
                               'squelch is open before the frame starts - must exceed TX key-up '

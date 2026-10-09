@@ -188,6 +188,27 @@ class TncRelayTests(unittest.TestCase):
             self.assertEqual(decoder.crc_mode, kiss.CRC_SMACK)
         asyncio.run(scenario())
 
+    def test_a_window_of_frames_goes_out_in_one_transmission(self):
+        # The kernel hands a TNC a window of I-frames at once; with burst
+        # batching they share one key-up and all arrive, in order.
+        async def scenario():
+            sim, a, b = await self._setup()
+            sends = []
+            real_send = a.station._sim.send
+            a.station._sim.send = lambda payload: (sends.append(len(payload)), real_send(payload))
+            ra, wa = await asyncio.open_connection(*a.hub.tcp_address)
+            rb, wb = await asyncio.open_connection(*b.hub.tcp_address)
+            await asyncio.sleep(0.05)
+            window = [kiss.ax25_ui_frame('K0MDT-7', 'W1AW', bytes([i]) * 60) for i in range(4)]
+            wa.write(b''.join(kiss.encode(f) for f in window))
+            got = await self._read_frames(rb, kiss.Decoder(), 4, timeout=12)
+            for w in (wa, wb):
+                w.close()
+            a.close(), b.close(), sim.close()
+            self.assertEqual(got, window)
+            self.assertEqual(len(sends), 1)
+        asyncio.run(scenario())
+
     def test_ax25_frames_bypass_the_chat_link_layer(self):
         async def scenario():
             sim, a, b = await self._setup()

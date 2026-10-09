@@ -91,9 +91,13 @@ Linux RMS Gateway requires the kernel AX.25 stack.
 Later improvements, measured against real use:
 - **Channel access:** carrier sense + p-persistence/slot-time backoff,
   needed once more than two stations share a frequency.
-- **Burst batching:** AX.25 can send up to 7 frames in a row
-  (MAXFRAME); packing them into one burst saves a lead-in, preamble and
-  header each.
+- **Burst batching** (done 2026-10-08, BURST_BATCHING_PROPOSAL.md part
+  1): frames the host hands over together (an AX.25 window of up to 7,
+  MAXFRAME) go out in one key-up, each still its own frame, saving a
+  key-up, lead-in and the far station's turnaround per frame. Raise the
+  window column in `axports` (2 today) to make use of it, and make sure the
+  kernel's T1 covers the longer transmission. `--max-tx-s` caps a key-up
+  (default 30 s).
 - **Automatic mode selection** for AX.25 traffic.
 
 ## Milestone 1 status

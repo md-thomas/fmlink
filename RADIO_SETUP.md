@@ -535,6 +535,10 @@ On **both** stations:
 sudo kissattach ~/kiss-ow ow
 ```
 
+Frames the kernel hands over together go out in one key-up (burst
+batching, `--max-tx-s`, default 30 s), so a larger AX.25 window pays off:
+the window is the fifth column of `axports` (2 above; up to 7).
+
 As run on 2026-10-07: K0MDT-1 added `--tx-level 0.6 --turnaround-ms 3000`
 (the TIDRADIO, see "Turnaround" above), K0MDT-2 used the defaults.
 

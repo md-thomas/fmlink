@@ -48,6 +48,22 @@ class BurstDetectorTests(unittest.TestCase):
                 delivered, _ = run_detector(x, step_s)
                 self.assertEqual(delivered, payloads)
 
+    def test_a_batched_transmission_decodes_every_burst(self):
+        # One key-up carrying several bursts 50 ms apart, as ota_station
+        # sends them (BURST_BATCHING_PROPOSAL.md): only the first has a
+        # lead-in. Each must decode, in order, however the steps fall.
+        lead = int(round(audio.DEFAULT_LEAD_IN_S * RATE))
+        gap = np.zeros(int(0.05 * RATE))
+        payloads = [bytes([65 + i]) * n for i, n in enumerate((300, 40, 300, 120))]
+        parts = [burst(payloads[0], 0.5)]
+        for p in payloads[1:]:
+            parts += [gap, burst(p, 0.5)[lead:]]
+        x = np.concatenate([np.zeros(RATE // 2)] + parts + [np.zeros(3 * RATE)])
+        x += np.random.default_rng(4).normal(0, 0.01, len(x))
+        for step_s in (radio.STEP_S, 1.0, 4.0):
+            with self.subTest(step_s=step_s):
+                self.assertEqual(run_detector(x, step_s)[0], payloads)
+
     def test_noise_alone_delivers_nothing(self):
         x = np.random.default_rng(2).normal(0, 0.05, 6 * RATE)
         self.assertEqual(run_detector(x, radio.STEP_S)[1], [])

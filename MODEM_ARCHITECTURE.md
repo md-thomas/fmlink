@@ -82,7 +82,8 @@ flowchart LR
     rrc --> mix["Mix onto carrier<br/>1650 Hz modes 0-2<br/>2000 Hz mode 3"]
     mix --> pad["Add lead-in silence<br/>and tail"]
     pad --> lvl["Normalize peak<br/>to --tx-level"]
-    lvl --> ptt["Wait turnaround,<br/>key PTT, play,<br/>release"]
+    lvl --> batch["Batch: bursts queued<br/>together share one<br/>key-up (<= 30 s)"]
+    batch --> ptt["Wait turnaround,<br/>key PTT, play,<br/>release"]
 ```
 
 | Step | Code | Notes |
@@ -92,6 +93,7 @@ flowchart LR
 | FEC | `openwave_fec.encode_frame` | K=3/7/9 convolutional codes at rates 1/2 to 1/6 (`PRESETS`); each block gets its own flush tail and is interleaved (golden-ratio permutation) so a fade's burst of errors is spread out for the Viterbi decoder |
 | Modulate | `modulate.MODULATORS`, `openwave_audio.modulate` | 48 kHz audio; samples per symbol = 48000 / symbol rate (80, 40, 20) |
 | Carrier | `openwave_audio.carrier_for` | per port and symbol rate (table below) |
+| Batch | `Station._queue_burst`, `_flush_tx_batch` | bursts queued within 50 ms share one transmission: later ones follow 50 ms apart without a lead-in, up to `--max-tx-s` (30 s). An AX.25 window from the KISS host goes out in one key-up |
 | Transmit | `openwave_radio.RadioTransport._tx_loop`, `ptt_play.key_and_play` | waits `--turnaround-ms` (600) after the last received burst, keys DTR or RTS, waits 0.2 s, plays with `aplay`, releases; the receiver is muted while keyed and 0.4 s after |
 
 ## 4. Receive chain

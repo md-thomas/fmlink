@@ -132,14 +132,15 @@ class Tnc:
     """A Station used purely as a modem for AX.25 frames, plus its KISS hub."""
 
     def __init__(self, callsign, mode_id=0, fec_preset=None, phy='audio', audio_port='mic',
-                 lead_in_s=audio_phy.DEFAULT_LEAD_IN_S, verbose=False, log=None):
+                 lead_in_s=audio_phy.DEFAULT_LEAD_IN_S, verbose=False, log=None,
+                 max_tx_s=ota_station.DEFAULT_MAX_TX_S):
         self._log = log or (lambda msg: print(msg, file=sys.stderr))
         self.verbose = verbose
         self.station = ota_station.Station(
             station_id=callsign, dst_id='ALL', mode_id=mode_id, use_fec=True,
             fec_preset=fec_preset or link.WAVEFORM_MODES[mode_id]['fec_preset'],
             use_ack=False, auto=False, phy=phy, audio_port=audio_port, lead_in_s=lead_in_s,
-            on_ax25=self._from_air, on_log=self._station_log)
+            max_tx_s=max_tx_s, on_ax25=self._from_air, on_log=self._station_log)
         self.hub = KissHub(self._from_host, self._log)
 
     def _station_log(self, msg):
@@ -170,7 +171,7 @@ class Tnc:
 async def run(args):
     fec_preset = args.fec_preset or link.WAVEFORM_MODES[args.mode]['fec_preset']
     tnc = Tnc(args.callsign, args.mode, fec_preset, args.phy, args.audio_port,
-              args.lead_in_ms / 1000, args.verbose)
+              args.lead_in_ms / 1000, args.verbose, max_tx_s=args.max_tx_s)
     if args.log_file:
         tnc.station.open_log_file(args.log_file)
     link_note = await ota_station.connect_from_args(tnc.station, args)
@@ -222,6 +223,9 @@ def main():
                         help='Waveform Mode; both TNCs must match (default: 0)')
     parser.add_argument('--fec-preset', choices=sorted(fec.PRESETS),
                         help="FEC preset; both TNCs must match (default: the mode's own)")
+    parser.add_argument('--max-tx-s', type=float, default=ota_station.DEFAULT_MAX_TX_S,
+                        help='longest single transmission: AX.25 frames handed over together go out '
+                             'in one key-up, up to this many seconds (default: %(default)g)')
     parser.add_argument('--lead-in-ms', type=float, default=audio_phy.DEFAULT_LEAD_IN_S * 1000,
                         help='silence before each burst for key-up and squelch (default: %(default)g)')
     parser.add_argument('--kiss-host', default='127.0.0.1', help='KISS TCP listen address (default: 127.0.0.1)')

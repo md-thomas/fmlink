@@ -146,7 +146,9 @@ class BurstDetector:
             if decoded:
                 length = burst_air_samples(*r['attempt'], r['header']['payload_len'])
                 self._deliver(r, length)
-                self._trim_to(self.base + r['timing'] + length + int(TAIL_S * RATE))
+                # Trim only to the burst's end: another burst may follow
+                # within ~50 ms in the same transmission (batching).
+                self._trim_to(self.base + r['timing'] + length)
             else:
                 if self.end() - (self.base + r['timing']) < self.max_burst:
                     return  # it may still be arriving: wait for more audio
