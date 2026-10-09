@@ -12,9 +12,10 @@ far more frequently and carries the full reasoning behind each item.
 ## Where we are (2026-10-09)
 
 **K0MDT-2 now uses an AIOC instead of the Digirig (2026-10-09).** After
-re-seating it in the Baofeng: modes 2 and 3 delivered 5/5 each way, mode 3
-at 15.2 dB (TIDRADIO -> Baofeng) and 13.3 dB (Baofeng -> TIDRADIO);
-RADIO_SETUP.md "K0MDT-2 on an AIOC". With the Digirig gone, the Pat re-test
+re-seating it in the Baofeng and re-levelling both radios (hiss ~-15 dBFS):
+modes 2 and 3 delivered 5/5 each way, mode 3 at 16.8 dB (TIDRADIO ->
+Baofeng) and 13.4 dB (Baofeng -> TIDRADIO); RADIO_SETUP.md "K0MDT-2 on an
+AIOC". With the Digirig gone, the Pat re-test
 at the default turnaround (below) can now settle whether the "TIDRADIO
 delay" was really the Digirig's AGC.
 

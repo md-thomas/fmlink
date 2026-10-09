@@ -378,10 +378,24 @@ something up. After that, modes 2 and 3, 5 bursts each way, all delivered:
 | TIDRADIO -> Baofeng | 18.7 dB | 15.2 dB | 31 dB below the bursts |
 | Baofeng -> TIDRADIO | 18.5 dB | 13.3 dB | 40 dB below the bursts |
 
-(Whole-burst SNR, equalizer on; it added 2-5 dB.) Baofeng -> TIDRADIO
-matches the Digirig at mode 3; TIDRADIO -> Baofeng is a few dB lower than
-the Digirig's best (22.2 dB) but far above mode 3's ~8 dB cliff. Both AIOCs
-were at their default mixer settings (input and output 100 %, 0 dB).
+(Whole-burst SNR, equalizer on; it added 2-5 dB.) Both AIOCs were at
+their default mixer settings (input and output 100 %, 0 dB).
+
+**Re-levelled, then the same test again:** both radios' open-squelch hiss
+raised to about -15 dBFS rms (TIDRADIO peaks -6.6 dBFS, Baofeng -3.3 dBFS -
+don't go higher on the Baofeng). Baofeng -> TIDRADIO stayed at mode 2
+18.5 dB / mode 3 13.4 dB (that direction is limited by its treble tilt,
+which the equalizer undoes, not by level); TIDRADIO -> Baofeng, held back
+by the Baofeng's quiet input before, gained ~2 dB:
+
+| Direction | Mode 2 | Mode 3 | Equalizer gain (mode 2 / 3) |
+|---|---|---|---|
+| TIDRADIO -> Baofeng | 20.8 dB | 16.8 dB | +3.0 / +5.9 dB |
+| Baofeng -> TIDRADIO | 18.5 dB | 13.4 dB | +3.1 / +4.9 dB |
+
+All 20 bursts delivered. Mode 3 has ~9 dB of margin over its ~8 dB cliff
+one way and ~5-6 dB the other. Baofeng -> TIDRADIO matches the Digirig at
+mode 3; TIDRADIO -> Baofeng is a few dB under the Digirig's best (22.2 dB).
 
 ### Message length test (2026-10-08)
 
