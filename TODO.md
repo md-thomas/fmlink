@@ -11,6 +11,12 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Where we are (2026-10-08)
 
+**Stopped here for the night (2026-10-08).** Nothing running on either
+laptop; both on current `main`. Pick up with one of the next candidates
+below - burst batching is the biggest remaining throughput win. To run the
+stations: RADIO_SETUP.md "Running the live stations" (check the Digirig's
+AGC is off first).
+
 **Receive equalizer done (2026-10-08, `9d78fc7`).** A 9-tap FIR fitted to
 each burst's marker undoes the HTs' audio tilt. On the same on-air
 recordings, mode 3 went from 11.6 to 22.2 dB (TIDRADIO -> Baofeng) and
