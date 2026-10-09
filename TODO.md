@@ -11,11 +11,13 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Where we are (2026-10-08)
 
-**Stopped here for the night (2026-10-08).** Nothing running on either
-laptop; both on current `main`. Pick up with one of the next candidates
-below - burst batching is the biggest remaining throughput win. To run the
-stations: RADIO_SETUP.md "Running the live stations" (check the Digirig's
-AGC is off first).
+**Stopped here for the night (2026-10-08, later).** Nothing running on
+either laptop; both on current `main`. Done today: receive equalizer, burst
+batching (parts 1 and 2, on air: 8000 characters in 31.5 s instead of 50 s),
+the modem diagram (MODEM_ARCHITECTURE.md). Pick up with: the over-eager
+fading detector (it can halve the speed - see below), then Pat with the
+`axports` window at 7. To run the stations: RADIO_SETUP.md "Running the
+live stations" (check the Digirig's AGC is off first).
 
 **Receive equalizer done (2026-10-08, `9d78fc7`).** A 9-tap FIR fitted to
 each burst's marker undoes the HTs' audio tilt. On the same on-air
