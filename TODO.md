@@ -9,7 +9,16 @@ genuinely still open right now in one place, per
 `tasklist.txt` disagree, `tasklist.txt` is authoritative — it's updated
 far more frequently and carries the full reasoning behind each item.
 
-## Where we are (2026-10-08)
+## Where we are (2026-10-09)
+
+**K0MDT-2 now uses an AIOC instead of the Digirig (2026-10-09).** After
+re-seating it in the Baofeng: modes 2 and 3 delivered 5/5 each way, mode 3
+at 15.2 dB (TIDRADIO -> Baofeng) and 13.3 dB (Baofeng -> TIDRADIO);
+RADIO_SETUP.md "K0MDT-2 on an AIOC". With the Digirig gone, the Pat re-test
+at the default turnaround (below) can now settle whether the "TIDRADIO
+delay" was really the Digirig's AGC.
+
+## Where we were (2026-10-08)
 
 **Stopped here for the night (2026-10-08, later).** Nothing running on
 either laptop; both on current `main`. Done today: receive equalizer, burst
@@ -56,8 +65,8 @@ receive equalizer** - the Baofeng -> TIDRADIO direction's treble tilt costs
 ~7 dB that negotiation can't see (its 600 baud probe read 20.6 dB, so it
 predicted ~14.6 dB at mode 3), leaving mode 3 thin margin there. Station
 setup to resume: K0MDT-1 = server1 (AIOC + TIDRADIO, `--tx-level 0.6
---turnaround-ms 3000`), K0MDT-2 = `lenovo` (Digirig + Baofeng; check
-`amixer -c Device scontents` shows AGC off / capture 2 after any replug).
+--turnaround-ms 3000`), K0MDT-2 = `lenovo` (Digirig + Baofeng then; an
+AIOC + Baofeng since 2026-10-09).
 
 **Winlink over the air works (2026-10-07).** Pat on K0MDT-1 (server1, AIOC +
 TIDRADIO HT) sent a peer-to-peer message to Pat on K0MDT-2 (`lenovo`, Digirig

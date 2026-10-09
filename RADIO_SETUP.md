@@ -205,13 +205,14 @@ cd ~/Projects/open_wave
     --phy audio --audio-port mic --radio --ack --auto
 ```
 
-**As run on 2026-10-08** (mode 3 negotiated automatically, every burst
-decoded both ways):
+**The two stations** (as of 2026-10-09; the commands below were run on
+2026-10-08, when K0MDT-2 had a Digirig - mode 3 negotiated automatically,
+every burst decoded both ways):
 
 | Station | Computer | Interface + radio | Before starting |
 |---|---|---|---|
 | K0MDT-1 | server1 | AIOC + TIDRADIO | - |
-| K0MDT-2 | lenovo | Digirig + Baofeng (squelch 0) | `amixer -c Device sget "Auto Gain Control"` shows `[off]` |
+| K0MDT-2 | lenovo | AIOC + Baofeng (squelch 0); a Digirig until 2026-10-08 | the AIOC's plug fully seated in the Baofeng |
 
 ```
 # K0MDT-1 (server1)
@@ -360,6 +361,28 @@ equalized link. Through `ota_sim`'s FM model (a flat channel) it changes
 nothing: static, Rayleigh fading at 30/80 km/h and 100 ppm clock offset all
 delivered the same with it off and on.
 
+### K0MDT-2 on an AIOC (2026-10-09)
+
+K0MDT-2's Digirig was replaced by an AIOC (both stations are AIOCs now;
+`radio_link_test.py` names them `aioc` and `aioc@lenovo`). The first
+baseline was poor in both directions - mode 3 at 8.2 dB into the Baofeng
+and 4.4 dB (1/5 delivered) out of it - with two symptoms: the TIDRADIO's
+bursts arrived ~18 dB weaker relative to the Baofeng's hiss than before,
+and the Baofeng's carrier carried ~28 dB more noise with no audio playing.
+Moving the Baofeng fixed both (its volume jumped at the same moment): most
+likely the AIOC's K1 plug wasn't fully seated, or the cable was picking
+something up. After that, modes 2 and 3, 5 bursts each way, all delivered:
+
+| Direction | Mode 2 | Mode 3 | Noise under a silent carrier |
+|---|---|---|---|
+| TIDRADIO -> Baofeng | 18.7 dB | 15.2 dB | 31 dB below the bursts |
+| Baofeng -> TIDRADIO | 18.5 dB | 13.3 dB | 40 dB below the bursts |
+
+(Whole-burst SNR, equalizer on; it added 2-5 dB.) Baofeng -> TIDRADIO
+matches the Digirig at mode 3; TIDRADIO -> Baofeng is a few dB lower than
+the Digirig's best (22.2 dB) but far above mode 3's ~8 dB cliff. Both AIOCs
+were at their default mixer settings (input and output 100 %, 0 dB).
+
 ### Message length test (2026-10-08)
 
 Ten chat messages from K0MDT-1 (AIOC + TIDRADIO) to K0MDT-2 (Digirig +
@@ -456,6 +479,7 @@ threshold effect and fades, so keep some extra margin.
 | meter pinned at `CLIPPING` whatever the volume | Digirig AGC is on: `amixer -c Device sset "Auto Gain Control" off` |
 | `level_meter.py`: `audio open error: Device or resource busy` | a station, TNC or test is using that sound card: stop it first |
 | SNR into the Digirig suddenly much lower (e.g. 20 -> 7 dB) | the Digirig was replugged and its AGC came back on: `amixer -c Device sget "Auto Gain Control"`, then the settings above |
+| Both directions of one station 10+ dB worse, its transmissions noisy even with no audio, its received bursts weak | the AIOC's (or any K1 cable's) plug isn't fully seated in the HT, or the cable is picking something up: push it home or move the radio/cable (fixed it on 2026-10-09 - the radio's audio got audibly louder at that moment) |
 | `radio_stations.py` shows nothing | check `lsusb` for the adapter and `arecord -l` for its sound card |
 | stations hear nothing from each other | wrong PTT line (try `--ptt-line dtr` or `rts`; the radio's TX light shows it keying), TX level too low or too high, different frequencies, or squelch closed |
 | the sender keeps retrying and the peer reports "duplicate" | the peer's ACK is not getting back: check the levels and PTT in that direction; the transport already waits a 0.6 s turnaround before replying |
