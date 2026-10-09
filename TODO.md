@@ -30,8 +30,17 @@ so an AX.25 window goes out in one transmission. Part 2 done: batched
 message segments with one selective ACK per batch, out-of-order
 reassembly, negotiated `CAP_BATCH` (on by default; `--no-batch`). Over the
 simulated radio, 8000 characters at mode 3 take 31 s instead of 51 s.
-**Next: on the air** - repeat the message length test, and Pat with the
-`axports` window raised to 7.
+**On the air (2026-10-08): 8000 characters in 31.5 s instead of 50.0 s**
+(~254 chars/s, all 10 test messages intact, no resends). Still to try: Pat
+with the `axports` window raised to 7 (part 1 for AX.25).
+
+**Open: the fading detector is too eager on a static link.** On one
+negotiation the probe read 4% of the burst in dropouts (threshold 3%) with
+the radios on dummy loads, so `--auto` used the fading table and picked
+mode 2 / `r1_2_k7` instead of mode 3 / `r1_2_k3` - half the speed. Look at
+`openwave_audio.burst_quality` on real recordings (maybe since the
+equalizer, or the 5 ms window is too short at 600 baud) before trusting
+it on air.
 
 Other candidates: re-test Pat at the default turnaround (AGC theory),
 digipeating/gateway, weak-link tests.

@@ -387,8 +387,28 @@ real burst decoded both ways (38 each), at ~11.5 dB into the Baofeng and
 Each message costs ~2.5-3 s of fixed overhead (key-up, lead-in, preamble,
 the ACK back) plus ~3.5 s per 1000 characters. Long messages settle near
 160 chars/s (~1280 bit/s of text, against mode 3's 2400 bit/s after FEC):
-each 1024-character segment waits for its own ACK. Sending several segments
-per turn (burst batching, TODO.md) would close much of that gap.
+each 1024-character segment waits for its own ACK.
+
+**With burst batching (2026-10-08, same radios, same messages, mode 3 /
+`r1_2_k3`):** several segments per transmission and one selective ACK per
+batch (BURST_BATCHING_PROPOSAL.md). All ten delivered intact, no resends;
+the 8000-character message went as one ~28 s transmission of all 8
+segments.
+
+| Length (chars) | Segments | Stop-and-wait | Batched | Faster |
+|---|---|---|---|---|
+| 10-1000 | 1 | 3.0-6.5 s | 3.0-6.5 s | - (one segment: unchanged) |
+| 1500 | 2 | 11.0 s | 8.5 s | 23% |
+| 2500 | 3 | 17.5 s | 12.0 s | 31% |
+| 4000 | 4 | 25.5 s | 17.5 s | 31% |
+| 8000 | 8 | 50.0 s | 31.5 s | 37% |
+
+Long messages now run at ~254 chars/s (the in-memory radio predicted 257).
+On the first batched run `--auto` chose mode 2 / `r1_2_k7` instead (its
+probe read 4% of the burst in dropouts, just over the 3% fading threshold,
+on a static link); batched at mode 2, 8000 characters took 62 s. The run
+above was after switching both stations to mode 3 / `r1_2_k3` with `/mode 3`
+and `/fec r1_2_k3`.
 
 ### How much SNR each mode needs (software noise test)
 

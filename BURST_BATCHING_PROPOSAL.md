@@ -1,7 +1,10 @@
 # Proposal: burst batching
 
-Status: **accepted (2026-10-08). Parts 1 and 2 implemented (2026-10-08);
-not yet tried on the air.** Decisions at the end.
+Status: **accepted and implemented (2026-10-08); works on the air.** On the
+two HTs at mode 3, the on-air message length test went from 50.0 s to
+31.5 s for 8000 characters (all 8 segments in one transmission, one
+selective ACK, no resends; RADIO_SETUP.md "Message length test").
+Decisions at the end.
 
 Part 2 as built: `openwave_link.build_selective_ack_frame` /
 `parse_selective_ack`, `SelectiveReassembler`, `CAP_BATCH` in the
