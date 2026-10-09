@@ -152,6 +152,11 @@ simulator or a real radio. See "Packet radio and Winlink: OpenWave as a KISS
 TNC" below, and [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) for the design and
 milestones.
 
+**[MODEM_ARCHITECTURE.md](MODEM_ARCHITECTURE.md)**
+Diagrams of the modem: the layers, a burst's on-air layout, the transmit
+and receive chains, inside the demodulator (correlation, equalizer, PLL),
+the link layer's negotiation and ACK flow, and the modes and carriers.
+
 **Design records**
 - [PROTOCOL_V2_PROPOSAL.md](PROTOCOL_V2_PROPOSAL.md): frame format v2,
   accepted and implemented (now in the spec).
