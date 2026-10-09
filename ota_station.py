@@ -170,8 +170,8 @@ BATCH_GAP_S = 0.05
 DEFAULT_MAX_TX_S = 30.0
 
 # What Station.update_settings() can change while running.
-SETTINGS = ('mode_id', 'fec_preset', 'bandwidth', 'ack', 'auto', 'lead_in_s', 'tx_level',
-            'turnaround_s', 'max_tx_s', 'batching')
+SETTINGS = ('station_id', 'dst_id', 'mode_id', 'fec_preset', 'bandwidth', 'ack', 'auto',
+            'lead_in_s', 'tx_level', 'turnaround_s', 'max_tx_s', 'batching')
 
 
 def _human_size(num_bytes, short=False):
@@ -861,9 +861,17 @@ class Station:
                        mode_id=ok_headers[0]['mode_id'] if ok_headers else None,
                        packet_type=ok_headers[0]['packet_type'] if ok_headers else None,
                        src=link.decode_station_id(ok_headers[0]['src_id']) if ok_headers else None)
-            if symbols is not None and len(symbols):
-                step = max(1, len(symbols) // 300)
-                pts = np.asarray(symbols[::step][:300])
+            frame_symbols = symbols
+            if ok_headers and marker_index is not None and self.phy == 'audio':
+                # Just the decoded frame: the tracker also samples the silence
+                # after it, which would plot as a blob at the origin.
+                n = (radio.burst_air_samples(matched_modulation, *phy_params,
+                                             ok_headers[0]['payload_len'])
+                     // audio_phy.samples_per_symbol(phy_params[0]))
+                frame_symbols = symbols[marker_index:marker_index + n]
+            if frame_symbols is not None and len(frame_symbols):
+                step = max(1, len(frame_symbols) // 300)
+                pts = np.asarray(frame_symbols[::step][:300])
                 self._emit('constellation', modulation=matched_modulation,
                            points=np.round(np.stack([pts.real, pts.imag], axis=1), 3).tolist())
         if self.verbose:
@@ -1175,6 +1183,15 @@ class Station:
         for key in changes:
             if key not in SETTINGS:
                 problems.append(f"unknown setting {key!r} (one of {', '.join(SETTINGS)})")
+        for key in ('station_id', 'dst_id'):
+            if key in changes:
+                value = changes[key]
+                try:
+                    if not isinstance(value, str) or not value.strip():
+                        raise ValueError('must not be empty')
+                    link.pack_callsign(value.strip().upper())
+                except ValueError as exc:
+                    problems.append(f"{key}: {exc}")
         if 'mode_id' in changes:
             why = (self._mode_not_allowed(changes['mode_id'])
                    if isinstance(changes['mode_id'], int) and not isinstance(changes['mode_id'], bool)
@@ -1209,9 +1226,28 @@ class Station:
         first - a ValueError naming every problem, and nothing applied, if
         one is invalid. Mode and FEC changes are announced to the peer (as
         /mode and /fec do); so is a batching change, once a session with the
-        peer exists, so both stations agree on it. Emits a 'link' event and
-        returns link_state()."""
+        peer exists, so both stations agree on it. Changing either callsign
+        (station_id, dst_id) forgets the peer's capabilities and the
+        negotiated session, so the next message negotiates afresh. Emits a
+        'link' event and returns link_state()."""
         self._check_settings(changes)
+        for key in ('station_id', 'dst_id'):
+            if key in changes:
+                changes[key] = changes[key].strip().upper()
+        new_identity = any(key in changes and changes[key] != getattr(self, key)
+                           for key in ('station_id', 'dst_id'))
+        if 'station_id' in changes:
+            self.station_id = changes['station_id']
+            self.receiver.station_id = self.station_id
+        if 'dst_id' in changes:
+            self.dst_id = changes['dst_id']
+        if new_identity:
+            # A different station pair: what we know about the peer (its
+            # capabilities, the negotiated mode) no longer applies, so the
+            # next message negotiates afresh (with --auto).
+            self._peer_capabilities = 0
+            self.receiver.selective = False
+            self._auto_negotiate_done = False
         if 'bandwidth' in changes:
             self.bandwidth = changes['bandwidth']
             self.max_symbol_rate = self._ceiling_for(self.bandwidth)

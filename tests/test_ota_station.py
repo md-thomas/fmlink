@@ -1307,6 +1307,25 @@ class LiveSettingsTests(unittest.TestCase):
             self.assertEqual(events[-1]['max_tx_s'], 20.0)
         asyncio.run(scenario())
 
+    def test_callsigns(self):
+        async def scenario():
+            st, events = self._station()
+            st._set_peer_capabilities(link.CAP_BATCH)
+            st._auto_negotiate_done = True
+            for bad in ({'station_id': ''}, {'dst_id': 'WAY-TOO-LONG-CALL'}, {'dst_id': 'K0#DT'},
+                        {'station_id': 7}):
+                with self.subTest(bad=bad):
+                    with self.assertRaises(ValueError):
+                        await st.update_settings(**bad)
+            self.assertTrue(st.batch_active)            # nothing changed by the bad ones
+            state = await st.update_settings(station_id=' k0mdt-1 ', dst_id='w1aw-2')
+            self.assertEqual((state['station_id'], state['dst_id']), ('K0MDT-1', 'W1AW-2'))
+            self.assertEqual(st.receiver.station_id, 'K0MDT-1')   # frames for the new call reach us
+            self.assertFalse(st.batch_active)          # a new pair: negotiate again
+            self.assertFalse(st._auto_negotiate_done)
+            self.assertEqual(events[-1]['dst_id'], 'W1AW-2')
+        asyncio.run(scenario())
+
     def test_radio_settings(self):
         import openwave_radio as radio
 
