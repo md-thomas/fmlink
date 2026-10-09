@@ -343,7 +343,12 @@ class Station:
                  fec_preset=None, use_ack=False, auto=False, bandwidth='wide',
                  on_message=None, verbose=False, on_log=None, on_symbols=None, on_ax25=None,
                  phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S,
-                 max_tx_s=DEFAULT_MAX_TX_S, batching=True):
+                 max_tx_s=DEFAULT_MAX_TX_S, batching=True, on_event=None):
+        # Structured events for a live display (open_wave_web): on_event(dict)
+        # with a 'type' - see _emit() for the list. None (the default) costs
+        # nothing.
+        self._on_event = on_event
+        self._message_ids = 0
         self.station_id = station_id
         self.max_tx_s = max_tx_s
         # Batched messages with selective ACKs (BURST_BATCHING_PROPOSAL.md
@@ -482,6 +487,7 @@ class Station:
         # to shrink per mode/FEC to fit one UDP datagram; the TCP relay has
         # no per-burst ceiling, so it's simply the protocol's own limit.
         self.max_fragment_chars = link.MAX_PAYLOAD_LEN
+        self._emit('link', **self.link_state())
 
     def _handle_message(self, text):
         if self._suppress_next_message:
@@ -492,12 +498,57 @@ class Station:
         self.stats['received_messages'] += 1
         self.stats['received_text_bytes'] += len(text.encode('utf-8'))
         self._log(f"{self.dst_id}: {text}")
+        self._emit('message_rx', src=self.receiver.last_src or self.dst_id, text=text)
         if self.verbose:
             self._log("[stats]\n" + "\n".join(_link_stats_lines(self.receiver)))
         if self._on_message:
             self._on_message(text)
 
+    def _emit(self, event_type, **fields):
+        """Hand a structured event to on_event, if set. Types and fields:
+          log           text
+          link          see link_state()
+          message_tx    id, dst, text, segments, ack
+          delivery      id, acked, total, done, failed
+          message_rx    src, text
+          burst_rx      status, mode_id, modulation, symbol_rate, snr_db, quality,
+                        fading, src, packet_type
+          constellation modulation, points ([re, im] pairs, at most 300)
+          tx            state ('queued' by the station; 'keyed'/'released' by a
+                        radio), seconds, bursts (queued only)
+          level         rms_dbfs, peak_dbfs, transmitting (a radio's input)
+        Every event also has 'time' (Unix seconds). A failing handler is
+        reported on stderr and otherwise ignored."""
+        if self._on_event is None:
+            return
+        try:
+            self._on_event({'type': event_type, 'time': time.time(), **fields})
+        except Exception as exc:  # a display must never break the station
+            print(f"[event handler error] {exc!r}", file=sys.stderr)
+
+    def _radio_event(self, event):
+        event = dict(event)
+        self._emit(event.pop('type'), **event)
+
+    def link_state(self):
+        """The station's current setup, as a 'link' event carries it."""
+        return {
+            'station_id': self.station_id, 'dst_id': self.dst_id, 'phy': self.phy,
+            'audio_port': self.audio_port, 'mode_id': self.mode_id,
+            'modulation': self.modulation, 'symbol_rate': self._symbol_rate,
+            'fec': self.use_fec, 'fec_preset': self.fec_preset, 'ack': self.use_ack,
+            'auto': self.auto, 'bandwidth': self.bandwidth,
+            'max_symbol_rate': getattr(self, 'max_symbol_rate', None),
+            'batching': self.batching, 'batch_active': self.batch_active,
+            'lead_in_s': self.lead_in_s, 'max_tx_s': self.max_tx_s,
+            'tx_level': getattr(self._sim, 'tx_level', None),
+            'turnaround_s': getattr(self._sim, 'turnaround_s', None),
+            'connected': bool(self._sim is not None and self._sim.connected),
+            'last_rx_snr_db': getattr(self, '_last_rx_snr_db', None),
+        }
+
     def _log(self, msg):
+        self._emit('log', text=msg)
         self._trace(msg)
         if self._on_log:
             self._on_log(msg)
@@ -584,7 +635,7 @@ class Station:
             self._burst_received, attempts, self._carrier_for,
             capture or (lambda: radio.arecord_chunks(station['rx_device'], station['rx_channels'])),
             player or radio.make_player(station), asyncio.get_running_loop(), tx_level, self._log,
-            trace=self._trace,
+            trace=self._trace, on_event=self._radio_event if self._on_event else None,
             **({} if turnaround_s is None else {'turnaround_s': turnaround_s}),
         ).connect()
 
@@ -649,6 +700,7 @@ class Station:
         audio = audio_phy.pcm16_to_audio(payload)
         cache = {}
         timings = {}   # (modulation, symbol rate) -> the marker's sample index
+        qualities = {}  # ... -> the marker correlation's sync quality (0-1)
 
         def recover(modulation, symbol_rate):
             if (modulation, symbol_rate) not in cache:
@@ -660,8 +712,10 @@ class Station:
                 symbols = symbols[:len(symbols) - len(symbols) % (8 // bps)]  # whole bytes
                 cache[(modulation, symbol_rate)] = (symbols, info['snr_db'], info['marker_index'])
                 timings[(modulation, symbol_rate)] = info['timing']
+                qualities[(modulation, symbol_rate)] = info['quality']
             return cache[(modulation, symbol_rate)]
         recover.timings = timings
+        recover.qualities = qualities
         return recover
 
     def _burst_quality(self, frames, modulation, symbols, marker_index, symbol_rate,
@@ -790,6 +844,20 @@ class Station:
                 frames, matched_modulation, symbols, marker_index, *phy_params)
         if self._on_symbols:
             self._on_symbols(symbols, matched_modulation, self._last_rx_snr_db)
+        if self._on_event is not None:
+            ok_headers = [h for status, h, _ in frames if status == 'ok']
+            quality = getattr(recover, 'qualities', {}).get((matched_modulation, phy_params[0]))
+            self._emit('burst_rx', status=frames[0][0], modulation=matched_modulation,
+                       symbol_rate=phy_params[0], snr_db=self._last_rx_snr_db, quality=quality,
+                       fading=(self._last_rx_quality or {}).get('fading'),
+                       mode_id=ok_headers[0]['mode_id'] if ok_headers else None,
+                       packet_type=ok_headers[0]['packet_type'] if ok_headers else None,
+                       src=link.decode_station_id(ok_headers[0]['src_id']) if ok_headers else None)
+            if symbols is not None and len(symbols):
+                step = max(1, len(symbols) // 300)
+                pts = np.asarray(symbols[::step][:300])
+                self._emit('constellation', modulation=matched_modulation,
+                           points=np.round(np.stack([pts.real, pts.imag], axis=1), 3).tolist())
         if self.verbose:
             # Full explanation of what this number is/isn't (blind estimate,
             # no pilot symbols) lives once in openwave_modem.py's
@@ -1307,6 +1375,7 @@ class Station:
             self._queue_burst(out, int(round(self.lead_in_s * audio_phy.AUDIO_SAMPLE_RATE)))
         else:
             self._sim.send(out)
+            self._emit('tx', state='queued', bursts=1, seconds=0.0)
         self._last_tx_airtime_s = airtime_s
         self.stats['sent_air_bytes'] += len(out)
 
@@ -1347,6 +1416,8 @@ class Station:
         transmissions.append(current)
         if len(bursts) > 1:
             self._trace(f"[tx] batched {len(bursts)} bursts into {len(transmissions)} transmission(s)")
+        self._emit('tx', state='queued', bursts=len(bursts),
+                   seconds=round(sum(len(p) for p in transmissions) / 2 / rate, 2))
         for pcm in transmissions:
             if self._sim is None or not self._sim.connected:
                 self._log("[tx error] not connected - burst NOT sent")
@@ -1401,6 +1472,10 @@ class Station:
             flags=flags, src_id=self.station_id.encode(), dst_id=self.dst_id.encode(),
         )
         first_seq = (self._seq - len(frames)) % link.SEQ_MODULUS
+        self._message_ids += 1
+        message_id = self._message_ids
+        self._emit('message_tx', id=message_id, dst=self.dst_id, text=text,
+                   segments=len(frames), ack=self.use_ack)
 
         self.stats['sent_messages'] += 1
         self.stats['sent_text_bytes'] += len(text_bytes)
@@ -1410,6 +1485,8 @@ class Station:
         if not self.use_ack:
             for frame in frames:
                 self._transmit_frame(frame)
+            self._emit('delivery', id=message_id, acked=None, total=len(frames), done=True,
+                       failed=False)
             if self.verbose:
                 air_bytes = self.stats['sent_air_bytes'] - air_bytes_before
                 self._log(f"[stats] sent {_human_size(len(text_bytes))} text -> "
@@ -1426,7 +1503,9 @@ class Station:
                 chunk_size=self.max_fragment_chars,
                 src_id=self.station_id.encode(), dst_id=self.dst_id.encode(),
             )
-            if not await self._send_batched(first_seq, frames, plain):
+            if not await self._send_batched(first_seq, frames, plain, message_id):
+                self._emit('delivery', id=message_id, acked=None, total=len(frames), done=True,
+                           failed=True)
                 return
         else:
             for i, frame in enumerate(frames):
@@ -1434,7 +1513,11 @@ class Station:
                 if not await self._send_with_retry(seq, frame):
                     self._log(f"[ack] gave up on message segment {i + 1}/{len(frames)} (seq {seq}) - "
                               f"message incomplete, aborting remaining segments")
+                    self._emit('delivery', id=message_id, acked=i, total=len(frames), done=True,
+                               failed=True)
                     return
+                self._emit('delivery', id=message_id, acked=i + 1, total=len(frames),
+                           done=i + 1 == len(frames), failed=False)
                 if self.verbose and len(frames) > 1:
                     self._log(f"[ack] message segment {i + 1}/{len(frames)} delivered")
 
@@ -1467,6 +1550,7 @@ class Station:
     def _set_peer_capabilities(self, capabilities):
         self._peer_capabilities = capabilities
         self.receiver.selective = self.batch_active
+        self._emit('link', **self.link_state())
         if self.verbose:
             self._log(f"[negotiate] batching {'on' if self.batch_active else 'off'} "
                       f"(peer {'offers' if capabilities & link.CAP_BATCH else 'does not offer'} it)")
@@ -1492,7 +1576,7 @@ class Station:
         return (self._payload_airtime_s(link.MAX_PAYLOAD_LEN)
                 + 2 * getattr(self._sim, 'overhead_s', 0.0) + 1.0)
 
-    async def _send_batched(self, first_seq, acked_frames, plain_frames):
+    async def _send_batched(self, first_seq, acked_frames, plain_frames, message_id=None):
         """Send a message's segments in batches - as many per transmission as
         max_tx_s allows, only the last asking for an ACK - and resend just
         the ones the selective ACK says are missing. Gives up after the
@@ -1527,6 +1611,9 @@ class Station:
             self._batch_wait = None
             got = [i for i in pending if i in wait['received']]
             pending = [i for i in pending if i not in wait['received']]
+            if got:
+                self._emit('delivery', id=message_id, acked=n - len(pending), total=n,
+                           done=not pending, failed=False)
             if not pending:
                 break
             stalls = 0 if got else stalls + 1

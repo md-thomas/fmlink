@@ -212,10 +212,15 @@ class RadioTransport:
         return 2.0 + max(0.0, self.turnaround_s - self.DEFAULT_TURNAROUND_S)
 
     def __init__(self, on_burst, attempts_fn, carrier_hz, capture, player, loop, tx_level=0.5,
-                 log=print, settle_s=0.4, turnaround_s=DEFAULT_TURNAROUND_S, trace=None):
+                 log=print, settle_s=0.4, turnaround_s=DEFAULT_TURNAROUND_S, trace=None,
+                 on_event=None):
         self._on_burst, self._loop, self._player = on_burst, loop, player
         self._capture, self._log = capture, log
         self._trace = trace or (lambda msg: None)   # detail for a log file, not the terminal
+        # on_event(dict), called on loop's thread: {'type': 'tx', 'state': 'keyed'|'released',
+        # 'seconds'} and {'type': 'level', 'rms_dbfs', 'peak_dbfs', 'transmitting'} per
+        # captured chunk - for a live display (see ota_station's on_event).
+        self._on_event = on_event
         self.tx_level, self.settle_s, self.turnaround_s = tx_level, settle_s, turnaround_s
         self._last_rx_end = 0.0   # when the last received burst finished airing (monotonic)
         self._detector = BurstDetector(attempts_fn, carrier_hz, self._burst)
@@ -251,12 +256,20 @@ class RadioTransport:
         pcm = audio.audio_to_pcm16(segment)
         self._loop.call_soon_threadsafe(self._on_burst, pcm)
 
+    def _event(self, **event):
+        if self._on_event is not None:
+            self._loop.call_soon_threadsafe(self._on_event, event)
+
     def _rx_loop(self):
         since_step = 0.0
         try:
             for chunk in self._capture():
                 if self._stop.is_set():
                     return
+                if self._on_event is not None and len(chunk):
+                    self._event(type='level', rms_dbfs=_dbfs(float(chunk.std())),
+                                peak_dbfs=_dbfs(float(np.abs(chunk).max())),
+                                transmitting=self._transmitting)
                 if self._transmitting or time.monotonic() < self._mute_until:
                     self._detector.reset()   # our own transmission isn't something to decode
                     since_step = 0.0
@@ -290,6 +303,7 @@ class RadioTransport:
             started = time.monotonic()
             self._trace(f"[radio tx] keying, {len(pcm) / 2 / RATE:.2f} s of audio at peak "
                         f"{self.tx_level:g}")
+            self._event(type='tx', state='keyed', seconds=len(pcm) / 2 / RATE)
             try:
                 self._player(pcm)
                 self._trace(f"[radio tx] released after {time.monotonic() - started:.2f} s")
@@ -298,6 +312,11 @@ class RadioTransport:
             finally:
                 self._mute_until = time.monotonic() + self.settle_s
                 self._transmitting = False
+                self._event(type='tx', state='released', seconds=time.monotonic() - started)
+
+
+def _dbfs(value):
+    return round(20 * float(np.log10(max(value, 1e-9))), 1)
 
 
 class SimulatedAir:

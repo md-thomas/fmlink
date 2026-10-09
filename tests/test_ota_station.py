@@ -1176,3 +1176,92 @@ class BatchingOverRadioTests(unittest.TestCase):
             self.assertEqual(len(sent), 4)          # every segment once: no resend round
 
         asyncio.run(scenario())
+
+
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
+class EventFeedTests(unittest.TestCase):
+    """Station(on_event=...): the structured events a live display
+    (open_wave_web) gets - every one JSON-serializable."""
+
+    def test_a_message_exchange_over_fm(self):
+        import json
+
+        async def scenario():
+            sim = await _create_simulator(FMLink('mic', base_cnr_db=25, latency_s=0.01, jitter_s=0.0,
+                                                 seed=7))
+            ev_a, ev_b, received = [], [], []
+            quiet = lambda msg: None  # noqa: E731
+            a = await _create_station('K0MDT', 'W1AW', mode_id=2, use_fec=True, use_ack=True,
+                                      phy='audio', audio_port='mic', on_log=quiet,
+                                      on_event=ev_a.append)
+            b = await _create_station('W1AW', 'K0MDT', mode_id=2, use_fec=True, use_ack=True,
+                                      phy='audio', audio_port='mic', on_log=quiet,
+                                      on_message=received.append, on_event=ev_b.append)
+            await a.connect(*sim.address)
+            await b.connect(*sim.address)
+            await asyncio.sleep(0.05)
+            await asyncio.wait_for(a.send_text("event feed test"), timeout=20)
+            await _wait_for(lambda: received, timeout_s=5)
+            a.close()
+            b.close()
+            sim.close()
+
+            for event in ev_a + ev_b:
+                json.dumps(event)                        # what the web backend will send
+                self.assertIn('time', event)
+            kinds_a = [e['type'] for e in ev_a]
+            self.assertEqual(ev_a[0]['type'], 'link')       # the initial setup
+            self.assertEqual(ev_a[0]['mode_id'], 2)
+            sent = next(e for e in ev_a if e['type'] == 'message_tx')
+            self.assertEqual((sent['text'], sent['segments'], sent['ack']), ("event feed test", 1, True))
+            done = [e for e in ev_a if e['type'] == 'delivery']
+            self.assertEqual(done[-1]['id'], sent['id'])
+            self.assertTrue(done[-1]['done'] and not done[-1]['failed'])
+            self.assertIn('tx', kinds_a)
+            self.assertIn('log', kinds_a)
+            burst = next(e for e in ev_b if e['type'] == 'burst_rx')
+            self.assertEqual((burst['status'], burst['mode_id'], burst['src']), ('ok', 2, 'K0MDT'))
+            self.assertGreater(burst['snr_db'], 10)
+            self.assertGreater(burst['quality'], 0.5)
+            got = next(e for e in ev_b if e['type'] == 'message_rx')
+            self.assertEqual((got['src'], got['text']), ('K0MDT', "event feed test"))
+            points = next(e for e in ev_b if e['type'] == 'constellation')['points']
+            self.assertTrue(0 < len(points) <= 300 and len(points[0]) == 2)
+
+        asyncio.run(scenario())
+
+    def test_a_failing_handler_does_not_break_the_station(self):
+        def broken(event):
+            raise RuntimeError('display bug')
+        import contextlib, io
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            station = Station(station_id='K0MDT', dst_id='W1AW', on_event=broken, on_log=lambda m: None)
+            station._log("still fine")          # emits a 'log' event; must not raise
+        self.assertEqual(station.link_state()['station_id'], 'K0MDT')
+        self.assertIn('display bug', errors.getvalue())   # reported, not raised
+
+
+class RadioEventTests(unittest.TestCase):
+    def test_tx_and_level_events_over_simulated_air(self):
+        import openwave_radio as radio
+
+        async def scenario():
+            air = radio.SimulatedAir(noise_rms=0.02)
+            events = []
+            a = Station('K0AAA', 'K0BBB', mode_id=2, use_fec=True, phy='audio', audio_port='mic',
+                        on_log=lambda m: None, on_event=events.append)
+            port = air.port()
+            await a.connect_radio({'rx_device': None, 'rx_channels': 1}, capture=port.capture,
+                                  player=port.player)
+            a._transmit_frame(link.build_frame(b'x' * 20, seq=1, mode_id=2))
+            await _wait_for(lambda: any(e['type'] == 'tx' and e['state'] == 'released'
+                                        for e in events), timeout_s=10)
+            a.close()
+            tx = [e['state'] for e in events if e['type'] == 'tx']
+            self.assertEqual(tx[:3], ['queued', 'keyed', 'released'])
+            levels = [e for e in events if e['type'] == 'level']
+            self.assertTrue(levels)
+            self.assertTrue(all(e['rms_dbfs'] <= 0 and 'transmitting' in e for e in levels))
+
+        asyncio.run(scenario())
