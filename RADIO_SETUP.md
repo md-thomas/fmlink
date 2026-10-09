@@ -331,6 +331,36 @@ to the peak:
   (55-65 dB in the sweep). A receive equalizer should lift it toward the
   other direction's 20 dB and give mode 3 real margin.
 
+### Message length test (2026-10-08)
+
+Ten chat messages from K0MDT-1 (AIOC + TIDRADIO) to K0MDT-2 (Digirig +
+Baofeng), 10 to 8000 characters, each sent after the previous one was
+acknowledged. Both stations ran the plain live-station command
+(`--phy audio --audio-port mic --radio --ack --auto`, default levels and
+turnaround); `--auto` picked mode 3 (QPSK 2400 baud, `r1_2_k3`) on the first
+message. **All ten delivered and arrived intact, with no retries;** every
+real burst decoded both ways (38 each), at ~11.5 dB into the Baofeng and
+~7.6 dB for the ACKs into the TIDRADIO.
+
+| Length (chars) | Segments | Typed to ACK | Rate |
+|---|---|---|---|
+| 10 | 1 | 12.5 s (includes ~9 s of mode negotiation) | - |
+| 40 | 1 | 3.0 s | 13 chars/s |
+| 100 | 1 | 3.5 s | 29 chars/s |
+| 250 | 1 | 4.0 s | 63 chars/s |
+| 500 | 1 | 5.0 s | 100 chars/s |
+| 1000 | 1 | 6.5 s | 154 chars/s |
+| 1500 | 2 | 11.0 s | 136 chars/s |
+| 2500 | 3 | 17.5 s | 143 chars/s |
+| 4000 | 4 | 25.5 s | 157 chars/s |
+| 8000 | 8 | 50.0 s | 160 chars/s |
+
+Each message costs ~2.5-3 s of fixed overhead (key-up, lead-in, preamble,
+the ACK back) plus ~3.5 s per 1000 characters. Long messages settle near
+160 chars/s (~1280 bit/s of text, against mode 3's 2400 bit/s after FEC):
+each 1024-character segment waits for its own ACK. Sending several segments
+per turn (burst batching, TODO.md) would close much of that gap.
+
 ### How much SNR each mode needs (software noise test)
 
 `./audio_margin_sweep.py` adds white noise to real audio bursts and finds where

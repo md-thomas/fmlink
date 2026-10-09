@@ -76,6 +76,11 @@ Follow-ups:
   fits: software noise sweep cliffs for mode 3 (all delivered at 8.2 dB,
   ~half at 5 dB) match mode 2's, so `--auto` picks mode 3 from a 600 baud
   probe of ~15 dB. Still to confirm on the air with `--auto`.
+- **Message length test on the air (2026-10-08):** ten messages, 10 to 8000
+  characters, all delivered intact at mode 3 with no retries; ~3 s for a
+  short message, 6.5 s for 1000 characters, 50 s for 8000 (~160 chars/s,
+  each 1024-char segment waiting for its own ACK - burst batching would
+  help). Table in RADIO_SETUP.md "Message length test".
 - ~~`radio_link_test.py` `--post` with a remote transmitter~~ - defaults to 5 s
   then. `radio_response.py` added (the sweep as a tool).
 
