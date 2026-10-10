@@ -12,6 +12,8 @@ optional-dependency skip pattern (see legacy/gnuradio/tests/).
 import asyncio
 import unittest
 
+import numpy as np
+
 import openwave_audio as audio_phy
 import openwave_fec as fec
 import openwave_link as link
@@ -1380,4 +1382,48 @@ class LiveSettingsOverFMTests(unittest.TestCase):
             a.close()
             b.close()
             sim.close()
+        asyncio.run(scenario())
+
+
+class RadioTestTests(unittest.TestCase):
+    """Station.radio_test() and link_state()'s 'radio', over SimulatedAir."""
+
+    def test_carrier_and_tone(self):
+        import openwave_radio as radio
+
+        async def scenario():
+            air = radio.SimulatedAir(noise_rms=0.0)
+            events, heard = [], []
+            st = Station('K0MDT', 'W1AW', mode_id=2, use_fec=True, phy='audio', audio_port='mic',
+                         on_log=lambda m: None, on_event=events.append)
+            self.assertIsNone(st.link_state()['radio'])
+            with self.assertRaises(ValueError):
+                st.radio_test('tone', 1.0)                 # not on a radio yet
+            port = air.port()
+            played = []
+            await st.connect_radio({'name': 'aioc', 'host': 'localhost', 'rx_device': 'hw:X',
+                                    'tx_device': 'plughw:X', 'ptt_port': '/dev/ttyACM0',
+                                    'ptt_line': 'dtr', 'rx_channels': 1},
+                                   capture=port.capture,
+                                   player=lambda pcm: (played.append(pcm), port.player(pcm)))
+            radio_info = st.link_state()['radio']
+            self.assertEqual((radio_info['name'], radio_info['ptt_line'], radio_info['ptt_port']),
+                             ('aioc', 'dtr', '/dev/ttyACM0'))
+            for bad in (('noise', 1.0), ('tone', 9), ('tone', 0.1), ('tone', True)):
+                with self.subTest(bad=bad):
+                    with self.assertRaises(ValueError):
+                        st.radio_test(*bad)
+            st.radio_test('carrier', 0.5)
+            st.radio_test('tone', 0.5)
+            await _wait_for(lambda: len(played) == 2, timeout_s=10)
+            st.close()
+            carrier, tone = (np.frombuffer(p, '<i2') / 32768 for p in played)
+            self.assertEqual(np.abs(carrier).max(), 0.0)               # silence
+            self.assertAlmostEqual(np.abs(tone).max(), st._sim.tx_level, places=2)  # at the TX level
+            self.assertEqual(len(tone), 24000)
+            spectrum = np.abs(np.fft.rfft(tone))
+            self.assertAlmostEqual(np.argmax(spectrum) * 48000 / len(tone), 1000.0, delta=5)
+            keyed = [e for e in events if e['type'] == 'tx' and e['state'] == 'keyed']
+            self.assertEqual(len(keyed), 2)
+
         asyncio.run(scenario())

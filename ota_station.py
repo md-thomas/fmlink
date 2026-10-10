@@ -538,6 +538,43 @@ class Station:
         event = dict(event)
         self._emit(event.pop('type'), **event)
 
+    def _radio_info(self):
+        """The radio interface in use (name, audio devices, PTT port and
+        line, host), or None off a radio."""
+        iface = getattr(self, '_radio_interface', None)
+        if iface is None or not isinstance(self._sim, radio.RadioTransport):
+            return None
+        return {key: iface.get(key) for key in ('name', 'host', 'rx_device', 'tx_device',
+                                                 'ptt_port', 'ptt_line')}
+
+    RADIO_TESTS = ('carrier', 'tone')
+    TEST_TONE_HZ = 1000.0
+
+    def radio_test(self, kind='carrier', seconds=1.0):
+        """Key the radio for seconds (0.5-5): 'carrier' sends silence (does
+        PTT work?), 'tone' a steady TEST_TONE_HZ tone at the TX level (for
+        the other station to check its receive level). Goes through the
+        normal transmit queue, so it waits for the turnaround and shows up
+        in 'tx' events. Raises ValueError off a radio or for bad arguments."""
+        if not isinstance(self._sim, radio.RadioTransport):
+            raise ValueError('radio tests need a real radio (--radio)')
+        if kind not in self.RADIO_TESTS:
+            raise ValueError(f"kind must be one of {', '.join(self.RADIO_TESTS)}")
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0.5 <= seconds <= 5:
+            raise ValueError('seconds must be from 0.5 to 5')
+        n = int(seconds * audio_phy.AUDIO_SAMPLE_RATE)
+        if kind == 'tone':
+            t = np.arange(n) / audio_phy.AUDIO_SAMPLE_RATE
+            samples = np.sin(2 * np.pi * self.TEST_TONE_HZ * t)
+            ramp = min(n // 2, int(0.01 * audio_phy.AUDIO_SAMPLE_RATE))
+            samples[:ramp] *= np.linspace(0, 1, ramp)
+            samples[-ramp:] *= np.linspace(1, 0, ramp)
+        else:
+            samples = np.zeros(n)
+        self._log(f"[radio test] {kind} for {seconds:g} s")
+        self._sim.send(audio_phy.audio_to_pcm16(samples))   # scaled to the TX level by the transport
+        self._emit('tx', state='queued', bursts=0, seconds=float(seconds), test=kind)
+
     def link_state(self):
         """The station's current setup, as a 'link' event carries it."""
         return {
@@ -552,6 +589,7 @@ class Station:
             'tx_level': getattr(self._sim, 'tx_level', None),
             'turnaround_s': getattr(self._sim, 'turnaround_s', None),
             'connected': bool(self._sim is not None and self._sim.connected),
+            'radio': self._radio_info(),
             'last_rx_snr_db': getattr(self, '_last_rx_snr_db', None),
         }
 
@@ -635,6 +673,7 @@ class Station:
         in and out (openwave_radio.SimulatedAir uses that for testing)."""
         if self.phy != 'audio':
             raise ValueError("a radio needs --phy audio")
+        self._radio_interface = dict(station)   # for link_state()'s 'radio'
 
         def attempts():
             return [(modulation, rate, use_fec, gens, k)
