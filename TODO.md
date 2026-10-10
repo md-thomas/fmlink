@@ -11,6 +11,14 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Where we are (2026-10-09)
 
+**Stopped here for the night (2026-10-09).** All repos on current `main` on
+both laptops. The user's two web stations (`openwave_web/run.sh --radio`,
+K0MDT-1 on server1, K0MDT-2 on lenovo) were left running - stop them with
+Ctrl-C when done. Pick up with: the Radio
+screen's PTT test and test tone on the real radios (both web stations up,
+watch each radio and the other station's level), then web step 5 or the
+open items below.
+
 **Web interface: [openwave_web](../openwave_web) (2026-10-09).** A new repo
 (MIT) that runs one station with a browser page, opened from any computer
 or phone on the network: chat with delivery progress, the SNR of received
