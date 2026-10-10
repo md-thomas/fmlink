@@ -352,7 +352,7 @@ class Station:
                  on_message=None, verbose=False, on_log=None, on_symbols=None, on_ax25=None,
                  phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S,
                  max_tx_s=DEFAULT_MAX_TX_S, batching=True, on_event=None):
-        # Structured events for a live display (open_wave_web): on_event(dict)
+        # Structured events for a live display (openwave_web): on_event(dict)
         # with a 'type' - see _emit() for the list. None (the default) costs
         # nothing.
         self._on_event = on_event
@@ -375,7 +375,7 @@ class Station:
         # Optional GUI hooks - both None by default, in which case behavior
         # is identical to before they existed (_log() prints to stderr as
         # always; nothing extra happens in _handle_received_samples()). See
-        # open_wave_ui, which uses these instead of scraping stderr or
+        # openwave_ui, which uses these instead of scraping stderr or
         # duplicating the RX pipeline to get at received symbols.
         self._on_log = on_log
         self._on_symbols = on_symbols
@@ -1158,7 +1158,7 @@ class Station:
         finally:
             self._negotiating = False
 
-    # -- settings changed while running (open_wave_web, /commands) -----
+    # -- settings changed while running (openwave_web, /commands) -----
     def _mode_not_allowed(self, mode_id):
         """Why mode_id can't be used now (a str), or None if it can."""
         if mode_id not in link.WAVEFORM_MODES:

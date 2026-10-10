@@ -1181,7 +1181,7 @@ class BatchingOverRadioTests(unittest.TestCase):
 @unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class EventFeedTests(unittest.TestCase):
     """Station(on_event=...): the structured events a live display
-    (open_wave_web) gets - every one JSON-serializable."""
+    (openwave_web) gets - every one JSON-serializable."""
 
     def test_a_message_exchange_over_fm(self):
         import json

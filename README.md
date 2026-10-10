@@ -997,7 +997,7 @@ Not yet handled on the audio path:
   would.
 - **The fading table stops at mode 2.** It was measured on the mic port
   only, so the data port's mode 3 is never picked on a fading link.
-- **The GUI** (`open_wave_ui`) has no `--phy audio` option yet.
+- **The GUI** (`openwave_ui`) has no `--phy audio` option yet.
 
 ### Known limitations
 

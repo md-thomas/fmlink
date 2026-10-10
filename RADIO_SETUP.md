@@ -38,7 +38,7 @@ What does **not** work:
 ## One-time setup, per computer
 
 ```
-cd ~/Projects/open_wave && git pull
+cd ~/Projects/openwave && git pull
 pip install numpy scipy pyserial     # if not already installed
 ```
 
@@ -188,7 +188,7 @@ station's `--station-id`.
 **Station 1** (for example the AIOC laptop):
 
 ```
-cd ~/Projects/open_wave
+cd ~/Projects/openwave
 ./radio_stations.py                       # confirm the interface is found
 ./level_meter.py                          # set the radio volume (Ctrl-C when "good")
 ./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 \
@@ -198,7 +198,7 @@ cd ~/Projects/open_wave
 **Station 2** (for example the Digirig laptop):
 
 ```
-cd ~/Projects/open_wave
+cd ~/Projects/openwave
 ./radio_stations.py
 ./level_meter.py
 ./ota_station.py --station-id K0MDT-2 --dst K0MDT-1 \
@@ -576,8 +576,8 @@ while it runs (a Pi Zero is unlikely to keep up).
 sudo apt update
 sudo apt install git python3-numpy python3-scipy python3-serial alsa-utils \
                  ax25-tools ax25-apps
-git clone https://github.com/md-thomas/openwave.git ~/Projects/open_wave
-cd ~/Projects/open_wave
+git clone https://github.com/md-thomas/openwave.git ~/Projects/openwave
+cd ~/Projects/openwave
 sudo usermod -aG dialout $USER          # PTT serial port; log out and back in
 sudo modprobe ax25 && sudo modprobe mkiss
 printf 'ax25\nmkiss\n' | sudo tee /etc/modules-load.d/ax25.conf

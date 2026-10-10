@@ -1,6 +1,6 @@
 # OpenWave — Requirements
 
-This document summarizes what `open_wave` is for and what it must do. It
+This document summarizes what `openwave` is for and what it must do. It
 sits alongside two existing, more detailed docs already in this repo:
 [`OpenWave_Specification.txt`](OpenWave_Specification.txt) is the
 authoritative wire-format spec (frame layout, header fields, Waveform
