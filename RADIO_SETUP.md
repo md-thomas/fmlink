@@ -415,6 +415,32 @@ All 20 bursts delivered. Mode 3 has ~9 dB of margin over its ~8 dB cliff
 one way and ~5-6 dB the other. Baofeng -> TIDRADIO matches the Digirig at
 mode 3; TIDRADIO -> Baofeng is a few dB under the Digirig's best (22.2 dB).
 
+### Airtime by mode and message size
+
+How long a message is on the air at each mode the mic port carries, with
+the FEC `--auto` picks for it (`MODE_SNR_TABLE`). Computed from the modem
+code (burst airtime including the 250 ms lead-in), not measured:
+
+| Characters | Mode 0 (BPSK 600, `r1_4_k9`) | Mode 1 (BPSK 1200, `r1_2_k3`) | Mode 2 (QPSK 1200, `r1_2_k3`) | Mode 3 (QPSK 2400, `r1_2_k3`) |
+|---|---|---|---|---|
+| 10 | 2.5 s | 0.9 s | 0.6 s | 0.4 s |
+| 100 | 7.3 s | 2.1 s | 1.2 s | 0.7 s |
+| 250 | 15.3 s | 4.1 s | 2.2 s | 1.2 s |
+| 500 | 28.6 s | 7.4 s | 3.8 s | 2.1 s |
+| 1000 | 55.3 s | 14.1 s | 7.2 s | 3.7 s |
+| 2500 | 2 min 19 s | 35.5 s | 18.2 s | 9.5 s |
+| 4000 | 3 min 41 s | 56.3 s | 28.7 s | 14.9 s |
+| 8000 | 7 min 22 s | 1 min 53 s | 57.4 s | 29.8 s |
+| Long messages | ~18 chars/s | ~71 chars/s | ~139 chars/s | ~269 chars/s |
+
+Real delivery adds ~2.5-3 s per exchange (PTT key-up, the other station's
+turnaround, the ACK back): with burst batching (the default) about once per
+message up to a 30 s transmission (`--max-tx-s`), without it once per
+1024-character segment. Measured at mode 3 (below): 8000 characters in
+31.5 s batched against 29.8 s of airtime, 50 s stop-and-wait. At mode 0 a
+full 1024-character segment is ~55 s on its own, past the 30 s cap, so
+each segment goes as its own transmission.
+
 ### Message length test (2026-10-08)
 
 Ten chat messages from K0MDT-1 (AIOC + TIDRADIO) to K0MDT-2 (Digirig +
