@@ -576,7 +576,7 @@ while it runs (a Pi Zero is unlikely to keep up).
 sudo apt update
 sudo apt install git python3-numpy python3-scipy python3-serial alsa-utils \
                  ax25-tools ax25-apps
-git clone https://github.com/md-thomas/open_wave.git ~/Projects/open_wave
+git clone https://github.com/md-thomas/openwave.git ~/Projects/open_wave
 cd ~/Projects/open_wave
 sudo usermod -aG dialout $USER          # PTT serial port; log out and back in
 sudo modprobe ax25 && sudo modprobe mkiss
