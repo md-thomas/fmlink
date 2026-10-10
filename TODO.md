@@ -11,6 +11,24 @@ far more frequently and carries the full reasoning behind each item.
 
 ## Where we are (2026-10-09)
 
+**Web interface: [openwave_web](../openwave_web) (2026-10-09).** A new repo
+(MIT) that runs one station with a browser page, opened from any computer
+or phone on the network: chat with delivery progress, the SNR of received
+bursts and the constellation (each with a Y-scale control), the radio's
+receive level and its last 30 s, every setting changed while running
+(callsigns, mode, FEC, bandwidth, ACK, auto, batching, lead-in, max
+transmission, TX level, turnaround), PTT and test-tone checks, a log;
+collapsible and resizable panels, phone layout, dark mode. Built on two
+additions here: the station's event feed (`on_event`) and
+`Station.update_settings()` (plus `/tx-level`, `/turnaround`, `/max-tx`,
+`/batch`). Plan and status: openwave_web's SCOPE.md. **Still to do:** try
+the Radio screen's PTT / test tone on the radios; step 5 (test tools in
+the page, a TNC screen).
+
+**Renamed (2026-10-09):** the GitHub repos are `openwave`, `openwave_ui`,
+`openwave_web`, and the local folders match (`~/Projects/openwave`, ...).
+server1 keeps a link `/data/Projects/open_wave -> openwave` for old paths.
+
 **K0MDT-2 now uses an AIOC instead of the Digirig (2026-10-09).** After
 re-seating it in the Baofeng and re-levelling both radios (hiss ~-15 dBFS):
 modes 2 and 3 delivered 5/5 each way, mode 3 at 16.8 dB (TIDRADIO ->
@@ -18,6 +36,11 @@ Baofeng) and 13.4 dB (Baofeng -> TIDRADIO); RADIO_SETUP.md "K0MDT-2 on an
 AIOC". With the Digirig gone, the Pat re-test
 at the default turnaround (below) can now settle whether the "TIDRADIO
 delay" was really the Digirig's AGC.
+
+Other open items, roughly in order: the over-eager fading detector (it can
+halve the speed on a static link), Pat with the `axports` window at 7
+(burst batching for AX.25), digipeating, weak-link tests, soft-decision
+Viterbi, CPU use before a Raspberry Pi.
 
 ## Where we were (2026-10-08)
 

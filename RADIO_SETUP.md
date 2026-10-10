@@ -223,7 +223,22 @@ every burst decoded both ways):
 
 The station keeps its sound card open, so stop it (Ctrl-C) before running
 `./level_meter.py` on that computer, or the meter reports "Device or
-resource busy".
+resource busy". (The web interface below has its own live level meter, so
+it doesn't need stopping for that.)
+
+**From a browser:** the [openwave_web](../openwave_web) repo runs the same
+station with a web page - chat, link SNR and constellation, the receive
+level with its history, settings changed while running, PTT and test-tone
+checks:
+
+```
+cd ~/Projects/openwave_web && ./run.sh --station-id K0MDT-1 --dst K0MDT-2 --radio --tx-level 0.6   # server1
+cd ~/Projects/openwave_web && ./run.sh --station-id K0MDT-2 --dst K0MDT-1 --radio                 # lenovo
+```
+
+then open `http://server1:8080` / `http://lenovo-laptop:8080` (or the IP
+addresses) from any computer or phone on the network. Anyone who can open
+the page can transmit; `--host 127.0.0.1` keeps it to that computer.
 
 Type a line and press Enter to send it; messages from the other station
 print as they arrive. `/help` lists the commands (`/mode`, `/fec`, `/ping`,

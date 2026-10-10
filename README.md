@@ -127,7 +127,21 @@ interface, pushing real frames through the actual modem chain instead of a
 one-shot file pipeline. It speaks either complex IQ (the default) or, with
 `--phy audio`, real audio. See "Over-The-Air (OTA) Simulator" below for the
 simulator (`fm_test.sh` launches a full FM test setup) and
-[RADIO_SETUP.md](RADIO_SETUP.md) for real radios.
+[RADIO_SETUP.md](RADIO_SETUP.md) for real radios. Its `Station` class also
+emits structured events (`on_event`: messages, delivery progress, each
+burst's SNR and sync, TX on/off, receive levels, constellation points) and
+takes settings changes while running (`update_settings()`, also the
+`/tx-level`, `/turnaround`, `/max-tx`, `/batch` commands) - what the web
+interface below is built on.
+
+**Web interface: [openwave_web](../openwave_web)** (a separate repo, next
+to this one)
+Runs one station with a browser interface, opened from any computer or
+phone on the network: chat with delivery progress, the link's SNR over
+time, the constellation, the receive level and its history, every setting
+changeable while running (callsigns, mode, FEC, TX level, turnaround,
+batching, ...), and PTT / test-tone checks. FastAPI backend in the
+station's own process, Svelte frontend.
 
 **Real-radio support** (all described in [RADIO_SETUP.md](RADIO_SETUP.md)):
 `openwave_radio.py` (the radio transport `ota_station.py --radio` uses:
@@ -552,6 +566,13 @@ setup and leveling, results and troubleshooting are in
 
 On the other computer swap the two callsigns. This transmits: use a clear
 frequency and low power. Each run writes a session log to `logs/`.
+
+Or run each station with its web page instead (from
+[openwave_web](../openwave_web), then open `http://<computer>:8080`):
+
+```
+cd ~/Projects/openwave_web && ./run.sh --station-id K0MDT-1 --dst K0MDT-2 --radio
+```
 
 ## Packet radio and Winlink: OpenWave as a KISS TNC
 

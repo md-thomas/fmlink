@@ -16,6 +16,7 @@ flowchart TB
     subgraph apps["Applications"]
         chat["Typed chat<br/>ota_station.py stdin"]
         kiss["Packet software via KISS<br/>Linux AX.25 / Pat / axcall<br/>openwave_tnc.py"]
+        web["A browser<br/>openwave_web: chat, live link view,<br/>settings while running"]
     end
     subgraph station["Station - ota_station.Station"]
         link["Link layer<br/>framing, seq, fragmentation,<br/>ACK + retry, mode negotiation"]
@@ -28,6 +29,7 @@ flowchart TB
     hw["FM transceiver<br/>AIOC or Digirig on the mic/speaker jacks"]
 
     chat --> link
+    web -- "events out, messages and settings in" --> link
     kiss -- "AX.25 frames (packet type 0x05)" --> link
     link --> phy
     phy --> radio
@@ -35,11 +37,13 @@ flowchart TB
     radio --> hw
 ```
 
-Two applications sit on one station class. Chat uses the full OpenWave
-link layer (fragmentation, ACKs, mode negotiation). The KISS TNC carries
-AX.25 frames one per burst and leaves addressing, ACKs and retries to the
-host's AX.25 stack. Either runs over a real radio or the simulator, with
-the same modem code.
+Three ways in sit on one station class: typed chat, the web page (the same
+chat plus live events and settings changes, from the separate
+`openwave_web` repo), and the KISS TNC. Chat (typed or from the page) uses
+the full OpenWave link layer (fragmentation, ACKs, mode negotiation). The
+KISS TNC carries AX.25 frames and leaves addressing, ACKs and retries to
+the host's AX.25 stack. All of them run over a real radio or the
+simulator, with the same modem code.
 
 ## 2. What a burst looks like on the air
 
