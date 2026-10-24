@@ -22,8 +22,9 @@ computer running Linux with this repo, `numpy`, `scipy` and `arecord`/`aplay`
 |---|---|---|---|
 | **AIOC** (All-In-One-Cable, USB `1209:7388`) | USB sound card `AllInOneCable` | serial **DTR** | PTT port is `/dev/ttyACM*` |
 | **Digirig** (CM108 sound card + CP2102N serial) | USB sound card `USB PnP Sound Device` | serial **RTS** | stereo-only playback; its AGC must be turned off |
+| **SignaLink** (USB sound card, TI/Burr-Brown PCM2904) | USB sound card `USB Audio CODEC` | **VOX** | no serial port and no CM108-style GPIO on its HID endpoint either - the radio keys itself off the transmitted audio, so there's no PTT permission to set up |
 
-`./radio_stations.py` detects both automatically by their USB IDs, so
+`./radio_stations.py` detects all three automatically by their USB IDs, so
 device numbers (`hw:1,0`, `ttyACM0`) can change without breaking anything.
 
 What does **not** work:
@@ -59,8 +60,9 @@ Check the interface is found:
 
 ```
 ./radio_stations.py
-# aioc     audio hw:CARD=AllInOneCable,DEV=0   PTT DTR usb-AIOC_All-In-One-Cable_...
-# digirig  audio hw:CARD=Device,DEV=0          PTT RTS usb-Silicon_Labs_CP2102N_...
+# aioc       audio hw:CARD=AllInOneCable,DEV=0   PTT DTR usb-AIOC_All-In-One-Cable_...
+# digirig    audio hw:CARD=Device,DEV=0          PTT RTS usb-Silicon_Labs_CP2102N_...
+# signalink  audio hw:CARD=CODEC,DEV=0           PTT VOX audio-triggered, no PTT line
 ```
 
 ## Audio setup and leveling
@@ -273,8 +275,9 @@ session summary.
   ~51 s. A transmission is capped at `--max-tx-s` (default 30 s; keep it
   under your radio's transmit time-out). `--no-batch` turns it off
   (BURST_BATCHING_PROPOSAL.md).
-- `--tx-level 0.5` is the default; `--ptt-line dtr|rts` overrides the
-  interface's PTT line; `-v` prints per-message detail.
+- `--tx-level 0.5` is the default; `--ptt-line dtr|rts|vox` overrides the
+  interface's PTT line (`vox` just plays the audio - no line to drive); `-v`
+  prints per-message detail.
 - The `mic` port carries modes 0-3 (mode 3, 2400 baud, on a 2000 Hz
   carrier); `--auto` picks mode 3 when the link is good enough. A mode faster
   than the port allows (4, 5) is refused. The `data` port profile needs a
@@ -540,6 +543,7 @@ threshold effect and fades, so keep some extra margin.
 | Both directions of one station 10+ dB worse, its transmissions noisy even with no audio, its received bursts weak | the AIOC's (or any K1 cable's) plug isn't fully seated in the HT, or the cable is picking something up: push it home or move the radio/cable (fixed it on 2026-10-09 - the radio's audio got audibly louder at that moment) |
 | `radio_stations.py` shows nothing | check `lsusb` for the adapter and `arecord -l` for its sound card |
 | stations hear nothing from each other | wrong PTT line (try `--ptt-line dtr` or `rts`; the radio's TX light shows it keying), TX level too low or too high, different frequencies, or squelch closed |
+| SignaLink doesn't key up, or clips the start of each burst | VOX needs a moment of audio energy before it engages; raise `--lead-in-ms` if decodes fail at the start of bursts specifically. The "PTT test" (silent carrier) won't key a VOX radio at all - use the test tone instead |
 | the sender keeps retrying and the peer reports "duplicate" | the peer's ACK is not getting back: check the levels and PTT in that direction; the transport already waits a 0.6 s turnaround before replying |
 | high CPU on a small computer | the receiver re-decodes its audio buffer every 0.5 s (about half a core with 2-3 candidate modes) |
 | `[radio tx error]` | the line after it names the `aplay` or serial error |
