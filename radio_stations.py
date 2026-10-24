@@ -19,11 +19,16 @@ DEFAULT_CONFIG = os.path.join(HERE, 'stations.toml')
 LOCAL = 'localhost'
 
 # How to recognise each interface: its USB sound card (ALSA card id or
-# name) and its serial PTT port (a /dev/serial/by-id name pattern).
+# name) and its serial PTT port (a /dev/serial/by-id name pattern) - or, for
+# an interface with no PTT line at all (e.g. the SignaLink: no serial port,
+# no CM108-style GPIO on its HID endpoint either - see RADIO_SETUP.md), just
+# 'ptt_line': 'vox' and no 'serial' entry. The radio keys itself off the
+# transmitted audio, so there's nothing for this software to assert/release.
 PROFILES = {
     'aioc': {'card_id': 'AllInOneCable', 'serial': re.compile(r'AIOC', re.I), 'ptt_line': 'dtr'},
     'digirig': {'card_name': 'USB PnP Sound Device', 'serial': re.compile(r'CP210', re.I),
                 'ptt_line': 'rts'},
+    'signalink': {'card_name': 'USB Audio CODEC', 'ptt_line': 'vox'},
 }
 SCAN_CMD = "arecord -l 2>/dev/null; echo ---; ls /dev/serial/by-id 2>/dev/null"
 
@@ -58,7 +63,8 @@ def detect(host, overrides=None):
                      if cid == prof.get('card_id') or cname.strip() == prof.get('card_name')), None)
         if card is None:
             continue
-        port = next((f'/dev/serial/by-id/{p}' for p in ports if prof['serial'].search(p)), None)
+        port = next((f'/dev/serial/by-id/{p}' for p in ports
+                     if prof.get('serial') and prof['serial'].search(p)), None)
         st = {'name': name, 'host': host,
               # plughw: converts mono to the stereo some sound cards (the CM108) insist on
               'tx_device': f'plughw:CARD={card},DEV=0',
@@ -121,7 +127,10 @@ def pick_local(name=None, config_path=DEFAULT_CONFIG):
 
 
 def describe(st):
-    port = st['ptt_port'] or 'NO PTT PORT FOUND (receive only)'
+    if st['ptt_line'] == 'vox':
+        port = 'audio-triggered, no PTT line'
+    else:
+        port = st['ptt_port'] or 'NO PTT PORT FOUND (receive only)'
     return (f"{label(st):<22} audio {st['rx_device']:<26} PTT {st['ptt_line'].upper()} "
             f"{port.replace('/dev/serial/by-id/', '')[:48]}")
 

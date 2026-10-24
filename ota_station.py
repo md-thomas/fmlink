@@ -2153,7 +2153,7 @@ async def connect_from_args(station, args):
             sys.exit(f"error: {exc}")
         if args.ptt_line:
             st['ptt_line'] = args.ptt_line
-        if not st['ptt_port']:
+        if not st['ptt_port'] and st['ptt_line'] != 'vox':
             sys.exit(f"error: {st['name']} has no PTT serial port detected, so it can't transmit")
         turnaround_ms = getattr(args, 'turnaround_ms', None)
         await station.connect_radio(st, args.tx_level,
@@ -2255,7 +2255,7 @@ def main():
     parser.add_argument('--no-log', action='store_true', help='do not write a session log')
     parser.add_argument('--tx-level', type=float, default=0.5,
                          help='with --radio: peak TX audio level into the radio, 0-1 (default 0.5)')
-    parser.add_argument('--ptt-line', choices=('dtr', 'rts'),
+    parser.add_argument('--ptt-line', choices=('dtr', 'rts', 'vox'),
                          help="with --radio: override the interface's PTT line")
     parser.add_argument('--turnaround-ms', type=float, default=None,
                          help='with --radio: wait this long after a received burst before keying '

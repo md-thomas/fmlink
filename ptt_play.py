@@ -13,6 +13,12 @@ import time
 
 
 def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2):
+    if ptt_line == 'vox':
+        # No PTT line to drive - the radio keys and releases itself off the
+        # audio (a SignaLink-style interface: no serial port, no CM108-style
+        # GPIO on its HID endpoint either). Playing the WAV is the whole job.
+        subprocess.run(['aplay', '-q', '-D', device, wav], check=True, timeout=60)
+        return
     import serial
     ptt = serial.Serial(ptt_port, 9600, dsrdtr=False, rtscts=False)
     ptt.dtr = False
@@ -32,8 +38,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--wav', required=True)
     p.add_argument('--device', required=True, help='ALSA playback device')
-    p.add_argument('--ptt-port', required=True)
-    p.add_argument('--ptt-line', choices=('dtr', 'rts'), required=True)
+    p.add_argument('--ptt-port', help='not needed with --ptt-line vox')
+    p.add_argument('--ptt-line', choices=('dtr', 'rts', 'vox'), required=True)
     p.add_argument('--key-delay', type=float, default=0.2, help='seconds between PTT and audio')
     a = p.parse_args()
     key_and_play(a.wav, a.device, a.ptt_port, a.ptt_line, a.key_delay)
