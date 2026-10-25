@@ -8,16 +8,49 @@ can copy it to a remote station and run it there.
 THIS TRANSMITS. PTT is always released, even on error or Ctrl-C.
 """
 import argparse
+import math
+import os
+import struct
 import subprocess
+import tempfile
 import time
+import wave
+
+VOX_PREROLL_S = 0.3        # silence doesn't trigger VOX - a radio with no PTT
+VOX_PREROLL_HZ = 1000.0    # line needs real audio energy before the burst's
+VOX_PREROLL_AMPLITUDE = 0.6  # own lead-in (silence) to have any chance of being keyed in time
+
+
+def _vox_preroll_wav(src_path, out_path, seconds=VOX_PREROLL_S, hz=VOX_PREROLL_HZ,
+                     amplitude=VOX_PREROLL_AMPLITUDE):
+    """out_path: src_path's audio with a short tone prepended, so a VOX
+    radio is already keyed by the time the real (modulated) audio starts -
+    the WAV's own lead-in is silence, which a VOX circuit never keys on."""
+    with wave.open(src_path, 'rb') as r:
+        channels, sampwidth, framerate = r.getnchannels(), r.getsampwidth(), r.getframerate()
+        frames = r.readframes(r.getnframes())
+    n = int(seconds * framerate)
+    peak = amplitude * (2 ** (8 * sampwidth - 1) - 1)
+    ramp = max(1, min(n // 4, int(0.02 * framerate)))
+    tone = bytearray()
+    for i in range(n):
+        level = peak * min(i / ramp, (n - i) / ramp, 1.0)
+        sample = struct.pack('<h', int(level * math.sin(2 * math.pi * hz * i / framerate)))
+        tone += sample * channels
+    with wave.open(out_path, 'wb') as w:
+        w.setnchannels(channels); w.setsampwidth(sampwidth); w.setframerate(framerate)
+        w.writeframes(bytes(tone) + frames)
 
 
 def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2):
     if ptt_line == 'vox':
         # No PTT line to drive - the radio keys and releases itself off the
         # audio (a SignaLink-style interface: no serial port, no CM108-style
-        # GPIO on its HID endpoint either). Playing the WAV is the whole job.
-        subprocess.run(['aplay', '-q', '-D', device, wav], check=True, timeout=60)
+        # GPIO on its HID endpoint either). Give it a tone to key on first.
+        with tempfile.TemporaryDirectory() as tmp:
+            preroll_wav = os.path.join(tmp, 'vox_preroll.wav')
+            _vox_preroll_wav(wav, preroll_wav)
+            subprocess.run(['aplay', '-q', '-D', device, preroll_wav], check=True, timeout=60)
         return
     import serial
     ptt = serial.Serial(ptt_port, 9600, dsrdtr=False, rtscts=False)

@@ -138,7 +138,7 @@ def main():
     p.add_argument('--level', type=float, default=0.3,
                    help='sweep level, 0-1 (default 0.3: below the radio\'s deviation limiter)')
     p.add_argument('--duration', type=float, default=6.0, help='sweep length, s (default 6)')
-    p.add_argument('--ptt-line', choices=('dtr', 'rts'), help="override the tx station's PTT line")
+    p.add_argument('--ptt-line', choices=('dtr', 'rts', 'vox'), help="override the tx station's PTT line")
     p.add_argument('--key-delay', type=float, default=0.3, help='seconds between PTT and audio')
     p.add_argument('--keep', metavar='DIR', help='keep the TX/RX WAVs in DIR')
     p.add_argument('--yes', action='store_true', help='do not ask before transmitting')
@@ -151,14 +151,14 @@ def main():
     tx = dict(tx)
     if args.ptt_line:
         tx['ptt_line'] = args.ptt_line
-    if not tx['ptt_port']:
+    if not tx['ptt_port'] and tx['ptt_line'] != 'vox':
         p.error(f"{stations_mod.label(tx)} has no PTT serial port detected, so it can't transmit")
 
     signal = sweep_signal(args.duration, args.level)
     airtime = len(signal) / RATE
     print(f"About to TRANSMIT a {args.duration:g} s tone sweep ({F0:g}-{F1:g} Hz, level {args.level:g}).")
-    print(f"  from {stations_mod.label(tx)}: PTT {tx['ptt_line'].upper()} on {tx['ptt_port']}, "
-          f"audio {tx['tx_device']}")
+    print(f"  from {stations_mod.label(tx)}: PTT {tx['ptt_line'].upper()} on "
+          f"{tx['ptt_port'] or 'audio-triggered, no PTT line'}, audio {tx['tx_device']}")
     print(f"  to   {stations_mod.label(rx)}: recording {rx['rx_device']}")
     print("Low power, clear frequency, receiver's squelch open?")
     if not args.yes:

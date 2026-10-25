@@ -36,7 +36,7 @@ def main():
     p.add_argument('--port', choices=sorted(audio.PORT_PROFILES), default='mic',
                    help='audio port profile (carrier / max symbol rate); default mic')
     p.add_argument('--level', type=float, help="TX audio level, 0-1 (default: the station's, else 0.5)")
-    p.add_argument('--ptt-line', choices=('dtr', 'rts'), help="override the station's PTT line")
+    p.add_argument('--ptt-line', choices=('dtr', 'rts', 'vox'), help="override the station's PTT line")
     p.add_argument('--lead-in', type=float, default=0.5, help='silence before the burst, s')
     p.add_argument('--key-delay', type=float, default=0.2, help='seconds between PTT and audio')
     p.add_argument('--gap', type=float, default=3.0, help='pause between bursts, s')
@@ -51,13 +51,14 @@ def main():
         p.error(str(exc))
     if args.ptt_line:
         st['ptt_line'] = args.ptt_line
-    if not st['ptt_port']:
+    if not st['ptt_port'] and st['ptt_line'] != 'vox':
         p.error(f"{st['name']} has no PTT serial port detected, so it can't transmit")
     level = args.level if args.level is not None else st.get('level', 0.5)
 
     total = len(args.modes) * args.count
     print(f"About to TRANSMIT {total} burst(s) as {args.src}: modes {args.modes} x {args.count}.")
-    print(f"  {st['name']}: PTT {st['ptt_line'].upper()} on {st['ptt_port']}, audio {st['tx_device']}, "
+    port_desc = st['ptt_port'] or 'audio-triggered, no PTT line'
+    print(f"  {st['name']}: PTT {st['ptt_line'].upper()} on {port_desc}, audio {st['tx_device']}, "
           f"level {level}")
     print("Radio on a clear frequency at low power? Ctrl-C stops (PTT is always released).")
     if not args.yes:

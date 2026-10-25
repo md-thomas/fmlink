@@ -48,6 +48,15 @@ AUDIO_SAMPLE_RATE = 48000
 #         (2026-10-07: flat to ~2.3 kHz, -5 to -13 dB at 3 kHz, nothing
 #         above ~4 kHz) mode 3 on a 2000 Hz carrier delivered 5/5 each way
 #         at 11.4 and 7.8 dB, so the mic port allows it, on 2000 Hz.
+#         NOT true through a SignaLink (2026-10-24, radio_response.py):
+#         its TX audio path rolls off much harder above ~2.5 kHz than the
+#         AIOC/Digirig path above - mode 3's upper edge (3620 Hz) measured
+#         -36 dB, vs -11/-17 dB for mode 2's edges, and mode 3 pinged 0/5
+#         (no_reply) every time while modes 0-2 were 5/5. A VOX pre-roll
+#         tone (see ptt_play.py) made no difference - this is a bandwidth
+#         limit, not a PTT-timing one. Cap a SignaLink station to mode 2 on
+#         this port (or re-run radio_response.py per-radio before trusting
+#         mode 3 on one).
 #   data: ~10 Hz-5 kHz flat, so 2000 Hz carries 2400 baud at 380-3620 Hz,
 #         clear of the upper roll-off.
 # carrier_hz is the port's carrier; carriers_by_rate overrides it for a

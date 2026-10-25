@@ -74,10 +74,11 @@ def transmit(tx, wav_path, key_delay):
     remote_wav, remote_helper = f'/tmp/{tag}_tx.wav', f'/tmp/{tag}_ptt_play.py'
     copy(tx, wav_path, remote_wav, True)
     copy(tx, os.path.join(HERE, 'ptt_play.py'), remote_helper, True)
-    subprocess.run(remote_cmd(tx, ['python3', remote_helper, '--wav', remote_wav,
-                                   '--device', tx['tx_device'], '--ptt-port', tx['ptt_port'],
-                                   '--ptt-line', tx['ptt_line'], '--key-delay', str(key_delay)]),
-                   check=True, timeout=90, stdin=subprocess.DEVNULL)
+    cmd = ['python3', remote_helper, '--wav', remote_wav, '--device', tx['tx_device'],
+           '--ptt-line', tx['ptt_line'], '--key-delay', str(key_delay)]
+    if tx['ptt_port']:
+        cmd += ['--ptt-port', tx['ptt_port']]
+    subprocess.run(remote_cmd(tx, cmd), check=True, timeout=90, stdin=subprocess.DEVNULL)
     subprocess.run(remote_cmd(tx, ['rm', '-f', remote_wav, remote_helper]), check=False, timeout=30, stdin=subprocess.DEVNULL)
 
 
@@ -182,7 +183,7 @@ def main():
     p.add_argument('--port', choices=sorted(audio.PORT_PROFILES), default='mic',
                    help='audio port profile (carrier / max symbol rate); default mic')
     p.add_argument('--level', type=float, help="TX audio level, 0-1 (default: the station's, else 0.5)")
-    p.add_argument('--ptt-line', choices=('dtr', 'rts'), help="override the tx station's PTT line")
+    p.add_argument('--ptt-line', choices=('dtr', 'rts', 'vox'), help="override the tx station's PTT line")
     p.add_argument('--lead-in', type=float, default=0.5, help='silence before the burst, s')
     p.add_argument('--key-delay', type=float, default=0.2, help='seconds between PTT and audio')
     p.add_argument('--pre', type=float, default=3.0, help='record this long before keying, s')
@@ -201,12 +202,13 @@ def main():
     tx = dict(tx)
     if args.ptt_line:
         tx['ptt_line'] = args.ptt_line
-    if not tx['ptt_port']:
+    if not tx['ptt_port'] and tx['ptt_line'] != 'vox':
         p.error(f"{stations_mod.label(tx)} has no PTT serial port detected, so it can't transmit")
 
     total = len(args.modes) * args.count
     print(f"About to TRANSMIT {total} burst(s) as {args.src}: modes {args.modes} x {args.count}.")
-    print(f"  from {stations_mod.label(tx)}: PTT {tx['ptt_line'].upper()} on {tx['ptt_port']}, "
+    print(f"  from {stations_mod.label(tx)}: PTT {tx['ptt_line'].upper()} on "
+          f"{tx['ptt_port'] or 'audio-triggered, no PTT line'}, "
           f"audio {tx['tx_device']}")
     print(f"  to   {stations_mod.label(rx)}: recording {rx['rx_device']}")
     print("Transmitting radio on a clear frequency at low power? Ctrl-C stops (PTT is always released).")

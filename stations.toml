@@ -15,7 +15,7 @@
 # needed), e.g. hosts = ["macbookair2"]. radio_listen.py, radio_send.py and
 # level_meter.py only look at this computer's interfaces; only
 # radio_link_test.py (one machine driving both stations) uses other hosts.
-hosts = []
+hosts = ["hampi"]
 
 # Optional per-interface overrides: ptt_line, level (TX audio 0-1),
 # rx_channels (2 for a sound card that only records stereo).
