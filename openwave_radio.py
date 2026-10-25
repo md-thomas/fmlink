@@ -260,28 +260,38 @@ class RadioTransport:
         if self._on_event is not None:
             self._loop.call_soon_threadsafe(self._on_event, event)
 
+    # A capture generator that dies (ALSA overrun -> arecord's fatal
+    # Input/output error, a USB sound card dropping out, ...) used to kill
+    # this thread for good: 'connected' stayed True but nothing was ever
+    # read again. Reopen the capture instead, so a receiver stays deaf for
+    # a few seconds rather than for the rest of the process's life.
+    CAPTURE_RETRY_S = 2.0
+
     def _rx_loop(self):
         since_step = 0.0
-        try:
-            for chunk in self._capture():
-                if self._stop.is_set():
-                    return
-                if self._on_event is not None and len(chunk):
-                    self._event(type='level', rms_dbfs=_dbfs(float(chunk.std())),
-                                peak_dbfs=_dbfs(float(np.abs(chunk).max())),
-                                transmitting=self._transmitting)
-                if self._transmitting or time.monotonic() < self._mute_until:
-                    self._detector.reset()   # our own transmission isn't something to decode
-                    since_step = 0.0
-                    continue
-                self._detector.feed(chunk)
-                since_step += len(chunk) / RATE
-                if since_step >= STEP_S:
-                    since_step = 0.0
-                    self._detector.step()
-        except Exception as exc:
-            self.connected = False
-            self._log(f"[radio rx error] {exc!r}")
+        while not self._stop.is_set():
+            try:
+                for chunk in self._capture():
+                    if self._stop.is_set():
+                        return
+                    if self._on_event is not None and len(chunk):
+                        self._event(type='level', rms_dbfs=_dbfs(float(chunk.std())),
+                                    peak_dbfs=_dbfs(float(np.abs(chunk).max())),
+                                    transmitting=self._transmitting)
+                    if self._transmitting or time.monotonic() < self._mute_until:
+                        self._detector.reset()   # our own transmission isn't something to decode
+                        since_step = 0.0
+                        continue
+                    self._detector.feed(chunk)
+                    since_step += len(chunk) / RATE
+                    if since_step >= STEP_S:
+                        since_step = 0.0
+                        self._detector.step()
+            except Exception as exc:
+                self._log(f"[radio rx error] {exc!r} - reopening the capture")
+                self._detector.reset()
+                since_step = 0.0
+                self._stop.wait(self.CAPTURE_RETRY_S)
 
     def _tx_loop(self):
         while not self._stop.is_set():
