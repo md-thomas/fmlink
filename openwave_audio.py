@@ -48,17 +48,17 @@ AUDIO_SAMPLE_RATE = 48000
 #         (2026-10-07: flat to ~2.3 kHz, -5 to -13 dB at 3 kHz, nothing
 #         above ~4 kHz) mode 3 on a 2000 Hz carrier delivered 5/5 each way
 #         at 11.4 and 7.8 dB, so the mic port allows it, on 2000 Hz.
-#         UNCLEAR through a SignaLink (2026-10-24): mode 3 repeatedly
-#         pinged 0/5 (no_reply) there while modes 0-2 were 5/5, and a
-#         radio_response.py sweep measured its upper edge (3620 Hz) at
-#         -36 dB vs -11/-17 dB for mode 2's edges - but the same session
-#         also found the receiving station's rx thread silently dying on
-#         an ALSA overrun mid-test (fixed: RadioTransport._rx_loop now
-#         reopens the capture instead of going deaf for good), which could
-#         explain some or all of those failures with nothing to do with
-#         bandwidth. Re-run radio_response.py and a /ping survey on a
-#         station confirmed healthy throughout before trusting either
-#         conclusion.
+#         Also fine through a SignaLink (2026-10-24): mode 3 repeatedly
+#         pinged 0/5 (no_reply) there at first, and a radio_response.py
+#         sweep measured its upper edge (3620 Hz) at -36 dB vs -11/-17 dB
+#         for mode 2's edges, looking like a real bandwidth limit - but
+#         the receiving station's rx thread was silently dying on an ALSA
+#         overrun mid-test (fixed: RadioTransport._rx_loop now reopens the
+#         capture instead of going deaf for good) and running stale code
+#         without that fix. With both stations healthy and current, mode
+#         3 ran 5/5 at 19.5 dB, same as the other port. The -36 dB sweep
+#         reading was very likely a fade caught during that unhealthy
+#         period, not a SignaLink characteristic.
 #   data: ~10 Hz-5 kHz flat, so 2000 Hz carries 2400 baud at 380-3620 Hz,
 #         clear of the upper roll-off.
 # carrier_hz is the port's carrier; carriers_by_rate overrides it for a
