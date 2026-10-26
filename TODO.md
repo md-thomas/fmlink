@@ -1,4 +1,4 @@
-# OpenWave — TODO / Status
+# FMlink — TODO / Status
 
 Condensed pointer into [`tasklist.txt`](tasklist.txt), which is this
 project's own exhaustive, phase-by-phase status log (1000+ lines,
@@ -12,14 +12,14 @@ far more frequently and carries the full reasoning behind each item.
 ## Where we are (2026-10-09)
 
 **Stopped here for the night (2026-10-09).** All repos on current `main` on
-both laptops. The user's two web stations (`openwave_web/run.sh --radio`,
+both laptops. The user's two web stations (`fmlink_web/run.sh --radio`,
 K0MDT-1 on server1, K0MDT-2 on lenovo) were left running - stop them with
 Ctrl-C when done. Pick up with: the Radio
 screen's PTT test and test tone on the real radios (both web stations up,
 watch each radio and the other station's level), then web step 5 or the
 open items below.
 
-**Web interface: [openwave_web](../openwave_web) (2026-10-09).** A new repo
+**Web interface: [fmlink_web](../fmlink_web) (2026-10-09).** A new repo
 (MIT) that runs one station with a browser page, opened from any computer
 or phone on the network: chat with delivery progress, the SNR of received
 bursts and the constellation (each with a Y-scale control), the radio's
@@ -29,13 +29,16 @@ transmission, TX level, turnaround), PTT and test-tone checks, a log;
 collapsible and resizable panels, phone layout, dark mode. Built on two
 additions here: the station's event feed (`on_event`) and
 `Station.update_settings()` (plus `/tx-level`, `/turnaround`, `/max-tx`,
-`/batch`). Plan and status: openwave_web's SCOPE.md. **Still to do:** try
+`/batch`). Plan and status: fmlink_web's SCOPE.md. **Still to do:** try
 the Radio screen's PTT / test tone on the radios; step 5 (test tools in
 the page, a TNC screen).
 
-**Renamed (2026-10-09):** the GitHub repos are `openwave`, `openwave_ui`,
-`openwave_web`, and the local folders match (`~/Projects/openwave`, ...).
-server1 keeps a link `/data/Projects/open_wave -> openwave` for old paths.
+**Renamed to FMlink (2026-10-25)** (was OpenWave; before 2026-10-09 the
+folders were open_wave, open_wave_ui, open_wave_web). The GitHub repos are
+`fmlink`, `fmlink_ui`, `fmlink_web`, and the local folders match
+(`~/Projects/fmlink`, ...); the modules are `fmlink_*.py`. server1 keeps
+links `/data/Projects/openwave` and `/data/Projects/open_wave` -> `fmlink`
+for old paths. The on-air format didn't change.
 
 **K0MDT-2 now uses an AIOC instead of the Digirig (2026-10-09).** After
 re-seating it in the Baofeng and re-levelling both radios (hiss ~-15 dBFS):
@@ -81,7 +84,7 @@ with the `axports` window raised to 7 (part 1 for AX.25).
 negotiation the probe read 4% of the burst in dropouts (threshold 3%) with
 the radios on dummy loads, so `--auto` used the fading table and picked
 mode 2 / `r1_2_k7` instead of mode 3 / `r1_2_k3` - half the speed. Look at
-`openwave_audio.burst_quality` on real recordings (maybe since the
+`fmlink_audio.burst_quality` on real recordings (maybe since the
 equalizer, or the 5 ms window is too short at 600 baud) before trusting
 it on air.
 
@@ -102,7 +105,7 @@ AIOC + Baofeng since 2026-10-09).
 
 **Winlink over the air works (2026-10-07).** Pat on K0MDT-1 (server1, AIOC +
 TIDRADIO HT) sent a peer-to-peer message to Pat on K0MDT-2 (`lenovo`, Digirig
-+ Baofeng) through two OpenWave TNCs at mode 2: handshake to disconnect in
++ Baofeng) through two FMlink TNCs at mode 2: handshake to disconnect in
 42 s, message intact in K0MDT-2's inbox. Radios on low power into dummy
 loads about 2 m apart; SNR about 13-14 dB each way. KISS TNC Milestone 2 is
 done. Raw bursts (9/9 each way) and `axcall` to `ax25d` passed first.
@@ -120,14 +123,14 @@ What it took (details in RADIO_SETUP.md's Pat section):
   arrived as a blank carrier, so the 73-byte I-frame of the B2F proposal never
   got through and the session stalled at `>F>`. Fixed for now with a longer
   turnaround on that station: `--turnaround-ms 3000` (new option on
-  `openwave_tnc.py` and `ota_station.py`; default 600). Not caused by dual
+  `fmlink_tnc.py` and `ota_station.py`; default 600). Not caused by dual
   watch, squelch, STE, VOX, mic gain or battery save. **Open:** find the
   radio setting (firmware HAM_230923, probably a TD-H8) - the 3 s costs time
   at every turn.
 - **Receiver fix:** with two bursts back to back in the buffer the detector
   could decode the second (stronger marker) and drop the first. It now looks
-  for an earlier burst before the one it found (`tests/test_openwave_radio.py`).
-- `openwave_tnc.py --log-file` writes the per-burst trace (heard or not, SNR,
+  for an earlier burst before the one it found (`tests/test_fmlink_radio.py`).
+- `fmlink_tnc.py --log-file` writes the per-burst trace (heard or not, SNR,
   sync quality) - how the above was found.
 - Setup gotchas: the pty link must not be in `/tmp` (root can't follow a
   user's symlink there), one `axports` line per port name, restart Pat's
@@ -150,7 +153,7 @@ Follow-ups:
   +10.7 dB (strong direction) at mode 3 on air.
 - ~~Allow mode 3 on the mic port~~ - done 2026-10-07: the `mic` profile
   carries up to 2400 baud, mode 3 on a 2000 Hz carrier (modes 0-2 stay on
-  1650 Hz; `openwave_audio.carrier_for`). The existing MODE_SNR_TABLE row
+  1650 Hz; `fmlink_audio.carrier_for`). The existing MODE_SNR_TABLE row
   fits: software noise sweep cliffs for mode 3 (all delivered at 8.2 dB,
   ~half at 5 dB) match mode 2's, so `--auto` picks mode 3 from a 600 baud
   probe of ~15 dB. Still to confirm on the air with `--auto`.
@@ -173,7 +176,7 @@ transceiver model; `./fm_test.sh`).
 
 Done most recently:
 
-- **Real-radio transport** (`openwave_radio.py`): continuous burst
+- **Real-radio transport** (`fmlink_radio.py`): continuous burst
   detection using the station's current mode/FEC attempts, queued PTT
   transmit, receive paused while keyed, a turnaround before replying, and
   extra reply-timeout allowance. `--radio [aioc|digirig]` on
@@ -210,14 +213,14 @@ Done most recently:
   `--auto`, frames decoded at the correlation's marker position, live
   simulator `/commands`, station `/ack`, `/auto`, `/lead-in`.
 
-**KISS TNC (2026-10-05, in progress).** `openwave_tnc.py` makes OpenWave a
+**KISS TNC (2026-10-05, in progress).** `fmlink_tnc.py` makes FMlink a
 KISS TNC, so standard packet software can use it as its modem: the Linux
 kernel AX.25 stack via `kissattach`, and through it Pat (Winlink
 peer-to-peer), digipeating and Linux RMS Gateway. Two TNCs already
 exchange AX.25 frames over the simulator. Plan,
 milestones and setup: [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md).
 **Milestone 1 done (2026-10-05):** the Linux kernel AX.25 stack runs
-unmodified over two OpenWave TNCs and the simulated FM link - `beacon`
+unmodified over two FMlink TNCs and the simulated FM link - `beacon`
 frames and full `axcall`/`ax25d` connected sessions, in plain, SMACK and
 FlexNet KISS framing. **Milestone 2 done on the air (2026-10-07):** Pat
 K0MDT-1 -> K0MDT-2 over two HTs (see "Where we are").
@@ -297,9 +300,9 @@ Next, roughly in order:
       transceivers through their audio ports works end to end between two
       computers (AIOC and Digirig interfaces; see
       [RADIO_SETUP.md](RADIO_SETUP.md)):
-      - `openwave_audio.py` puts symbols on an audio carrier, with
+      - `fmlink_audio.py` puts symbols on an audio carrier, with
         preamble-correlation sync and PLL drift tracking.
-      - `openwave_radio.py` + `ota_station.py --radio` do the real-time
+      - `fmlink_radio.py` + `ota_station.py --radio` do the real-time
         audio I/O (5.1) and serial PTT (5.2, DTR on the AIOC, RTS on the
         Digirig); the over-the-air test (5.4) passed in both directions.
       - `ota_sim`'s FM transceiver model remains the hardware-free test.
@@ -324,9 +327,9 @@ Next, roughly in order:
       their defaults (with explicit override still allowed) or decide to
       keep them permanently independent.
 - [x] **3.2 — bit interleaver/de-interleaver.** Done 2026-10-02:
-      `openwave_fec.py` interleaves each FEC block's coded bits with a
+      `fmlink_fec.py` interleaves each FEC block's coded bits with a
       golden-ratio permutation by default (`DEFAULT_INTERLEAVER`,
-      specified in OpenWave_Specification.txt's FEC section).
+      specified in FMlink_Specification.txt's FEC section).
       - Under mobile FM fading at 15 dB CNR, mode 2/r1_2_k7 went from 38%
         to 100% of frames delivered.
       - `FADING_MODE_SNR_TABLE` was recalibrated around it: about 2.75x
@@ -347,7 +350,7 @@ Next, roughly in order:
       - Mode 0 at 5 km/h and 12 dB went from 41/48 to 48/48.
       - The uncoded (no-FEC) path still re-searches.
       
-      Original note: `openwave_audio.demodulate()`
+      Original note: `fmlink_audio.demodulate()`
       already locates the marker by sample-domain correlation, but
       `fec.decode_frames()` then searches for it again in demodulated
       bits and rejects any candidate with more than 15% of the marker's
@@ -358,13 +361,13 @@ Next, roughly in order:
       failures left once interleaving is on. Fix: pass the correlation's
       marker position into the decoder instead of re-searching.
 - [ ] **No carrier phase recovery for QPSK/16-QAM (found via 8.10).**
-      `openwave_modem.py`'s demodulators do plain per-axis hard-decision
+      `fmlink_modem.py`'s demodulators do plain per-axis hard-decision
       slicing with no Costas loop/differential encoding — measured
       directly: QPSK survives only ±45° of phase rotation before 100%
       BER, BPSK only ±90°. A real fix (differential encoding, or a
       pilot/training sequence for the non-BPSK modes) is still open; the
       OTA simulator is the natural place to verify it once built.
-      **Solved on the audio path (2026-10-02):** `openwave_audio.py`
+      **Solved on the audio path (2026-10-02):** `fmlink_audio.py`
       takes phase from the preamble correlation (no ambiguity) and tracks
       drift with a PLL. Still open for the IQ path, where `ota_sim`'s IQ
       channel deliberately applies no phase rotation.
@@ -439,7 +442,7 @@ expected to be picked up unless the GNU Radio track is revisited:
       tradeoffs (~3dB per step-up, matching theory).
 - [x] **Phase 7** (in progress, mostly shipped) — 224-test regression
       suite (framing/modem/pulse-shaping/channel/sync/FEC, all
-      GNU-Radio-free), `openwave_cli.py` file-based testing, turnkey
+      GNU-Radio-free), `fmlink_cli.py` file-based testing, turnkey
       `pipeline_test.sh`/`file_xfer_test.sh` end-to-end scripts.
 - [x] **Phase 8** (in progress, ~33 sub-items shipped, 8.1-8.33) — the
       live OTA simulator track: `ota_sim` sibling project (channel

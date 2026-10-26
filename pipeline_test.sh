@@ -4,21 +4,21 @@ usage() {
     cat <<'EOF'
 Usage: ./pipeline_test.sh [--snr SNR_DB] [--mode WAVEFORM_MODE] [--fec PRESET] [--modtype TYPE]
 
-Pushes a real OpenWave frame through the full modem pipeline: send -> (fec
+Pushes a real FMlink frame through the full modem pipeline: send -> (fec
 encode) -> modulate -> pulseshape -> (channel) -> matchedfilter ->
-demodulate -> (fec decode) -> recv. See openwave_cli.py/openwave_fec.py for
+demodulate -> (fec decode) -> recv. See fmlink_cli.py/fmlink_fec.py for
 what each stage does.
 
   --snr SNR_DB    Inject AWGN at that SNR (dB) between pulse shaping and
                   the matched filter. Omit for a clean round trip (no
                   channel.py step at all).
   --mode MODE     Waveform Mode ID, 0-4 (default: 0) - passed straight to
-                  openwave_cli.py send's --mode. Header metadata only -
+                  fmlink_cli.py send's --mode. Header metadata only -
                   does NOT select the modulation actually used (see
                   --modtype).
   --fec PRESET    FEC configuration to use: r1_2_k3, r1_2_k7 (NASA/Voyager
-                  standard), r1_2_k9, r1_3_k7, etc (see openwave_fec.py's
-                  PRESETS, or run openwave_fec_generate_presets.py -h to
+                  standard), r1_2_k9, r1_3_k7, etc (see fmlink_fec.py's
+                  PRESETS, or run fmlink_fec_generate_presets.py -h to
                   search for/add more). Only meaningful combined with
                   --snr. Omit to skip FEC entirely and run the raw
                   (uncoded) pipeline.
@@ -60,7 +60,7 @@ done
 # is purely so several concurrent runs are tellable apart by name in `ls
 # /tmp` or a job list, not what makes this collision-safe.
 LABEL="mode${MODE}_snr${SNR_DB:-none}_fec${FEC_PRESET:-none}_mod${MOD_TYPE}"
-WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/openwave_pipeline_test.${LABEL}.XXXXXX")
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/fmlink_pipeline_test.${LABEL}.XXXXXX")
 
 echo "mode: $MODE  snr: ${SNR_DB:-none}  fec: ${FEC_PRESET:-none}  modtype: $MOD_TYPE"
 echo "Working dir: $WORKDIR"
@@ -87,12 +87,12 @@ print(f'{label} ({size} bytes)')
 "
 }
 
-# 1. Build a real OpenWave frame (see openwave_cli.py above)
-python3 openwave_cli.py send "hello world" -o "$WORKDIR/test.bin" --src K0MDT --dst W1AW --mode "$MODE"
+# 1. Build a real FMlink frame (see fmlink_cli.py above)
+python3 fmlink_cli.py send "hello world" -o "$WORKDIR/test.bin" --src K0MDT --dst W1AW --mode "$MODE"
 echo ""
 
 # 2. Inspect the frame's fields by hand
-python3 openwave_cli.py dump -i "$WORKDIR/test.bin"
+python3 fmlink_cli.py dump -i "$WORKDIR/test.bin"
 echo ""
 
 ORIG_BYTES=$(wc -c < "$WORKDIR/test.bin" | tr -d ' ')
@@ -100,7 +100,7 @@ echo "Bytes before FEC: $(human_size "$ORIG_BYTES")"
 
 # 2b. (Optional) FEC-encode the frame before modulation - protects the
 #     Header+Payload+CRC only, preamble/sync-word stay raw (see
-#     openwave_fec.py's module docstring). Reports what FEC does to the
+#     fmlink_fec.py's module docstring). Reports what FEC does to the
 #     transmitted size - that bandwidth-for-resilience tradeoff is the
 #     whole point of --fec, so it should be visible.
 if [ -n "$FEC_PRESET" ]; then
@@ -189,16 +189,16 @@ fi
 # 11. Confirm it still decodes correctly through the link layer.
 #     Without FEC and with noise, also show plain (exact-match) recv
 #     failing so the benefit of --correlate (tolerant sync via
-#     openwave_sync.py) is visible each run, not just the noise-free case.
+#     fmlink_sync.py) is visible each run, not just the noise-free case.
 if [ -n "$RECV_INPUT" ]; then
     if [ -n "$SNR_DB" ] && [ -z "$FEC_PRESET" ]; then
         echo "--- plain recv (exact byte match) ---"
-        python3 openwave_cli.py recv -i "$RECV_INPUT"
+        python3 fmlink_cli.py recv -i "$RECV_INPUT"
         echo ""
         echo "--- recv --correlate (tolerant Hamming-distance sync) ---"
-        python3 openwave_cli.py recv -i "$RECV_INPUT" --correlate
+        python3 fmlink_cli.py recv -i "$RECV_INPUT" --correlate
     else
-        python3 openwave_cli.py recv -i "$RECV_INPUT"
+        python3 fmlink_cli.py recv -i "$RECV_INPUT"
     fi
 fi
 

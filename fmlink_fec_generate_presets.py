@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Regenerate/extend openwave_fec.py's PRESETS table using find_generators()'s
+Regenerate/extend fmlink_fec.py's PRESETS table using find_generators()'s
 free-distance search, instead of hand-picking or half-remembering generator
-polynomials (see openwave_fec.py's PRESETS comment for why that's
+polynomials (see fmlink_fec.py's PRESETS comment for why that's
 error-prone - an earlier hand-picked preset had out-of-range values that
 were silently truncated).
 
-    python3 openwave_fec_generate_presets.py
-    python3 openwave_fec_generate_presets.py --rates 2 3 4 5 6 7 --k 3 7 9 11
-    python3 openwave_fec_generate_presets.py --num-candidates 10000
+    python3 fmlink_fec_generate_presets.py
+    python3 fmlink_fec_generate_presets.py --rates 2 3 4 5 6 7 --k 3 7 9 11
+    python3 fmlink_fec_generate_presets.py --num-candidates 10000
 
 This only prints Python source for a new PRESETS dict (and each preset's
-free_distance) - it does NOT edit openwave_fec.py for you. Review the
+free_distance) - it does NOT edit fmlink_fec.py for you. Review the
 output and paste it in by hand; searches are randomized (though seeded, so
 reproducible per --seed) and worth a human sanity check before committing,
 same as the original set was.
@@ -19,7 +19,7 @@ same as the original set was.
 import argparse
 import sys
 
-import openwave_fec as fec
+import fmlink_fec as fec
 
 
 def main():

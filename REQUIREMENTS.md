@@ -1,8 +1,8 @@
-# OpenWave — Requirements
+# FMlink — Requirements
 
-This document summarizes what `openwave` is for and what it must do. It
+This document summarizes what `fmlink` is for and what it must do. It
 sits alongside two existing, more detailed docs already in this repo:
-[`OpenWave_Specification.txt`](OpenWave_Specification.txt) is the
+[`FMlink_Specification.txt`](FMlink_Specification.txt) is the
 authoritative wire-format spec (frame layout, header fields, Waveform
 Modes table, worked byte-dump example), and [`README.md`](README.md) is
 the detailed usage/file-map guide. This document is the higher-level
@@ -44,26 +44,26 @@ script or test, run directly rather than imported.
 
 | Module | Provides |
 |---|---|
-| `openwave_link.py` | The link layer — the single source of truth for framing. `build_header`/`parse_header`, `build_frame`/`FrameParser`, `build_ack_frame`/`RetryManager` (ACK/retry state machine), `build_fragmented_frames`/`FragmentReassembler` (fragmentation), `build_mode_request_frame`/`build_mode_grant_frame`/`build_mode_set_frame`/`build_mode_set_ack_frame`/`build_ping_frame`/`build_pong_frame`/`parse_control_payload` (in-band control messages), `iter_frames`/`describe_frames` (byte-level frame scanning), `LinkReceiver` (full RX dispatch: addressing, ACK, fragment reassembly, seq gap/dup tracking, stats — usable standalone, no GNU Radio/hardware), `WAVEFORM_MODES`/`MODE_SNR_TABLE`/`select_mode_for_snr`/`mode_raw_bps` (the PHY-plugin contract and mode-selection logic). |
-| `openwave_modem.py` | PHY-layer bits↔symbols mapping: `modulate_bpsk`/`demodulate_bpsk`, `modulate_qpsk`/`demodulate_qpsk`, `modulate_qam16`/`demodulate_qam16` (all Gray-coded, unit average symbol energy), `estimate_snr_db` (blind EVM-style SNR estimator, no pilot symbols), `bytes_to_bits`/`bits_to_bytes`, `symbols_to_iq_bytes`/`iq_bytes_to_symbols`. Deliberately has no symbol-rate concept — that's `openwave_pulse.py`'s job. |
-| `openwave_pulse.py` | RRC pulse shaping: `rrc_taps`, `pulse_shape` (symbols → oversampled samples), `matched_filter` (samples → symbols), `decimate`, `group_delay`, `expected_symbol_count`. Needs numpy — the first stage where a real DSP dependency becomes unavoidable. |
-| `openwave_channel.py` | AWGN channel simulation: `add_awgn` (direct noise voltage), `snr_db_to_noise_voltage` (target-SNR convenience). |
-| `openwave_sync.py` | Tolerant frame synchronization: `find_sync_offsets`/`best_sync_offset` (sliding Hamming-distance correlator for the preamble+sync-word, not an exact-byte match), `iter_frames_correlated`/`describe_frames_correlated`, `extract_frame_at`. |
-| `openwave_audio.py` | Audio-subcarrier PHY for a radio's audio port: `modulate` (symbols → real 48 kHz audio on a carrier, with lead-in), `demodulate` (preamble correlation for timing/phase/level, PLL drift tracking, data-aided SNR), `PORT_PROFILES` (carrier and max symbol rate per radio connection), PCM16 helpers. |
-| `openwave_kiss.py` | KISS framing for the KISS TNC: `encode`, an incremental `Decoder` (escapes, commands, ports, and the SMACK/FlexNet CRC variants Linux's mkiss uses - `crc_smack`, `crc_flexnet`), and AX.25 address helpers (`ax25_endpoints`, `ax25_ui_frame`). |
-| `openwave_fec.py` | Forward error correction: `convolutional_encode`/`viterbi_decode` (numpy-vectorized, parameterized by generator polynomials/constraint length K, not hardcoded to one scheme), `encode_frame`/`decode_frames` (frame-level wrappers used by the CLI), `free_distance`/`find_generators` (principled, Dijkstra-based preset selection), `PRESETS` (13 named rate-1/N configurations, `r1_2_k3` through `r1_6_k9`, plus an empirically-measured SNR-to-preset reference table), coded-bit interleaving per FEC block (`interleave_permutation`, golden-ratio by default - see the spec's FEC section). |
+| `fmlink_link.py` | The link layer — the single source of truth for framing. `build_header`/`parse_header`, `build_frame`/`FrameParser`, `build_ack_frame`/`RetryManager` (ACK/retry state machine), `build_fragmented_frames`/`FragmentReassembler` (fragmentation), `build_mode_request_frame`/`build_mode_grant_frame`/`build_mode_set_frame`/`build_mode_set_ack_frame`/`build_ping_frame`/`build_pong_frame`/`parse_control_payload` (in-band control messages), `iter_frames`/`describe_frames` (byte-level frame scanning), `LinkReceiver` (full RX dispatch: addressing, ACK, fragment reassembly, seq gap/dup tracking, stats — usable standalone, no GNU Radio/hardware), `WAVEFORM_MODES`/`MODE_SNR_TABLE`/`select_mode_for_snr`/`mode_raw_bps` (the PHY-plugin contract and mode-selection logic). |
+| `fmlink_modem.py` | PHY-layer bits↔symbols mapping: `modulate_bpsk`/`demodulate_bpsk`, `modulate_qpsk`/`demodulate_qpsk`, `modulate_qam16`/`demodulate_qam16` (all Gray-coded, unit average symbol energy), `estimate_snr_db` (blind EVM-style SNR estimator, no pilot symbols), `bytes_to_bits`/`bits_to_bytes`, `symbols_to_iq_bytes`/`iq_bytes_to_symbols`. Deliberately has no symbol-rate concept — that's `fmlink_pulse.py`'s job. |
+| `fmlink_pulse.py` | RRC pulse shaping: `rrc_taps`, `pulse_shape` (symbols → oversampled samples), `matched_filter` (samples → symbols), `decimate`, `group_delay`, `expected_symbol_count`. Needs numpy — the first stage where a real DSP dependency becomes unavoidable. |
+| `fmlink_channel.py` | AWGN channel simulation: `add_awgn` (direct noise voltage), `snr_db_to_noise_voltage` (target-SNR convenience). |
+| `fmlink_sync.py` | Tolerant frame synchronization: `find_sync_offsets`/`best_sync_offset` (sliding Hamming-distance correlator for the preamble+sync-word, not an exact-byte match), `iter_frames_correlated`/`describe_frames_correlated`, `extract_frame_at`. |
+| `fmlink_audio.py` | Audio-subcarrier PHY for a radio's audio port: `modulate` (symbols → real 48 kHz audio on a carrier, with lead-in), `demodulate` (preamble correlation for timing/phase/level, PLL drift tracking, data-aided SNR), `PORT_PROFILES` (carrier and max symbol rate per radio connection), PCM16 helpers. |
+| `fmlink_kiss.py` | KISS framing for the KISS TNC: `encode`, an incremental `Decoder` (escapes, commands, ports, and the SMACK/FlexNet CRC variants Linux's mkiss uses - `crc_smack`, `crc_flexnet`), and AX.25 address helpers (`ax25_endpoints`, `ax25_ui_frame`). |
+| `fmlink_fec.py` | Forward error correction: `convolutional_encode`/`viterbi_decode` (numpy-vectorized, parameterized by generator polynomials/constraint length K, not hardcoded to one scheme), `encode_frame`/`decode_frames` (frame-level wrappers used by the CLI), `free_distance`/`find_generators` (principled, Dijkstra-based preset selection), `PRESETS` (13 named rate-1/N configurations, `r1_2_k3` through `r1_6_k9`, plus an empirically-measured SNR-to-preset reference table), coded-bit interleaving per FEC block (`interleave_permutation`, golden-ratio by default - see the spec's FEC section). |
 
 **CLI-only (not pip-installed as a library, run as scripts):**
-`openwave_tnc.py` (OpenWave as a KISS TNC for packet software - see
+`fmlink_tnc.py` (FMlink as a KISS TNC for packet software - see
 [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md)),
-`openwave_cli.py` (file-based link-layer testing — `send`/`dump`/`recv`),
+`fmlink_cli.py` (file-based link-layer testing — `send`/`dump`/`recv`),
 `modulate.py`/`demodulate.py`/`pulseshape.py`/`channel.py`/
 `matchedfilter.py`/`plot_constellation.py` (the individual PHY-pipeline
 stages, chainable by hand), `fec_encode.py`/`fec_decode.py` (FEC wrappers
-around the pipeline), `openwave_fec_generate_presets.py` (regenerates the
+around the pipeline), `fmlink_fec_generate_presets.py` (regenerates the
 `PRESETS` table), `ota_station.py` (the live interactive station — see
 §3), `pipeline_test.sh`/`file_xfer_test.sh` (turnkey end-to-end test
-scripts), and the real-radio tools: `openwave_radio.py` (the radio
+scripts), and the real-radio tools: `fmlink_radio.py` (the radio
 transport), `radio_stations.py`, `ptt_play.py`, `level_meter.py`,
 `radio_send.py`, `radio_listen.py`, `radio_link_test.py`,
 `air_loopback_test.py`, `audio_wav_test.py` (see [RADIO_SETUP.md](RADIO_SETUP.md)). See `README.md` for full usage of each.
@@ -82,14 +82,14 @@ long-running interactive process, not a one-shot pipeline stage.
   `readline`, degrades gracefully where unavailable e.g. Windows).
 - **Network**: talks to a peer station through `ota_sim` (a separate
   sibling project at `/data/Projects/ota_sim`, its own package, zero
-  OpenWave-specific code) — a small TCP relay that models path loss,
+  FMlink-specific code) — a small TCP relay that models path loss,
   Rayleigh fading, AWGN, and configurable latency between two peers
   exchanging raw IQ samples. Its `--channel fm` mode instead models an FM
   transceiver pair's audio path, carrying PCM audio, which the station
-  speaks with `--phy audio --audio-port mic|data` (`openwave_audio.py`).
+  speaks with `--phy audio --audio-port mic|data` (`fmlink_audio.py`).
   Each peer identifies itself by callsign on connect; no static address
   configuration. With `--radio` instead of the simulator, the station runs
-  over a real radio's audio interface (`openwave_radio.py`,
+  over a real radio's audio interface (`fmlink_radio.py`,
   `radio_stations.py`; see [RADIO_SETUP.md](RADIO_SETUP.md)) and needs
   neither `ota_sim` nor any network.
 - **Mode/FEC negotiation** (`--auto`): initiator-driven and symmetric —
@@ -112,7 +112,7 @@ long-running interactive process, not a one-shot pipeline stage.
 
 ## 4. Signal/protocol format
 
-(Full detail lives in `OpenWave_Specification.txt` — summary here.)
+(Full detail lives in `FMlink_Specification.txt` — summary here.)
 
 - **Frame format version 2** (since 2026-10; v1 and v2 stations can't
   decode each other - see `PROTOCOL_V2_PROPOSAL.md` for the change and its
@@ -160,9 +160,9 @@ long-running interactive process, not a one-shot pipeline stage.
   but only when talking to a simulator; `--radio` needs neither `ota_sim`
   nor a network. The real-radio tools need `pyserial` (PTT) and ALSA's
   `arecord`/`aplay`.
-- No dependency on any `general_xxx` sibling modem package — OpenWave's
+- No dependency on any `general_xxx` sibling modem package — FMlink's
   BPSK/QPSK/16-QAM implementations are entirely its own
-  (`openwave_modem.py`), independent of `general_bpsk`/`general_qpsk`/
+  (`fmlink_modem.py`), independent of `general_bpsk`/`general_qpsk`/
   `general_16qam` etc. used by `web_sdr`/`web_siggen`.
 - Zero GNU Radio dependency anywhere in the actively developed path — the
   original GNU Radio pi/4-QPSK chain is archived under `legacy/gnuradio/`

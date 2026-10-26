@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-OpenWave as a KISS TNC: packet software (the Linux kernel's AX.25 stack via
+FMlink as a KISS TNC: packet software (the Linux kernel's AX.25 stack via
 kissattach, and through it Pat / Linux RMS Gateway / axcall) sends AX.25
-frames over KISS, and each one goes out as an OpenWave burst - FEC,
+frames over KISS, and each one goes out as an FMlink burst - FEC,
 interleaving and the audio PHY - instead of 1200-baud AFSK. Received
 bursts carrying AX.25 frames are handed back over KISS.
 
 The TNC is just a modem: AX.25 does the addressing, connections, ACKs,
-retries and ordering, so OpenWave's own chat link layer (ACKs, fragmentation,
+retries and ordering, so FMlink's own chat link layer (ACKs, fragmentation,
 negotiation) isn't used. Both TNCs must use the same mode and FEC preset.
 
   # simulator (start `python3 -m ota_sim.simulator --channel fm --port mic` first)
-  ./openwave_tnc.py --callsign K0MDT --sim-host 127.0.0.1 --pty-link ~/kiss-k0mdt
+  ./fmlink_tnc.py --callsign K0MDT --sim-host 127.0.0.1 --pty-link ~/kiss-k0mdt
   # real radio
-  ./openwave_tnc.py --callsign K0MDT --radio --pty-link ~/kiss-k0mdt
+  ./fmlink_tnc.py --callsign K0MDT --radio --pty-link ~/kiss-k0mdt
 
 Then attach the kernel AX.25 stack (see KISS_TNC_SCOPE.md):
   sudo kissattach ~/kiss-k0mdt ow0
@@ -27,10 +27,10 @@ import os
 import sys
 import tty
 
-import openwave_audio as audio_phy
-import openwave_fec as fec
-import openwave_kiss as kiss
-import openwave_link as link
+import fmlink_audio as audio_phy
+import fmlink_fec as fec
+import fmlink_kiss as kiss
+import fmlink_link as link
 import ota_station
 
 

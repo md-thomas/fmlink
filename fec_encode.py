@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-FEC-encode a frame file (e.g. from openwave_cli.py send) - convolutionally
+FEC-encode a frame file (e.g. from fmlink_cli.py send) - convolutionally
 encodes the Header and Payload+CRC blocks (leaving the preamble/sync-word
-untouched, see openwave_fec.py's module docstring), producing a longer
+untouched, see fmlink_fec.py's module docstring), producing a longer
 frame ready for modulate.py.
 
     python3 fec_encode.py -i test.bin -o fec_test.bin --preset r1_2_k7
@@ -10,9 +10,9 @@ frame ready for modulate.py.
 
 Available presets: r1_2_k3, r1_2_k7 (NASA/Voyager standard), r1_2_k9,
 r1_3_k3, r1_3_k7, r1_3_k9, r1_4_k3, r1_4_k7, r1_4_k9, r1_5_k7, r1_5_k9,
-r1_6_k7, r1_6_k9 - see openwave_fec.py's PRESETS table (and its
+r1_6_k7, r1_6_k9 - see fmlink_fec.py's PRESETS table (and its
 free_distance comment) for what each trades off, or run
-openwave_fec_generate_presets.py to search for/add others.
+fmlink_fec_generate_presets.py to search for/add others.
 
 See fec_decode.py for the inverse - --preset (or --generators/--k) must
 match exactly between encode and decode.
@@ -20,7 +20,7 @@ match exactly between encode and decode.
 import argparse
 import sys
 
-import openwave_fec as fec
+import fmlink_fec as fec
 
 
 def _resolve_config(args):

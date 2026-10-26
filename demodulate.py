@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Demodulate a raw complex symbol file (e.g. from modulate.py) back into
-bytes, using openwave_modem.py's bits<->symbols mapping. This assumes a
+bytes, using fmlink_modem.py's bits<->symbols mapping. This assumes a
 clean, already-aligned symbol stream - exactly what modulate.py produces -
 with no noise, timing, or carrier recovery involved. It's a round-trip
 correctness check for the bits<->symbols mapping, not a receiver for a real
@@ -15,7 +15,7 @@ See modulate.py for the inverse.
 import argparse
 import sys
 
-import openwave_modem as modem
+import fmlink_modem as modem
 
 DEMODULATORS = {
     'bpsk': modem.demodulate_bpsk,

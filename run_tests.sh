@@ -1,10 +1,10 @@
 #!/bin/bash
-# Runs OpenWave's regression test suite. Must be run from the project root
-# (the tests rely on cwd for resolving openwave_link.py imports - see
+# Runs FMlink's regression test suite. Must be run from the project root
+# (the tests rely on cwd for resolving fmlink_link.py imports - see
 # tests/test_phy_loopback.py's module docstring for why).
 #
 # Usage: ./run_tests.sh                 # everything
-#        ./run_tests.sh tests.test_openwave_link   # just one module, fast
+#        ./run_tests.sh tests.test_fmlink_link   # just one module, fast
 
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")"

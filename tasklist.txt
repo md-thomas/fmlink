@@ -1,19 +1,19 @@
-OpenWave Task List
+FMlink Task List
 ===================
-(Reconciled 2026-08-17, updated same day after pulling openwave_link.py +
-tests/ from laptop. Matches OpenWave_Specification.txt: GNU Radio + SDR
+(Reconciled 2026-08-17, updated same day after pulling fmlink_link.py +
+tests/ from laptop. Matches FMlink_Specification.txt: GNU Radio + SDR
 hardware implementation, pi/4-QPSK PHY, shared link-layer framing module.
 Re-reconciled 2026-08-19 after a session that built out FEC (Phase 3) and
 the full GNU-Radio-free CLI/file-transfer testing pipeline (Phase 7); also
 kicked off Phase 6 (multi-modulation) with QPSK as the starting point.
-Re-reconciled 2026-08-25: OpenWave repositioned as a link-layer/framing
+Re-reconciled 2026-08-25: FMlink repositioned as a link-layer/framing
 protocol over a pluggable PHY, not tied to pi/4-QPSK or to GNU Radio. The
 GNU Radio chain (Phase 1's phy_sim_loopback.grc, Phase 4's
 tx_pluto.grc/rx_rtlsdr.grc, and earlier prototypes) was the project's
 initial testbench and has been archived - kept, not deleted - under
 legacy/gnuradio/, along with its GNU-Radio-dependent tests
 (legacy/gnuradio/tests/). The pure-Python CLI pipeline (Phase 6/7) is now
-the sole actively developed PHY. openwave_link.py's Waveform Mode ID field
+the sole actively developed PHY. fmlink_link.py's Waveform Mode ID field
 is now a real PHY-selection contract (WAVEFORM_MODES: modulation + symbol
 rate + FEC preset per mode), currently a documentation/lookup table, not
 yet wired into the CLI flags - see Phase 6 follow-up below.)
@@ -38,7 +38,7 @@ History kept below for the record.
 
 Phase 2: Link-Layer Framing - MOSTLY DONE
 --------------------------------------------
-Implemented in openwave_link.py, shared by phy_sim_loopback.grc, tx_pluto.grc,
+Implemented in fmlink_link.py, shared by phy_sim_loopback.grc, tx_pluto.grc,
 and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
 
   [x] 2.1 Preamble replaced: 32-byte LFSR pseudo-noise sequence (9-bit
@@ -49,7 +49,7 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
   [x] 2.2 Real 32-byte header (build_header/parse_header): Version, Packet
           Type, Waveform Mode ID, Flags, Sequence Number, Source ID,
           Destination ID, Payload Length, Reserved - matches
-          OpenWave_Specification.txt's byte layout exactly (struct '>BBBBH8s8sH8s').
+          FMlink_Specification.txt's byte layout exactly (struct '>BBBBH8s8sH8s').
           Mode ID and Source/Destination ID are written at the correct
           offsets but are placeholder values on TX and not yet parsed/acted
           on by RX.
@@ -71,7 +71,7 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
           own independent burst. Fragmented sends are NOT ACK/retry-tracked
           in this phase regardless of ack_requested.
   [x] 2.6b Fragment Index header field (1 of the 8 Reserved bytes
-          repurposed, 7 remain reserved - see OpenWave_Specification.txt) so
+          repurposed, 7 remain reserved - see FMlink_Specification.txt) so
           a receiver has an authoritative "is this really a new run" signal
           instead of inferring it from "nothing else in progress." Fixes a
           real bug found via large-message testing: a run abandoned mid-
@@ -93,14 +93,14 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
           build_fragmented_frames()'s existing rule) does NOT track
           fragmented multi-frame sends - a windowed scheme for those is
           still a real follow-up if it turns out to matter in practice.
-          openwave_cli.py/file_xfer_test.sh themselves remain unwired
+          fmlink_cli.py/file_xfer_test.sh themselves remain unwired
           (still one-shot, no live RX to ACK against).
   [x] 2.8 Parse/act on Waveform Mode ID and Destination ID on RX, in
-          rx_rtlsdr.grc only: openwave_link.format_mode()/decode_station_id()
+          rx_rtlsdr.grc only: fmlink_link.format_mode()/decode_station_id()
           decode and display both; a new station_id parameter (blank by
           default = unfiltered, matching every current TX chain's all-zero
           placeholder Destination ID) enables address filtering via
-          openwave_link.is_for_station() - non-matching frames are dropped
+          fmlink_link.is_for_station() - non-matching frames are dropped
           and counted under 'not_for_us'. phy_sim_loopback.grc's loopback RX
           does not have this (out of scope - self-loopback, no real
           addressing to test).
@@ -108,7 +108,7 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
           a full-duplex hardware pairing exists (needs a second radio pair
           or TDD scheme, not just software).
   [x] 2.10 LinkReceiver class + iter_frames()/describe_frames() added to
-          openwave_link.py: the RX dispatch logic (address filtering, ACK/
+          fmlink_link.py: the RX dispatch logic (address filtering, ACK/
           fragment handling, seq gap/dup tracking, stats) as a plain Python
           class, driven by byte-level frame scanning rather than a GNU Radio
           bitstream. This makes the *entire* link layer (not just framing)
@@ -120,7 +120,7 @@ and rx_rtlsdr.grc's epy_blocks so the flow graphs can't drift on framing.
 
 Phase 3: Forward Error Correction & Interleaving - MOSTLY DONE (CLI pipeline)
 -----------------------------------------------------------------
-Implemented in openwave_fec.py: convolutional encoding + hard-decision
+Implemented in fmlink_fec.py: convolutional encoding + hard-decision
 Viterbi decoding (numpy-vectorized), fully parameterized by generator
 polynomials/constraint length K rather than hardcoded to one scheme.
 Wired into the GNU-Radio-free CLI pipeline (fec_encode.py/fec_decode.py,
@@ -134,7 +134,7 @@ up and still runs uncoded, but is no longer part of the active plan.
           find_generators() for principled (Dijkstra-based) preset
           selection instead of hand-picked polynomials. Each fragment of a
           multi-fragment message is FEC-protected independently.
-          openwave_fec_generate_presets.py regenerates/extends the table.
+          fmlink_fec_generate_presets.py regenerates/extends the table.
           LDPC was considered (see this session's discussion) but not
           pursued - would need a new codec built from scratch (parity-
           check matrix design, encoder, iterative belief-propagation
@@ -145,11 +145,11 @@ up and still runs uncoded, but is no longer part of the active plan.
           fragment; a burst that takes out a large contiguous run within
           one fragment's coded block is a different failure mode this
           doesn't address (a lost/undecodable fragment's marker - see
-          openwave_sync.py's 'gap' status - is the closest analogue
+          fmlink_sync.py's 'gap' status - is the closest analogue
           currently handled, but that's sync-level, not interleaving).
   [x] 3.3 Re-ran (via file_xfer_test.sh, not phy_sim_loopback.grc's BER
           test specifically) FEC-vs-uncoded comparisons across SNR/preset
-          combinations - see openwave_fec.py's empirically-measured
+          combinations - see fmlink_fec.py's empirically-measured
           SNR-to-preset table (right after PRESETS) for concrete pass-rate
           numbers, e.g. r1_2_k3 fully reliable at 3dB, r1_4_k9 needed at
           -6dB where r1_4_k7 only holds ~86%. Phase 1's archived GNU Radio
@@ -171,7 +171,7 @@ record; see Phase 5 for where hardware bring-up is actually headed now.
 
   [x] 4.1 tx_pluto.grc: TX chain on a real SDR sink (ADALM-Pluto via
           iio_pluto_sink) instead of a simulated channel, using the shared
-          openwave_link.py framing.
+          fmlink_link.py framing.
   [x] 4.2 rx_rtlsdr.grc: RX chain on a real SDR source (RTL-SDR via
           osmosdr), with frequency-translating filter, tunable center
           frequency, frequency (spectrum) display, and shared framing.
@@ -183,9 +183,9 @@ record; see Phase 5 for where hardware bring-up is actually headed now.
           sym/s) and both VHF (15 kHz) / UHF (25 kHz) channel constraints.
   [x] 4.6 capture_file parameter (-o/--capture-file) on rx_rtlsdr.grc: appends
           every completed frame attempt - ok, crc_fail, AND bad_length alike,
-          not just clean decodes - to a file in openwave_link.build_frame()'s
+          not just clean decodes - to a file in fmlink_link.build_frame()'s
           exact byte format, so a real-world capture can be inspected later
-          with openwave_cli.py's dump/recv commands with zero conversion.
+          with fmlink_cli.py's dump/recv commands with zero conversion.
 
 Phase 5: Audio-Interfaced Radio Deployment (Eventual Target) - NOT STARTED
 ------------------------------------------------------------------------------
@@ -193,19 +193,19 @@ The actual deployment target: driving real transceivers (VHF/UHF radios)
 through their audio ports instead of SDR hardware. Distinct from the
 archived SDR work in Phase 4 - this is about the I/O interface (soundcard
 in/out + PTT), not any one modulation - the modem is now pluggable
-(BPSK/QPSK/16-QAM today, see openwave_link.py's WAVEFORM_MODES), not
+(BPSK/QPSK/16-QAM today, see fmlink_link.py's WAVEFORM_MODES), not
 pi/4-QPSK-specific.
 
 No GNU Radio, eventually: this direction has effectively started - the
-pure-Python CLI pipeline (openwave_modem.py/openwave_pulse.py/etc.) already
+pure-Python CLI pipeline (fmlink_modem.py/fmlink_pulse.py/etc.) already
 is the GNU-Radio-free path anticipated here, and is now the sole actively
 developed PHY (Phase 4's GNU Radio chain is archived, not a parallel
 track). Real-time audio I/O and PTT (5.1/5.2 below) are now done too (2026-10-04),
 so this is a GNU-Radio-free path all the way to real radios.
-Favor keeping core logic (openwave_link.py already has zero GNU Radio
+Favor keeping core logic (fmlink_link.py already has zero GNU Radio
 imports, including the LinkReceiver dispatch class - see 2.10) portable.
 
-  [x] 5.1 Real-time audio I/O (2026-10-04, openwave_radio.py): stream the pluggable-PHY baseband (see
+  [x] 5.1 Real-time audio I/O (2026-10-04, fmlink_radio.py): stream the pluggable-PHY baseband (see
           WAVEFORM_MODES) through a soundcard interface (TX: samples out to
           radio's mic/data input; RX: samples in from radio's speaker/data
           output) without buffer underruns.
@@ -217,7 +217,7 @@ imports, including the LinkReceiver dispatch class - see 2.10) portable.
           their own audio bandpass and possibly FM discriminator response) -
           likely needs a baseband<->audio-passband translation stage.
   [x] 5.4 Over-the-air test (2026-10-04, see RADIO_SETUP.md) between two audio-interfaced radios running
-          OpenWave, using the same framing validated in Phase 4.
+          FMlink, using the same framing validated in Phase 4.
           DONE 2026-10-04 on the mic port: an HT on an AIOC and an HT on a
           Digirig, one per computer, ran ota_station.py --phy audio
           --audio-port mic --radio --ack --auto and exchanged messages in
@@ -257,7 +257,7 @@ Phase 6: Multi-Modulation Support - IN PROGRESS (CLI pipeline)
 -----------------------------------------------
 Long-term goal: make Waveform Mode ID select among multiple modulations
 (BPSK, QPSK, 8PSK, 16QAM, OFDM). Started 2026-08-19 in the GNU-Radio-free
-CLI pipeline (openwave_modem.py/modulate.py/demodulate.py), which now
+CLI pipeline (fmlink_modem.py/modulate.py/demodulate.py), which now
 implements BPSK, QPSK, and 16-QAM. This is now the project's sole actively
 developed PHY - Phase 1's pi/4-QPSK GNU Radio chain has been archived
 (legacy/gnuradio/), not kept in parallel; pi/4-QPSK's differential ring
@@ -267,7 +267,7 @@ variant is no longer a planned addition here.
           (MODULATORS/DEMODULATORS in modulate.py/demodulate.py, keyed by
           the -t flag) rather than hardcoded - not yet driven by Waveform
           Mode ID specifically (that's the negotiation piece, 6.4).
-  [x] 6.2 QPSK and 16-QAM added: openwave_modem.py's QPSK_POINTS/QAM16_POINTS
+  [x] 6.2 QPSK and 16-QAM added: fmlink_modem.py's QPSK_POINTS/QAM16_POINTS
           + modulate/demodulate pairs - both Gray-coded (I and Q are
           independent axes - 1 bit/axis for QPSK, 2 bits/axis as 4-level
           PAM for 16-QAM - each with its own hard decision on demodulate,
@@ -298,7 +298,7 @@ variant is no longer a planned addition here.
           scheme, since TX can't know a good scheme for a link it hasn't
           heard back about yet. Depends on 2.11 (ACK/control feedback
           channel in the CLI pipeline) for the RX-to-TX report path.
-  [ ] 6.5 openwave_link.py's WAVEFORM_MODES table (added 2026-08-25) bundles
+  [ ] 6.5 fmlink_link.py's WAVEFORM_MODES table (added 2026-08-25) bundles
           modulation + symbol_rate + fec_preset per mode - the PHY-plugin
           contract - but is currently a documentation/lookup table only,
           not wired into modulate.py/demodulate.py's -t flag or
@@ -310,12 +310,12 @@ variant is no longer a planned addition here.
 Phase 7: Testing & Optimization - IN PROGRESS
 --------------------------------------------------
 Regression suite under tests/ (run via ./run_tests.sh, 224 tests, all
-GNU-Radio-free): framing/CRC/ACK/fragmentation (test_openwave_link.py),
-bits<->symbols for BPSK/QPSK/16-QAM (test_openwave_modem.py), RRC pulse
-shaping (test_openwave_pulse.py), AWGN channel (test_openwave_channel.py),
-tolerant sync correlator including gap-detection (test_openwave_sync.py),
+GNU-Radio-free): framing/CRC/ACK/fragmentation (test_fmlink_link.py),
+bits<->symbols for BPSK/QPSK/16-QAM (test_fmlink_modem.py), RRC pulse
+shaping (test_fmlink_pulse.py), AWGN channel (test_fmlink_channel.py),
+tolerant sync correlator including gap-detection (test_fmlink_sync.py),
 convolutional/Viterbi FEC including multi-fragment and sync-gap handling
-(test_openwave_fec.py). The archived GNU Radio loopback/compile-check tests
+(test_fmlink_fec.py). The archived GNU Radio loopback/compile-check tests
 (former test_phy_loopback.py/test_flowgraphs_compile.py) now live under
 legacy/gnuradio/tests/ - see legacy/gnuradio/README.md for how to run them
 separately. pipeline_test.sh/file_xfer_test.sh are turnkey end-to-end
@@ -324,7 +324,7 @@ send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
 
   [x] 7.1 Unit-level regression tests for header/CRC32/ACK/retry/fragmentation
           logic and (archived) .grc compilation.
-  [x] 7.2 openwave_cli.py: file-based command-line testing of the link layer
+  [x] 7.2 fmlink_cli.py: file-based command-line testing of the link layer
           with zero GNU Radio dependency and no hardware. `send` builds a
           frame (plain text, --json, --file for raw binary, or --attach
           for text+file together) to a file, with options to deliberately
@@ -349,7 +349,7 @@ send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
           this way: a fragment-index gap in FragmentReassembler (2.6b) and
           a multi-fragment FEC bug (see 3.1). Also: viterbi_decode()
           vectorized with numpy (~4x faster - was the dominant cost of any
-          FEC-enabled transfer) and openwave_sync.py's correlator bounded
+          FEC-enabled transfer) and fmlink_sync.py's correlator bounded
           to a nearby search window with an explicit 'gap' status instead
           of silently locking onto a farther-away fragment when a marker
           didn't survive noise.
@@ -357,13 +357,13 @@ send->FEC->modem->noise->FEC->recv chain by hand or in a sweep.
 Phase 8: Over-the-Air Network Simulation - IN PROGRESS
 -----------------------------------------------------------
 Live, two-process (or more) testing: two ota_station.py stations exchange
-real OpenWave frames through the actual modem chain (modulate/pulse-shape
+real FMlink frames through the actual modem chain (modulate/pulse-shape
 on TX, matched-filter/demodulate/sync/FEC on RX), relayed over the network
 through a simulated RF channel (path loss, fading, AWGN, latency) instead
 of a one-shot file-based pipeline. Started 2026-08-25.
 
   [x] 8.1 ota_sim - a new, separate sibling project (/data/Projects/ota_sim,
-          own pyproject.toml, zero OpenWave imports) providing the reusable
+          own pyproject.toml, zero FMlink imports) providing the reusable
           channel physics (OTALink: Friis free-space path loss, flat
           Rayleigh fading, AWGN sized to the resulting SNR, configurable
           drop probability, propagation delay + latency + jitter - see its
@@ -371,12 +371,12 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           (ota_sim.simulator, asyncio UDP) that two arbitrary peers talk
           through, anywhere reachable over the network. Deliberately
           protocol-agnostic (only relays tagged IQ-sample datagrams, never
-          parses OpenWave frames) so it's reusable by other projects.
+          parses FMlink frames) so it's reusable by other projects.
           Peers' real addresses are learned dynamically from a "hello"
           datagram (see ota_station.py's register()), not statically
           configured - works whether stations are on the same machine or
           split across up to three.
-  [x] 8.2 ota_station.py - the OpenWave-specific live station: builds/
+  [x] 8.2 ota_station.py - the FMlink-specific live station: builds/
           FEC-encodes/modulates/pulse-shapes real frames on send, and
           matched-filters/demodulates/(FEC-decodes or correlator-syncs)/
           dispatches into LinkReceiver on receive. Interactive (stdin ->
@@ -447,7 +447,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           amplitude fading. Discovered via a real ~80% QPSK failure rate
           at a clean 20dB link (25-message test: only 3 delivered, 20
           "no frame found", vs. 22/25 clean + 3 legitimate drops after the
-          fix). Root cause, confirmed by direct test: openwave_modem.py's
+          fix). Root cause, confirmed by direct test: fmlink_modem.py's
           BPSK/QPSK/16-QAM demodulators do plain per-axis hard-decision
           slicing with NO carrier phase recovery (no Costas loop, no
           differential encoding - unlike the archived pi/4-QPSK GNU Radio
@@ -475,7 +475,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           twice - found via a real run where an ACK got lost on its way
           back (a legitimate, expected channel event) but the underlying
           data had already arrived fine, so the sender's retry was
-          redundant from the receiver's perspective. openwave_link.py's
+          redundant from the receiver's perspective. fmlink_link.py's
           LinkReceiver already tracks a repeated seq as a 'dup' stat, by
           design does NOT suppress delivery (the right call for its other
           use - offline analysis of a capture file, where seeing every
@@ -504,7 +504,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           ota_station.py now diffs receiver.counts'
           frag_aborted/frag_overflow/frag_discarded before/after each
           feed_frame() call and logs a clear reason
-          (openwave_link.py itself untouched, same posture as 8.12).
+          (fmlink_link.py itself untouched, same posture as 8.12).
   [x] 8.14 --ack now actually covers multi-fragment sends, not just
           single-fragment ones (superseded by 8.16 below, which replaced
           the whole-message retry this introduced with true per-fragment
@@ -526,7 +526,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           4 whole-message attempts) - a full "gave up" was a real,
           expected outcome, not a bug, and got worse the more fragments a
           message needed.
-            - openwave_link.py: LinkReceiver.feed_frame() now fires
+            - fmlink_link.py: LinkReceiver.feed_frame() now fires
               on_ack_needed() for EVERY fragment as it individually
               arrives (moved out of _publish(), which only fired once on
               full reassembly). Guard added: a fragmented frame whose seq
@@ -574,7 +574,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           so negotiation itself has to run over a fixed, always-known
           "control" mode (CONTROL_MODE_ID=0/BPSK) distinct from whatever
           data mode ends up negotiated:
-            - openwave_modem.py: estimate_snr_db(symbols, modulation) - a
+            - fmlink_modem.py: estimate_snr_db(symbols, modulation) - a
               blind (no pilot symbols) EVM-style estimator: normalizes
               received symbol energy to the constellation's unit-energy
               convention, then measures each symbol's distance to its OWN
@@ -584,7 +584,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               modulations (16-QAM's estimate barely moves across a 13dB
               true-SNR range) - fine for BPSK (used for the control-channel
               probe specifically), not attempted for anything else.
-            - openwave_link.py: MODE_SNR_TABLE/select_mode_for_snr() - an
+            - fmlink_link.py: MODE_SNR_TABLE/select_mode_for_snr() - an
               ordered (min_snr_db, mode_id, fec_preset) threshold table.
               CONTROL_OP_MODE_REQUEST/CONTROL_OP_MODE_GRANT + build/parse
               helpers for PACKET_TYPE_CONTROL frame payloads (that packet
@@ -630,7 +630,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           than the data channel's r1_4_k9 floor.
 
           MODE_SNR_TABLE calibration real finding: the mode 1 (r1_2_k3)
-          threshold was initially set to 3.0 by mapping openwave_fec.py's
+          threshold was initially set to 3.0 by mapping fmlink_fec.py's
           empirical anchors (0dB true -> r1_2_k3 good; -6dB true -> only
           r1_4_k9 good) through estimate_snr_db()'s bias as measured on
           synthetic AWGN alone. Live-tested against the real ota_sim
@@ -662,7 +662,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               the whole burst.
             - LinkReceiver.feed_crc_failure(status) did self.counts[status]
               += 1 against a counts dict that never had a 'truncated' key,
-              even though openwave_fec.py's decode_frames() (unlike the
+              even though fmlink_fec.py's decode_frames() (unlike the
               uncoded sync path, which swallows 'truncated' internally)
               can legitimately yield it - a real KeyError crash on a real,
               reachable status, pre-existing but only actually reached via
@@ -731,10 +731,10 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               _link_counts_compact() (a terse one-line version for the
               session summary) - both omit zero-value counters instead of
               always listing all of them. LinkReceiver.stats_line() itself
-              is untouched (openwave_cli.py still uses it directly).
+              is untouched (fmlink_cli.py still uses it directly).
             - Per-burst --verbose SNR line dropped its repeated
               boilerplate ("(blind, off the X decode - see
-              openwave_modem.py's estimate_snr_db)", identical on every
+              fmlink_modem.py's estimate_snr_db)", identical on every
               single burst) down to "[rx] SNR ~XdB (modulation)" - the
               full explanation still lives once in estimate_snr_db()'s
               own docstring.
@@ -768,7 +768,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               (this is "the initiator's own EVM measurement") and picks a
               mode via the unchanged select_mode_for_snr()/MODE_SNR_TABLE.
             - Phase 2 (new): A sends the new CONTROL_OP_MODE_SET (new
-              build_mode_set_frame()/openwave_link.py) naming its choice,
+              build_mode_set_frame()/fmlink_link.py) naming its choice,
               retried until B's new CONTROL_OP_MODE_SET_ACK
               (build_mode_set_ack_frame()) confirms - given how badly a
               lost/mismatched mode announcement went earlier in this
@@ -816,7 +816,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               a double-trigger can't run two overlapping handshakes and
               corrupt shared seq/event state.
             - /ping: new minimal CONTROL_OP_PING/CONTROL_OP_PONG frames
-              (build_ping_frame()/build_pong_frame(), openwave_link.py) -
+              (build_ping_frame()/build_pong_frame(), fmlink_link.py) -
               5 round trips at whatever mode is CURRENTLY active, timed
               locally (time.monotonic(), no wire timestamp needed, same
               approach negotiate() already uses for its own phases),
@@ -871,12 +871,12 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           summary. Added as Mode 5 (qpsk, 1200 sym/s), appended rather
           than inserted/renumbered in throughput order: modes 0-4 are
           also documented with a worked byte-dump example in
-          OpenWave_Specification.txt, and renumbering would've
+          FMlink_Specification.txt, and renumbering would've
           invalidated that plus every existing test/doc/log reference to
           a specific mode number, for no real benefit. Real consequence:
           mode_id is no longer guaranteed monotonic in throughput past
           mode 4 (mode 5 is slower than mode 4) - added
-          openwave_link.py's mode_raw_bps() (symbol_rate * bits/symbol,
+          fmlink_link.py's mode_raw_bps() (symbol_rate * bits/symbol,
           the same "bps raw" convention the spec's table already used) so
           anything that needs to RANK modes does so by actual throughput,
           not mode_id/iteration order. This was a real, live latent bug
@@ -893,10 +893,10 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           fastest same-reliability sibling" logic, same as mode 0/2
           already are - reachable via manual --mode 5, never auto-picked.
           New tests: WAVEFORM_MODES[5]/mode_raw_bps() in
-          test_openwave_link.py; a PingSurveySummaryTests case
+          test_fmlink_link.py; a PingSurveySummaryTests case
           reproducing the exact mode-4-vs-mode-5 ordering bug directly.
   [x] 8.25 8.24's "append, don't renumber" call reversed: user weighed the
-          cost (invalidating OpenWave_Specification.txt's worked example
+          cost (invalidating FMlink_Specification.txt's worked example
           and every mode-number reference) and wanted the renumber
           anyway, plus a real-world reason 8.24's mode 5 would rarely
           ever get used - see below. WAVEFORM_MODES is now:
@@ -905,7 +905,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
           NOTE FOR READING EARLIER ENTRIES (8.16-8.24): every "mode 3"/
           "mode 4" mentioned there means what's now mode 4/mode 5 - those
           entries are left as an accurate record of what happened at the
-          time, not rewritten to the new numbers. OpenWave_Specification.
+          time, not rewritten to the new numbers. FMlink_Specification.
           txt's table and worked byte-dump example were updated to match
           (this is the exact cost 8.24 avoided paying, paid for real this
           time). mode_raw_bps() (8.24) stays regardless - defensive
@@ -1058,7 +1058,7 @@ of a one-shot file-based pipeline. Started 2026-08-25.
               SNR_dB = 10*log10(1/noise_power) with signal energy
               normalized to 1, so EVM_rms% = sqrt(noise_power)*100 =
               10**(-SNR_dB/20)*100 (new _snr_db_to_evm_percent(), a
-              display-layer conversion - openwave_modem.py untouched).
+              display-layer conversion - fmlink_modem.py untouched).
             - Burst size: diffed self.stats['sent_air_bytes'] around the
               _transmit_frame() call, same pattern send_text() already
               used elsewhere in this file.

@@ -3,20 +3,20 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openwave"
+name = "fmlink"
 version = "0.1.0"
-description = "OpenWave digital modem/PHY library: framing, FEC, PSK/QAM modulation, sync"
+description = "FMlink digital modem/PHY library: framing, FEC, PSK/QAM modulation, sync"
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy"]
 
 [tool.setuptools]
 py-modules = [
-    "openwave_modem",
-    "openwave_link",
-    "openwave_pulse",
-    "openwave_channel",
-    "openwave_sync",
-    "openwave_fec",
-    "openwave_audio",
-    "openwave_kiss",
+    "fmlink_modem",
+    "fmlink_link",
+    "fmlink_pulse",
+    "fmlink_channel",
+    "fmlink_sync",
+    "fmlink_fec",
+    "fmlink_audio",
+    "fmlink_kiss",
 ]

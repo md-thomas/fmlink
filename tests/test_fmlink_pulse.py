@@ -1,7 +1,7 @@
 """
-Unit tests for openwave_pulse.py, RRC pulse shaping (symbols <-> samples).
+Unit tests for fmlink_pulse.py, RRC pulse shaping (symbols <-> samples).
 
-    python3 -m unittest tests.test_openwave_pulse -v
+    python3 -m unittest tests.test_fmlink_pulse -v
 """
 import os
 import sys
@@ -10,8 +10,8 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import openwave_pulse as pulse
-import openwave_modem as modem
+import fmlink_pulse as pulse
+import fmlink_modem as modem
 
 
 class RrcTapsTests(unittest.TestCase):
@@ -111,7 +111,7 @@ class RoundTripTests(unittest.TestCase):
         self.assertAlmostEqual(recovered[-1].real, 1.0, delta=0.01)
 
     def test_real_frame_bytes_survive_full_pipeline(self):
-        import openwave_link as link
+        import fmlink_link as link
         frame = link.build_frame(b'pulse shaping test', seq=3, src_id=b'K0MDT', dst_id=b'W1AW')
         symbols = modem.modulate_bpsk(frame)
         recovered_symbols = self._round_trip(symbols)

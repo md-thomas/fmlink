@@ -1,8 +1,8 @@
 """
-OpenWave link-layer framing: header build/parse and CRC32 packet integrity.
+FMlink link-layer framing: header build/parse and CRC32 packet integrity.
 Shared between phy_sim_loopback.grc, tx_pluto.grc, and rx_rtlsdr.grc's epy_blocks
 so the flowgraphs can't drift out of sync on the framing format - see
-OpenWave_Specification.txt for the full spec this implements a subset of.
+FMlink_Specification.txt for the full spec this implements a subset of.
 
 Minimal (phase-1) scope: Payload Length, CRC32, Sequence Number, the
 ack_requested/ack_response Flags bits (build_ack_frame()/RetryManager for
@@ -20,7 +20,7 @@ build_ack_frame() are implemented and tested independent of any of this, so
 they're ready for a future full-duplex pairing.
 
 Fragmentation has a real protocol-design gap worth knowing about: the header
-has no fragment-index or reassembly-ID field (see OpenWave_Specification.txt) -
+has no fragment-index or reassembly-ID field (see FMlink_Specification.txt) -
 just Fragmented and More Fragments bits. FragmentReassembler infers "start of
 a new run" as "a fragmented frame arrived while no run was already in
 progress", using the existing Sequence Number as a consecutive per-fragment
@@ -104,7 +104,7 @@ PACKET_TYPE_ACK = 0x02
 PACKET_TYPE_BEACON = 0x03
 PACKET_TYPE_CONTROL = 0x04
 # The payload is one AX.25 frame (as KISS carries it: addresses, control,
-# PID and info, no flags or FCS) for a KISS host - see openwave_tnc.py.
+# PID and info, no flags or FCS) for a KISS host - see fmlink_tnc.py.
 PACKET_TYPE_AX25 = 0x05
 
 _PACKET_TYPE_NAMES = {
@@ -306,7 +306,7 @@ def build_frame_with_bad_length(payload, declared_length, lead_pad=24, end_pad=2
                                  mode_id=0, flags=0, seq=0, src_id=b'', dst_id=b''):
     """Like build_frame(), but writes declared_length into the header's
     Payload Length field instead of len(payload) - for deliberately testing
-    FrameParser's 'bad_length' rejection path (see openwave_cli.py's `send
+    FrameParser's 'bad_length' rejection path (see fmlink_cli.py's `send
     --bad-length`). declared_length is NOT range-checked (that's the point -
     a real payload_len this far outside 0..MAX_PAYLOAD_LEN should never occur
     naturally); FrameParser catches it immediately after parsing the header,
@@ -421,7 +421,7 @@ def parse_selective_ack(payload):
 
 # Payload format for PACKET_TYPE_CONTROL frames - ota_station.py's --auto
 # mode-negotiation handshake (see its negotiate()/_handle_control_frame()).
-# Not part of OpenWave_Specification.txt's spec yet - this is a v1 protocol
+# Not part of FMlink_Specification.txt's spec yet - this is a v1 protocol
 # extension living entirely in the payload, so it doesn't need a header
 # format change. op byte first so parse_control_payload() can dispatch
 # before knowing which build_* function produced it.
@@ -455,7 +455,7 @@ _CONTROL_SET_STRUCT = struct.Struct('>BBB')  # op, mode_id, fec preset ID
 # which reads as 0: no optional features.
 CAP_BATCH = 0x01  # burst batching with selective ACKs (BURST_BATCHING_PROPOSAL.md)
 
-# 1-byte wire IDs for openwave_fec.py's PRESETS, used in MODE_GRANT/MODE_SET
+# 1-byte wire IDs for fmlink_fec.py's PRESETS, used in MODE_GRANT/MODE_SET
 # payloads (v1 sent the preset's name as ASCII, ~7 bytes). This numbering
 # is part of the wire format: never renumber, only append new presets.
 FEC_PRESET_IDS = {
@@ -614,7 +614,7 @@ def iter_frames(data):
     payload), ('crc_fail', None, None), or ('bad_length', None, None).
 
     Byte-granularity and noise-free - this is for offline/file-based testing
-    of the link layer itself (see openwave_cli.py), NOT a stand-in for a
+    of the link layer itself (see fmlink_cli.py), NOT a stand-in for a
     real sync-word correlator over a noisy sample stream. That job (finding
     the sync word in a bitstream that's gone through modulation, a channel,
     and demodulation) is what digital_correlate_access_code_tag_bb +
@@ -650,7 +650,7 @@ def describe_frames(data):
     """Like iter_frames(), but yields full diagnostic detail instead of just
     (header, payload) - every raw byte range (preamble, sync word, header,
     payload, CRC) plus whether the CRC actually matched, for tools that want
-    to *display* a frame rather than just consume it (see openwave_cli.py's
+    to *display* a frame rather than just consume it (see fmlink_cli.py's
     `dump` command). Byte-granularity and noise-free, same caveat as
     iter_frames() about not being a stand-in for a real sync-word correlator.
 
@@ -726,7 +726,7 @@ class LinkReceiver:
     payload_bytes.decode('utf-8', errors='replace'), which is lossy/
     corrupting for arbitrary binary content (e.g. a file transfer), so
     on_raw_message exists for callers that need the real bytes back (see
-    openwave_cli.py's `send --file`/`recv --output-file`).
+    fmlink_cli.py's `send --file`/`recv --output-file`).
     """
 
     def __init__(self, station_id='', on_message=None, on_ack_needed=None,
@@ -869,7 +869,7 @@ class LinkReceiver:
     def feed_crc_failure(self, status):
         """Call for a non-'ok' FrameParser.feed()/iter_frames() result:
         status is 'crc_fail' or 'bad_length' from those, or - only from
-        openwave_fec.py's decode_frames(), which unlike the uncoded sync
+        fmlink_fec.py's decode_frames(), which unlike the uncoded sync
         path doesn't swallow it internally - 'truncated' (not enough data
         remained for a complete block, e.g. a burst cut short by noise
         below the sync-word/header hit)."""
@@ -891,11 +891,11 @@ class LinkReceiver:
 
 
 # WAVEFORM_MODES is the PHY-plugin contract: what each Waveform Mode ID
-# *should* imply (modulation, symbol rate, FEC preset), so OpenWave stays a
+# *should* imply (modulation, symbol rate, FEC preset), so FMlink stays a
 # link-layer/framing protocol over a pluggable PHY rather than being tied to
 # any one modulation. Modulation names match modulate.py's MODULATORS /
 # demodulate.py's DEMODULATORS dict keys ('bpsk'/'qpsk'/'16qam'); fec_preset
-# values match openwave_fec.py's PRESETS keys.
+# values match fmlink_fec.py's PRESETS keys.
 #
 # This is a reference table for callers to consult, not force-wired into
 # modulate.py/demodulate.py's -t flag or fec_encode.py/fec_decode.py's
@@ -910,7 +910,7 @@ WAVEFORM_MODES = {
     # steps doubled it via bits/symbol AND symbol rate at once (a 4x
     # jump), with no "same bits/symbol bump, same rate as the slower BPSK
     # mode" QPSK entry in between. Renumbered into its natural throughput
-    # slot (not appended at the end) - OpenWave_Specification.txt's
+    # slot (not appended at the end) - FMlink_Specification.txt's
     # Waveform Modes table/worked example and every mode-number reference
     # elsewhere were updated to match when this happened.
     2: {'modulation': 'qpsk',  'symbol_rate': 1200, 'fec_preset': 'r1_2_k7'},
@@ -924,7 +924,7 @@ WAVEFORM_MODE_SYMBOL_RATES = {m: info['symbol_rate'] for m, info in WAVEFORM_MOD
 
 # bits/symbol per modulation scheme - matches modulate.py's MODULATORS/
 # demodulate.py's DEMODULATORS keys. Used by mode_raw_bps() below; also
-# the same convention OpenWave_Specification.txt's Waveform Modes table
+# the same convention FMlink_Specification.txt's Waveform Modes table
 # uses for its "bps raw" column (symbol_rate * bits/symbol).
 _BITS_PER_SYMBOL = {'bpsk': 1, 'qpsk': 2, '16qam': 4}
 
@@ -947,7 +947,7 @@ def mode_raw_bps(mode_id):
 # least this good, step up to this mode/preset".
 #
 # IMPORTANT: snr_db here is NOT a calibrated/textbook SNR - it's whatever
-# openwave_modem.py's estimate_snr_db() reports on the negotiation
+# fmlink_modem.py's estimate_snr_db() reports on the negotiation
 # handshake's own BPSK control-channel burst specifically (see
 # ota_station.py's CONTROL_MODE_ID). That estimator is a blind heuristic
 # with a real, measured optimistic bias (see its docstring/tests) - these
@@ -955,7 +955,7 @@ def mode_raw_bps(mode_id):
 # SNR, on purpose.
 #
 # The mode 0/r1_4_k9 floor and the mode 1/r1_2_k3 step are grounded in
-# openwave_fec.py's real empirical sweep data (0dB true SNR -> r1_2_k3 98%
+# fmlink_fec.py's real empirical sweep data (0dB true SNR -> r1_2_k3 98%
 # good; -6dB true -> only r1_4_k9 is reliable), calibrated against THIS
 # estimator by directly measuring what it reports on ota_sim.OTALink at
 # those same declared --base-snr-db values (8 trials each, tight spread):
@@ -1032,7 +1032,7 @@ MODE_SNR_TABLE = (
 
 
 # Mode selection for a FADING link (ota_station.py --phy audio detects
-# fading per burst - see openwave_audio.burst_quality()). MODE_SNR_TABLE
+# fading per burst - see fmlink_audio.burst_quality()). MODE_SNR_TABLE
 # assumes noise spread evenly through a burst; mobile fading on an FM link
 # instead concentrates it into short dropouts below the FM threshold, many
 # per burst, and r1_2_k3 can't repair those error bursts: measured through
@@ -1043,7 +1043,7 @@ MODE_SNR_TABLE = (
 #
 # Thresholds are the burst's AVERAGE data-aided SNR over the whole probe
 # (not the marker-only estimate MODE_SNR_TABLE uses), measured WITH
-# openwave_fec's default golden interleaving - which is what makes fast
+# fmlink_fec's default golden interleaving - which is what makes fast
 # modes usable on a fading link at all (it turns each fade's error burst
 # into scattered errors). Study: 16 bursts per point at 5/30/80 km/h,
 # 440 MHz, 8-20 dB CNR; each row is the lowest average SNR at which its
@@ -1129,7 +1129,7 @@ def is_for_station(dst_id_bytes, station_id):
     same all-zero placeholder, which decodes to ''.
 
     When station_id IS set, accepts an exact match or either spelling of
-    broadcast: the literal 'ALL' callsign from OpenWave_Specification.txt's
+    broadcast: the literal 'ALL' callsign from FMlink_Specification.txt's
     example, or an empty/placeholder dst_id (so today's TX chains keep being
     heard by an addressed receiver instead of silently going unheard just
     because they don't populate a real destination yet)."""

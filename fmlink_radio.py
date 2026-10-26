@@ -22,11 +22,11 @@ import wave
 
 import numpy as np
 
-import openwave_audio as audio
-import openwave_fec as fec
-import openwave_link as link
-import openwave_modem as modem
-import openwave_sync as sync
+import fmlink_audio as audio
+import fmlink_fec as fec
+import fmlink_link as link
+import fmlink_modem as modem
+import fmlink_sync as sync
 import ptt_play
 from demodulate import DEMODULATORS
 from modulate import MODULATORS
@@ -40,7 +40,7 @@ LEAD_S = 0.5          # audio kept ahead of a burst's marker when handing it ove
 TAIL_S = 0.04         # ... and after its end: enough for the filters' ringing, short of
                       # the next burst when several share a transmission (50 ms apart)
 GUARD_S = 0.05        # audio left out ahead of a marker when looking for an earlier burst
-MIN_QUALITY = 0.15    # below this, "no burst" (see openwave_audio.demodulate)
+MIN_QUALITY = 0.15    # below this, "no burst" (see fmlink_audio.demodulate)
 
 
 def decode_burst(x, modulation, symbol_rate, use_fec, generators, k, carrier_hz):
@@ -94,7 +94,7 @@ class BurstDetector:
 
     def __init__(self, attempts_fn, carrier_hz, on_burst, threshold=0.4, max_burst_s=8.0):
         # carrier_hz: Hz, or a function symbol_rate -> Hz (a port whose
-        # carrier depends on the rate - see openwave_audio.carrier_for)
+        # carrier depends on the rate - see fmlink_audio.carrier_for)
         self.attempts_fn, self.carrier_hz, self.on_burst = attempts_fn, carrier_hz, on_burst
         self.threshold, self.max_burst = threshold, int(max_burst_s * RATE)
         self.reset()

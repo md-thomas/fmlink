@@ -1,17 +1,17 @@
 """
-Headless, hardware-free regression tests for the OpenWave link layer, run over
+Headless, hardware-free regression tests for the FMlink link layer, run over
 phy_sim_loopback.grc's simulated channel (TX -> channel model -> RX, all in one
 process). These are real GNU Radio flowgraph runs, not just calls into
-openwave_link.py directly (see test_openwave_link.py for the fast pure-Python
+fmlink_link.py directly (see test_fmlink_link.py for the fast pure-Python
 tests) - they're slower and use wall-clock sleeps to let data flow through the
 scheduler, so some timing slop is inherent. If a test is ever flaky, prefer
 increasing its sleep margins over just re-running.
 
 IMPORTANT: must be run with the actual repository root as the current
 working directory - NOT legacy/gnuradio/. The generated epy_blocks resolve
-`import openwave_link` via os.getcwd() (GRC's block-introspection step
-doesn't define __file__, see openwave_link import lines in the .grc
-epy_block sources), and openwave_link.py lives at the repo root, not
+`import fmlink_link` via os.getcwd() (GRC's block-introspection step
+doesn't define __file__, see fmlink_link import lines in the .grc
+epy_block sources), and fmlink_link.py lives at the repo root, not
 alongside this archived flowgraph.
 
     cd <repo-root>
@@ -32,11 +32,11 @@ import unittest
 
 # Directory the archived .grc file actually lives in.
 FLOWGRAPH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Real repo root, where openwave_link.py lives - this test process's own
+# Real repo root, where fmlink_link.py lives - this test process's own
 # import AND the compiled epy_block's os.getcwd()-based import both need it.
 REPO_ROOT = os.path.dirname(os.path.dirname(FLOWGRAPH_DIR))
 sys.path.insert(0, REPO_ROOT)
-import openwave_link as link
+import fmlink_link as link
 GRC_FILE = 'phy_sim_loopback.grc'
 MODULE_NAME = 'phy_sim_loopback'
 
@@ -149,7 +149,7 @@ elif shutil.which('grcc') is None:
 @unittest.skipIf(_SKIP_REASON, _SKIP_REASON)
 class CleanChannelTests(unittest.TestCase):
     def test_message_decodes_correctly(self):
-        msg = "OpenWave regression test message"
+        msg = "FMlink regression test message"
         decoded, _ = run_loopback([msg])
         self.assertIn(msg, decoded)
 
@@ -183,7 +183,7 @@ class NoisyChannelTests(unittest.TestCase):
         """The core 'solid link layer' property: RX should never publish
         anything except the exact original text - corrupted frames get
         silently rejected by CRC, not passed through as garbage."""
-        msg = "OpenWave pi/4-QPSK PHY test 123!"
+        msg = "FMlink pi/4-QPSK PHY test 123!"
         decoded, stats = run_loopback([msg] * 15, self.NOISY_OVERRIDES, per_msg_s=0.3)
         garbled = [d for d in decoded if d != msg]
         self.assertEqual(garbled, [], f"CRC gate let corrupted text through: {garbled!r}")
@@ -293,7 +293,7 @@ class SequenceAndFlagsTests(unittest.TestCase):
 @unittest.skipIf(_SKIP_REASON, _SKIP_REASON)
 class ModeTests(unittest.TestCase):
     def test_each_mode_still_decodes_cleanly(self):
-        """All five OpenWave symbol-rate modes, at the default (near-noiseless)
+        """All five FMlink symbol-rate modes, at the default (near-noiseless)
         channel, should decode correctly. Catches PHY regressions that only
         show up at a particular mode's sample-rate/timing-recovery math.
 
@@ -321,7 +321,7 @@ class FragmentationTests(unittest.TestCase):
         exercises the real burst-to-burst timing (throttle pacing, separate
         preamble/sync acquisition per fragment), not just the pure-Python
         build_fragmented_frames/FragmentReassembler logic already covered in
-        test_openwave_link.py."""
+        test_fmlink_link.py."""
         # comfortably over MAX_PAYLOAD_LEN (1024) to force exactly 2 fragments
         msg = "F" * (link.MAX_PAYLOAD_LEN + 400)
         decoded, stats = run_loopback(

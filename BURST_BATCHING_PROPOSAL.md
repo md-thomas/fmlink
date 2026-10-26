@@ -6,7 +6,7 @@ two HTs at mode 3, the on-air message length test went from 50.0 s to
 selective ACK, no resends; RADIO_SETUP.md "Message length test").
 Decisions at the end.
 
-Part 2 as built: `openwave_link.build_selective_ack_frame` /
+Part 2 as built: `fmlink_link.build_selective_ack_frame` /
 `parse_selective_ack`, `SelectiveReassembler`, `CAP_BATCH` in the
 capabilities byte; `Station._send_batched` (batches up to `--max-tx-s`,
 resends only missing segments, gives up after the retry limit of rounds
@@ -25,7 +25,7 @@ Part 1 as built: the batching lives in `ota_station.Station`
 (`_queue_burst` / `_flush_tx_batch`), so it covers both the radio and the
 simulator. Bursts queued within 50 ms (`BATCH_COLLECT_S`) share one
 transmission, later ones 50 ms apart (`BATCH_GAP_S`) without a lead-in, up
-to `--max-tx-s` (default 30) on `ota_station.py` and `openwave_tnc.py`.
+to `--max-tx-s` (default 30) on `ota_station.py` and `fmlink_tnc.py`.
 Receiving: the radio's burst detector now trims only to a decoded burst's
 end (it used to drop 0.3 s more, which would cut into the next burst), and
 a station handed a whole transmission at once (the simulator) decodes the
@@ -77,11 +77,11 @@ order (the BurstDetector fix of 2026-10-07).
 ## Design
 
 Two parts. Part 1 needs no protocol change and helps the KISS TNC on its
-own; part 2 is the link-layer change for OpenWave messages.
+own; part 2 is the link-layer change for FMlink messages.
 
 ### Part 1 - transport: one key-up for everything queued
 
-`openwave_radio.RadioTransport` transmits one queued burst per PTT key-up.
+`fmlink_radio.RadioTransport` transmits one queued burst per PTT key-up.
 Change its transmit loop to take **every burst already queued** (plus any
 that arrive within a short collection window, ~50 ms) and play them in one
 key-up:
@@ -183,7 +183,7 @@ segment per transmission, as today.
   batch. That's fine for two stations; with more on a frequency it raises
   the stakes on channel access (carrier sense, already in TODO).
 - **Spec change**: the selective ACK payload and the capabilities byte go
-  into OpenWave_Specification.txt. The header is unchanged.
+  into FMlink_Specification.txt. The header is unchanged.
 
 ## Plan
 

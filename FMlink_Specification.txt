@@ -1,20 +1,20 @@
-OpenWave - An Open Digital Radio Stack
+FMlink - An Open Digital Radio Stack
 
-OpenWave is an open, modern digital radio framework designed for
+FMlink is an open, modern digital radio framework designed for
 high-performance wireless communications. It provides a flexible,
 modular stack for building interoperable digital radio systems,
 with a focus on maximizing data throughput while minimizing occupied
 spectral bandwidth.
 
-At its core, OpenWave is a link-layer/framing protocol (header, CRC,
+At its core, FMlink is a link-layer/framing protocol (header, CRC,
 sequencing, ACK/retry, fragmentation, FEC) designed to run over a
 pluggable PHY rather than being tied to one modulation. Waveform Mode ID
 in the header selects a modulation/symbol-rate/FEC combination (see
-openwave_link.py's WAVEFORM_MODES); BPSK, QPSK, and 16-QAM are supported
+fmlink_link.py's WAVEFORM_MODES); BPSK, QPSK, and 16-QAM are supported
 today.
 
 Built for experimentation, research, and real-world deployment, 
-OpenWave aims to provide an open foundation for next-generation 
+FMlink aims to provide an open foundation for next-generation 
 Amateur Radio and SDR applications.
 
 Channel Bandwidth:
@@ -40,7 +40,7 @@ Modem Chain:
 
 Physical Layer (PHY)
     Modulation: 		        Pluggable per Waveform Mode ID - BPSK, QPSK, and
-    				            16-QAM supported today (see openwave_link.py's
+    				            16-QAM supported today (see fmlink_link.py's
     				            WAVEFORM_MODES and modulate.py/demodulate.py)
     Symbol Rates: 	            600, 1200, 2400, 4800, 9600 symbols/sec
     Raw Bit Rates: 	            Depends on the mode's modulation - see
@@ -61,7 +61,7 @@ Physical Layer (PHY)
                                 does no carrier recovery yet.
     Forward Error Correction:	Convolutional code, rate 1/N, constraint
     				            length K, hard-decision Viterbi at the
-    				            receiver (presets: openwave_fec.py's PRESETS).
+    				            receiver (presets: fmlink_fec.py's PRESETS).
     				            The lead pad, preamble and sync word are sent
     				            uncoded - the receiver finds them by
     				            correlation, which needs a fixed known
@@ -124,7 +124,7 @@ Audio PHY (a radio's audio port, e.g. a VHF/UHF FM transceiver):
                                 position; track sound-card clock drift
                                 (which shifts carrier phase and symbol
                                 timing together) with a decision-directed
-                                PLL. See openwave_audio.py.
+                                PLL. See fmlink_audio.py.
 
 Link layer:
     Frame format version:       2 (since 2026-10). v1 had a 32-byte header,
@@ -140,7 +140,7 @@ Link layer:
                                 and filter tails do the same job. Receivers
                                 must not depend on them.
     Preamble:	                LFSR pseudo-noise sequence (seed 1, 9-bit register,
-	                            taps 1/2/5/9 - see openwave_link.py's _lfsr_pn_bits/PREAMBLE):
+	                            taps 1/2/5/9 - see fmlink_link.py's _lfsr_pn_bits/PREAMBLE):
 	                              IQ PHY:    32 bytes
 	                              Audio PHY: the first 16 bytes of the same
 	                                         sequence (its receiver correlates
@@ -209,10 +209,10 @@ Link layer:
         AX.25 frame (packet type 0x05):
             The payload is one AX.25 frame as KISS carries it (addresses,
             control, PID, info; no HDLC flags, no AX.25 FCS - the frame's
-            CRC32 protects it). Sent by openwave_tnc.py, the KISS TNC, for
+            CRC32 protects it). Sent by fmlink_tnc.py, the KISS TNC, for
             packet software running on top (e.g. the Linux kernel AX.25
             stack). AX.25 does its own addressing, connections and
-            retries, so these frames never request an OpenWave ACK and are
+            retries, so these frames never request an FMlink ACK and are
             never fragmented. A receiver passes every one to its KISS host
             regardless of Destination ID. Source/Destination ID carry the
             AX.25 source/destination callsigns when they can be packed, for
@@ -249,16 +249,16 @@ Link layer:
                 7 r1_4_k3   8 r1_4_k7   9 r1_4_k9
                10 r1_5_k7  11 r1_5_k9
                12 r1_6_k7  13 r1_6_k9
-            (names are openwave_fec.py's PRESETS keys).
+            (names are fmlink_fec.py's PRESETS keys).
             MODE_REQUEST/GRANT/SET/SET_ACK are sent on a fixed
             control channel both ends know in advance: Mode 0 with FEC
             "r1_2_k9" (ota_station.py's CONTROL_MODE_ID/CONTROL_FEC_PRESET).
             How the requester picks a mode from its measurement is local
             policy, not part of the wire format (ota_station.py uses
-            openwave_link.py's MODE_SNR_TABLE, or FADING_MODE_SNR_TABLE
+            fmlink_link.py's MODE_SNR_TABLE, or FADING_MODE_SNR_TABLE
             when the probe shows fading).
 
-        Waveform Modes: (modulation/rate/FEC bundle - see openwave_link.py's
+        Waveform Modes: (modulation/rate/FEC bundle - see fmlink_link.py's
         WAVEFORM_MODES, the authoritative table; currently a documentation/
         lookup contract, not yet wired into the CLI modulation/FEC flags)
             Mode 0: 	600 symbols/sec, bpsk,  600 bps raw

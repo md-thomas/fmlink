@@ -1,7 +1,7 @@
-# Scope: OpenWave as a KISS TNC (AX.25 / Winlink)
+# Scope: FMlink as a KISS TNC (AX.25 / Winlink)
 
 Status: **Milestone 1 done (2026-10-05).** The Linux kernel AX.25 stack
-runs unmodified over two OpenWave TNCs and the simulated FM link: single
+runs unmodified over two FMlink TNCs and the simulated FM link: single
 frames (`beacon`) and full connected sessions (`axcall` to `ax25d`) in
 every KISS framing mkiss uses (plain, SMACK, FlexNet, and its default
 auto mode). **Milestone 2 rehearsed over the simulator (2026-10-05):** a
@@ -9,14 +9,14 @@ Winlink message from Pat K0MDT-1 to Pat K0MDT-2 through two TNCs and the
 simulated FM link. **Milestone 2 done on the air (2026-10-07):** the same
 over two HTs (AIOC + TIDRADIO, Digirig + Baofeng) in 42 s. Setup and the
 on-air findings are in
-[RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave).
+[RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-fmlink).
 
 ## Goal
 
-Let standard packet software run over OpenWave's modem: peer-to-peer
+Let standard packet software run over FMlink's modem: peer-to-peer
 Winlink with Pat, digipeating, and a Winlink gateway (Linux RMS Gateway).
 All three already work on top of the Linux kernel AX.25 stack, which
-talks to its modem ("TNC") over KISS. So OpenWave implements the TNC side
+talks to its modem ("TNC") over KISS. So FMlink implements the TNC side
 of KISS and everything above it comes for free.
 
 ## What KISS is
@@ -42,8 +42,8 @@ TXtail). Carried over a serial port, a pseudo-terminal, or TCP.
                  |
            kissattach          - binds the kernel to a KISS device
                  |   KISS over a pty (or TCP for other software)
-        openwave_tnc.py        - each AX.25 frame <-> one OpenWave burst
-                 |   audio + PTT (openwave_radio) or ota_sim
+        fmlink_tnc.py        - each AX.25 frame <-> one FMlink burst
+                 |   audio + PTT (fmlink_radio) or ota_sim
              FM radio
 ```
 
@@ -53,11 +53,11 @@ Linux RMS Gateway requires the kernel AX.25 stack.
 
 ## Design
 
-- **Packet type 0x05 = AX.25.** The OpenWave payload is the AX.25 frame as
-  KISS carries it; the OpenWave CRC32 replaces the AX.25 FCS. The OpenWave
+- **Packet type 0x05 = AX.25.** The FMlink payload is the AX.25 frame as
+  KISS carries it; the FMlink CRC32 replaces the AX.25 FCS. The FMlink
   header's source/destination are filled from the AX.25 addresses
   (informational - AX.25 SSIDs fit the packed callsign format).
-- **No OpenWave link layer.** No OpenWave ACKs, fragmentation or
+- **No FMlink link layer.** No FMlink ACKs, fragmentation or
   negotiation for AX.25 frames: AX.25 does connections, retries and
   ordering. The TNC passes every received frame to the host, like any TNC
   (the host's stack filters by address).
@@ -85,7 +85,7 @@ Linux RMS Gateway requires the kernel AX.25 stack.
 2. **Pat peer-to-peer over the real radios.** A Winlink message from one
    laptop to the other.
 3. **Digipeating.** A third station relays (standard AX.25 digipeating).
-4. **Gateway.** Linux RMS Gateway on an OpenWave TNC; needs a Winlink
+4. **Gateway.** Linux RMS Gateway on an FMlink TNC; needs a Winlink
    gateway registration (Winlink expects gateways to run 24/7).
 
 Later improvements, measured against real use:
@@ -103,13 +103,13 @@ Later improvements, measured against real use:
 ## Milestone 1 status
 
 Done:
-- `openwave_kiss.py`: KISS encoder/incremental decoder (any chunking,
+- `fmlink_kiss.py`: KISS encoder/incremental decoder (any chunking,
   escapes, commands, ports) and AX.25 address helpers.
-- `openwave_tnc.py`: the TNC - KISS over TCP and a pty, on a Station
+- `fmlink_tnc.py`: the TNC - KISS over TCP and a pty, on a Station
   connected to the simulator or a real radio.
 - `PACKET_TYPE_AX25`, `Station.send_ax25()` and an `on_ax25` hook;
   `ota_station.connect_from_args()` shared with the TNC.
-- Tests (`tests/test_openwave_kiss.py`): framing, address parsing, two
+- Tests (`tests/test_fmlink_kiss.py`): framing, address parsing, two
   TNCs over the FM simulator (all 256 byte values, both directions, TCP
   and pty), and AX.25 frames bypassing the chat link layer.
 - Manual run: two TNC processes over `ota_sim --channel fm` at mode 2,
@@ -142,16 +142,16 @@ sudo modprobe ax25 && sudo modprobe mkiss
 window, description; each port needs its own callsign):
 
 ```
-owa  K0MDT-1  9600  128  2  OpenWave TNC A
-owb  K0MDT-2  9600  128  2  OpenWave TNC B
+owa  K0MDT-1  9600  128  2  FMlink TNC A
+owb  K0MDT-2  9600  128  2  FMlink TNC B
 ```
 
 Run (one machine, both TNCs through the simulator):
 
 ```bash
 python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
-./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link ~/kiss-a
-./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link ~/kiss-b
+./fmlink_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link ~/kiss-a
+./fmlink_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --kiss-port 0 --pty-link ~/kiss-b
 sudo kissattach ~/kiss-a owa
 sudo kissattach ~/kiss-b owb
 ```
@@ -191,7 +191,7 @@ Pat v1.0.0 on one machine, two instances with their own `--config` and
   - Pat needs no root for AX.25; only `kissattach`/`ax25d` do.
   - The kernel's default AX.25 timers were fine at mode 2.
   - Pat compresses B2F messages itself (gzip here: 531 -> 390 bytes), which
-    confirms that OpenWave's own payload compression wouldn't help Winlink.
+    confirms that FMlink's own payload compression wouldn't help Winlink.
   - Before connecting, Pat checks Winlink's online account lookup for
     `mycall`. With an SSID callsign that finds no account, so it prompts
     "unable to confirm...account is active". Answering `c` is safe for P2P
@@ -204,6 +204,6 @@ Pat v1.0.0 on one machine, two instances with their own `--config` and
 - **Overhead:** AX.25 adds ~16-18 bytes of addresses/control per frame and
   waits for an ACK after each window of frames; still far more robust
   underneath than 1200-baud AFSK.
-- **Every station in the chain needs an OpenWave TNC,** including
+- **Every station in the chain needs an FMlink TNC,** including
   digipeaters and gateways; standard AFSK packet stations can't hear it.
 - **Station ID comes free:** every AX.25 frame carries the callsign.

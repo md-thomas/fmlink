@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transmit OpenWave test bursts from this computer's radio interface. Run it
+"""Transmit FMlink test bursts from this computer's radio interface. Run it
 on the transmitting station; run radio_listen.py on the receiving one. The
 two stations need no connection to each other.
 
@@ -19,8 +19,8 @@ import tempfile
 import time
 
 import audio_wav_test as awt
-import openwave_audio as audio
-import openwave_link as link
+import fmlink_audio as audio
+import fmlink_link as link
 import radio_link_test as rlt
 import radio_stations as stations_mod
 
@@ -31,7 +31,7 @@ def main():
     p.add_argument('--src', required=True, help='your callsign: goes in each payload and header')
     p.add_argument('-m', '--modes', type=int, nargs='+', default=[0], choices=sorted(link.WAVEFORM_MODES))
     p.add_argument('--count', type=int, default=1, help='bursts per mode (default 1)')
-    p.add_argument('--text', help="message to send (default: '<src> OpenWave test mode M #N')")
+    p.add_argument('--text', help="message to send (default: '<src> FMlink test mode M #N')")
     p.add_argument('--fec', choices=sorted(awt.fec.PRESETS), help="default: each mode's own preset")
     p.add_argument('--port', choices=sorted(audio.PORT_PROFILES), default='mic',
                    help='audio port profile (carrier / max symbol rate); default mic')
@@ -79,7 +79,7 @@ def main():
                 for i in range(args.count):
                     if sent:
                         time.sleep(args.gap)
-                    text = args.text or f"{args.src} OpenWave test mode {mode} #{i + 1}"
+                    text = args.text or f"{args.src} FMlink test mode {mode} #{i + 1}"
                     samples = awt.build_samples(text, mode, args.fec, args.port, args.src, level,
                                                 args.lead_in)
                     wav = os.path.join(tmp, 'tx.wav')

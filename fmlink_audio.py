@@ -1,10 +1,10 @@
 """
-OpenWave audio-subcarrier PHY: symbols <-> real audio, for driving a
+FMlink audio-subcarrier PHY: symbols <-> real audio, for driving a
 radio's audio port (FM transceivers - see ota_sim's FMLink and
 tasklist.txt's Phase 5) instead of exchanging complex baseband IQ.
 
 An audio path has no DC response and only passes a few kHz, so the
-complex baseband signal openwave_pulse.py produces can't go through it
+complex baseband signal fmlink_pulse.py produces can't go through it
 directly. TX pulse-shapes at the audio sample rate (sps = sample_rate /
 symbol_rate, so each mode's symbol rate must divide it) and mixes the
 result onto an audio carrier inside the radio's passband; RX mixes back
@@ -20,7 +20,7 @@ The correlation peak's position is the symbol timing; its complex value
 is the channel gain and phase. That resolves QPSK/16-QAM's rotational
 ambiguity outright - the reference IS the transmitted marker - and it
 gives a data-aided SNR estimate (error vector against known symbols)
-instead of openwave_modem.estimate_snr_db()'s blind one.
+instead of fmlink_modem.estimate_snr_db()'s blind one.
 
 After the marker, a decision-directed loop tracks drift. The two ends'
 sound cards never run at exactly the same rate, and even 20 ppm rotates
@@ -35,8 +35,8 @@ one loop, no separate timing-recovery loop.
 """
 import numpy as np
 
-import openwave_link as link
-import openwave_pulse as pulse
+import fmlink_link as link
+import fmlink_pulse as pulse
 
 AUDIO_SAMPLE_RATE = 48000
 

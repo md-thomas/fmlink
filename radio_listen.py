@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Listen on this computer's radio interface and decode OpenWave bursts as
+"""Listen on this computer's radio interface and decode FMlink bursts as
 they arrive. Run it on the receiving station; run radio_send.py on the
 transmitting one. The two stations need no connection to each other.
 
@@ -20,9 +20,9 @@ import wave
 import numpy as np
 
 import audio_wav_test as awt
-import openwave_audio as audio
-import openwave_fec as fec
-import openwave_link as link
+import fmlink_audio as audio
+import fmlink_fec as fec
+import fmlink_link as link
 import radio_stations as stations_mod
 from modulate import MODULATORS
 

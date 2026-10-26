@@ -30,8 +30,8 @@ import time
 import numpy as np
 
 import audio_wav_test as awt
-import openwave_audio as audio
-import openwave_link as link
+import fmlink_audio as audio
+import fmlink_link as link
 import radio_link_test as rlt
 import radio_stations as stations_mod
 

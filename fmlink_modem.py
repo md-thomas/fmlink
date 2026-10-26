@@ -1,5 +1,5 @@
 """
-OpenWave PHY-layer modulation: bits <-> symbols for supported schemes.
+FMlink PHY-layer modulation: bits <-> symbols for supported schemes.
 
 BPSK, QPSK, and 16-QAM so far (see tasklist.txt Phase 6 for the eventual
 multi-mode plan - 8PSK/OFDM still to come). Each scheme is deliberately the
@@ -33,7 +33,7 @@ BPSK_POINTS = (-1 + 0j, 1 + 0j)  # index = bit value: 0 -> -1, 1 -> +1
 # Gray-coded QPSK: I and Q are two independent BPSK axes (same 0->-1, 1->+1
 # convention as BPSK_POINTS on each), normalized by 1/sqrt(2) so average
 # symbol energy is 1 - the same convention BPSK_POINTS already uses, so
-# openwave_channel.py's SNR-to-noise-voltage conversion (which measures
+# fmlink_channel.py's SNR-to-noise-voltage conversion (which measures
 # signal power from the samples themselves, not a hardcoded assumption -
 # see its docstring) treats both schemes comparably at "the same SNR".
 # Gray coding matters here specifically because each bit maps to its own
@@ -59,7 +59,7 @@ QPSK_POINTS = {
 # (9+1+1+9)/4 = 5, so each axis contributes average power 5 - scaling
 # both axes by 1/sqrt(10) brings total average symbol energy to 1, the
 # same convention BPSK_POINTS/QPSK_POINTS use (see QPSK_POINTS' comment
-# for why that consistency matters to openwave_channel.py's SNR measure).
+# for why that consistency matters to fmlink_channel.py's SNR measure).
 _PAM4_LEVELS = {(0, 0): -3, (0, 1): -1, (1, 1): 1, (1, 0): 3}
 _QAM16_SCALE = 10 ** -0.5
 QAM16_POINTS = {
@@ -190,7 +190,7 @@ def estimate_snr_db(symbols, modulation, floor_db=-30.0):
     SNR, since a symbol that's drifted past a decision boundary is, by
     definition, closest to the WRONG point, which this can't tell apart
     from genuinely being close to the right one. Good enough to drive mode-
-    selection thresholds (see openwave_link.py's MODE_SNR_TABLE); floor_db
+    selection thresholds (see fmlink_link.py's MODE_SNR_TABLE); floor_db
     caps the returned value when measured noise is ~0 (e.g. synthetic
     noiseless symbols in a test), avoiding a math domain error/+inf.
     """

@@ -1,10 +1,10 @@
 """
-OpenWave RRC pulse shaping: symbols <-> real timed samples.
+FMlink RRC pulse shaping: symbols <-> real timed samples.
 
 This is where symbol_rate/sps actually start to matter (see
-openwave_modem.py's docstring for why they deliberately don't appear at the
-bits<->symbols stage). Needs numpy for the convolution - openwave_link.py and
-openwave_modem.py stay dependency-free, but real DSP is the point where that
+fmlink_modem.py's docstring for why they deliberately don't appear at the
+bits<->symbols stage). Needs numpy for the convolution - fmlink_link.py and
+fmlink_modem.py stay dependency-free, but real DSP is the point where that
 stops being practical to avoid.
 
 Roll-off alpha=0.35 and the 11-symbol filter span match the convention
@@ -20,7 +20,7 @@ correct constellation only appears after pulse_shape() -> matched_filter()
 -> decimate() at group_delay(), not from pulse_shape() alone. rrc_taps() is
 normalized to unit energy (sum(taps**2) == 1) specifically so that this
 round trip reproduces the original symbol values almost exactly (see
-tests/test_openwave_pulse.py) - that's what makes the matched-filter cascade
+tests/test_fmlink_pulse.py) - that's what makes the matched-filter cascade
 recover clean points instead of some arbitrarily-scaled version of them.
 """
 import numpy as np

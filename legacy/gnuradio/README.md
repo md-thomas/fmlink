@@ -1,12 +1,12 @@
-OpenWave - Archived GNU Radio Chain
+FMlink - Archived GNU Radio Chain
 ====================================
 
 This directory holds the project's original GNU Radio pi/4-QPSK PHY chain -
-the initial testbench OpenWave was built and validated against. The project
+the initial testbench FMlink was built and validated against. The project
 has since repositioned around a link-layer/framing protocol (header, CRC,
-ACK, fragmentation, FEC - see ../../openwave_link.py) that works over a
+ACK, fragmentation, FEC - see ../../fmlink_link.py) that works over a
 *pluggable* PHY rather than being tied to one modulation or to GNU Radio at
-all (see ../../openwave_link.py's WAVEFORM_MODES and ../../tasklist.txt).
+all (see ../../fmlink_link.py's WAVEFORM_MODES and ../../tasklist.txt).
 The pure-Python CLI pipeline at the repo root (modulate.py/demodulate.py,
 supporting BPSK/QPSK/16-QAM) is now the actively developed PHY.
 
@@ -69,7 +69,7 @@ msg (Parameter, -m/--msg)
     Send box is what gets transmitted.
 
 symbol_rate (Parameter, -r/--symbol-rate)
-    Baud rate in symbols/sec - one of the OpenWave modes 600-9600.
+    Baud rate in symbols/sec - one of the FMlink modes 600-9600.
     Command-line configurable.
 
 sps (Variable = 4)
@@ -95,11 +95,11 @@ QT GUI Message Edit Box ("Send")
     box loses focus).
 
 str_to_pdu_0 (embedded Python block)
-    Wraps the message into a full OpenWave link-layer frame (or several, if
-    it's long enough to need fragmenting) using openwave_link.build_fragmented_frames -
+    Wraps the message into a full FMlink link-layer frame (or several, if
+    it's long enough to need fragmenting) using fmlink_link.build_fragmented_frames -
     real preamble, sync word, header (Sequence Number, Flags, Payload
     Length, etc.), payload, and CRC32. If ack_requested is enabled, engages
-    openwave_link.RetryManager and retransmits on timeout (driven by a
+    fmlink_link.RetryManager and retransmits on timeout (driven by a
     500ms message-strobe tick) until acknowledged or max_retries is
     exhausted. See the block's own docstring in the .grc for the full
     fragmentation/ACK interaction.
@@ -140,11 +140,11 @@ Correlate Access Code Tag
 
 stream_display_sink_0 (embedded Python block)
     Uses the "sync" tag to know exactly where the header starts, then
-    openwave_link.FrameParser to collect Header+Payload+CRC32 (per the
+    fmlink_link.FrameParser to collect Header+Payload+CRC32 (per the
     header's real Payload Length field) and verify the CRC. Tracks Sequence
     Number (gap/duplicate detection), decodes Mode ID and Source/
     Destination ID, handles ACK frames and fragment reassembly, and
-    publishes a formatted stats line. See openwave_link.LinkReceiver for the
+    publishes a formatted stats line. See fmlink_link.LinkReceiver for the
     GNU-Radio-free version of this same dispatch logic.
 
 ack_responder_0 (embedded Python block)
@@ -205,15 +205,15 @@ station_id (-s/--station-id)
     real Destination ID yet. Once set, only frames addressed to station_id
     or a broadcast (the literal 'ALL' callsign, or that same placeholder)
     are processed further; everything else is dropped and counted under
-    'not_for_us' in the stats line. See openwave_link.is_for_station().
+    'not_for_us' in the stats line. See fmlink_link.is_for_station().
 
 capture_file (-o/--capture-file)
     Path to append every completed frame attempt to - successful, CRC-
-    failed, and bad-length alike - in openwave_link.build_frame()'s exact
+    failed, and bad-length alike - in fmlink_link.build_frame()'s exact
     byte format. Blank (default) = disabled. A capture file can be inspected
     later with no conversion:
-        python3 openwave_cli.py dump -i capture.bin
-        python3 openwave_cli.py recv -i capture.bin
+        python3 fmlink_cli.py dump -i capture.bin
+        python3 fmlink_cli.py recv -i capture.bin
     This is the tool for "something went wrong on the air, let me look at
     exactly what was received afterward."
 

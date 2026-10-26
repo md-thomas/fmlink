@@ -1,6 +1,6 @@
 """
 Wraps an incoming string message (from a QT GUI Message Edit Box) into a
-PDU framed with a timing preamble, the OpenWave sync word,
+PDU framed with a timing preamble, the FMlink sync word,
 and a temporary zero-run end marker (until a real Payload Length header
 field exists), ready for PDU to Tagged Stream. The lead-in zeros give
 Symbol Sync's acquisition loop time to settle before the preamble

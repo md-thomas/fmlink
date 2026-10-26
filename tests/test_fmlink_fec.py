@@ -1,7 +1,7 @@
 """
-Unit tests for openwave_fec.py: convolutional encoding + Viterbi decoding.
+Unit tests for fmlink_fec.py: convolutional encoding + Viterbi decoding.
 
-    python3 -m unittest tests.test_openwave_fec -v
+    python3 -m unittest tests.test_fmlink_fec -v
 """
 import os
 import sys
@@ -10,10 +10,10 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import openwave_fec as fec
-import openwave_link as link
-import openwave_modem as modem
-import openwave_sync as sync
+import fmlink_fec as fec
+import fmlink_link as link
+import fmlink_modem as modem
+import fmlink_sync as sync
 
 
 def _flip_bits(bits, indices):
@@ -406,7 +406,7 @@ class MultiFragmentTests(unittest.TestCase):
         """The end-to-end proof: fec_decode.py rebuilds each recovered
         fragment as a standard frame (see fec_decode.py), and feeding that
         stream through the normal LinkReceiver/FragmentReassembler path
-        (exactly what openwave_cli.py recv does) must recover the FULL
+        (exactly what fmlink_cli.py recv does) must recover the FULL
         original message, not just the first fragment."""
         generators, k = fec.PRESETS['r1_2_k7']
         original = b'The quick brown fox jumps over the lazy dog. ' * 150  # several KB
@@ -479,7 +479,7 @@ class SyncGapTests(unittest.TestCase):
     pass rates didn't track code strength the way they should have - a
     direct repro showed decode_frames() yielding fragment seq 0, 2, 3, 4,
     every one reporting 'ok', with seq 1 simply missing and no error at
-    all. See openwave_sync.FRAGMENT_GAP_SEARCH_BITS."""
+    all. See fmlink_sync.FRAGMENT_GAP_SEARCH_BITS."""
 
     def test_fully_corrupted_marker_reports_gap_and_later_fragments_still_recovered(self):
         generators, k = fec.PRESETS['r1_2_k7']

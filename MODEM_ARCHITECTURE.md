@@ -1,4 +1,4 @@
-# OpenWave modem architecture
+# FMlink modem architecture
 
 How a message becomes audio on a radio and back again: the layers, the
 transmit chain, the receive chain, and the link layer above them. This
@@ -15,15 +15,15 @@ the code as of 2026-10-08; the code is authoritative.
 flowchart TB
     subgraph apps["Applications"]
         chat["Typed chat<br/>ota_station.py stdin"]
-        kiss["Packet software via KISS<br/>Linux AX.25 / Pat / axcall<br/>openwave_tnc.py"]
-        web["A browser<br/>openwave_web: chat, live link view,<br/>settings while running"]
+        kiss["Packet software via KISS<br/>Linux AX.25 / Pat / axcall<br/>fmlink_tnc.py"]
+        web["A browser<br/>fmlink_web: chat, live link view,<br/>settings while running"]
     end
     subgraph station["Station - ota_station.Station"]
         link["Link layer<br/>framing, seq, fragmentation,<br/>ACK + retry, mode negotiation"]
         phy["Audio PHY<br/>FEC + interleave, BPSK/QPSK,<br/>RRC, audio carrier"]
     end
     subgraph transport["Transport"]
-        radio["Real radio - openwave_radio.RadioTransport<br/>PTT on a serial line, aplay / arecord,<br/>burst detection"]
+        radio["Real radio - fmlink_radio.RadioTransport<br/>PTT on a serial line, aplay / arecord,<br/>burst detection"]
         sim["Simulator - ota_sim SimClient<br/>FM channel model over TCP"]
     end
     hw["FM transceiver<br/>AIOC or Digirig on the mic/speaker jacks"]
@@ -39,8 +39,8 @@ flowchart TB
 
 Three ways in sit on one station class: typed chat, the web page (the same
 chat plus live events and settings changes, from the separate
-`openwave_web` repo), and the KISS TNC. Chat (typed or from the page) uses
-the full OpenWave link layer (fragmentation, ACKs, mode negotiation). The
+`fmlink_web` repo), and the KISS TNC. Chat (typed or from the page) uses
+the full FMlink link layer (fragmentation, ACKs, mode negotiation). The
 KISS TNC carries AX.25 frames and leaves addressing, ACKs and retries to
 the host's AX.25 stack. All of them run over a real radio or the
 simulator, with the same modem code.
@@ -59,7 +59,7 @@ simulator, with the same modem code.
 - **Lead-in silence** covers the far radio's key-up and squelch opening
   (`--lead-in-ms`, default 250).
 - **Marker** = the first 16 bytes of a fixed PN preamble + the 4-byte sync
-  word (`openwave_link.AUDIO_MARKER`). It is never FEC-coded: the receiver
+  word (`fmlink_link.AUDIO_MARKER`). It is never FEC-coded: the receiver
   needs it before it knows anything else.
 - **Header** (20 bytes, `>BBBH6s6sHB`): version and packet type (4 bits
   each), mode ID, flags, sequence number, source and destination callsigns
@@ -92,13 +92,13 @@ flowchart LR
 
 | Step | Code | Notes |
 |---|---|---|
-| Fragment, frame | `openwave_link.build_fragmented_frames`, `build_frame` | one frame per fragment, each an independent burst |
-| Audio framing | `openwave_audio.frame_for_audio` | swaps the IQ PHY's 32-byte preamble and padding for the 16-byte audio marker |
-| FEC | `openwave_fec.encode_frame` | K=3/7/9 convolutional codes at rates 1/2 to 1/6 (`PRESETS`); each block gets its own flush tail and is interleaved (golden-ratio permutation) so a fade's burst of errors is spread out for the Viterbi decoder |
-| Modulate | `modulate.MODULATORS`, `openwave_audio.modulate` | 48 kHz audio; samples per symbol = 48000 / symbol rate (80, 40, 20) |
-| Carrier | `openwave_audio.carrier_for` | per port and symbol rate (table below) |
+| Fragment, frame | `fmlink_link.build_fragmented_frames`, `build_frame` | one frame per fragment, each an independent burst |
+| Audio framing | `fmlink_audio.frame_for_audio` | swaps the IQ PHY's 32-byte preamble and padding for the 16-byte audio marker |
+| FEC | `fmlink_fec.encode_frame` | K=3/7/9 convolutional codes at rates 1/2 to 1/6 (`PRESETS`); each block gets its own flush tail and is interleaved (golden-ratio permutation) so a fade's burst of errors is spread out for the Viterbi decoder |
+| Modulate | `modulate.MODULATORS`, `fmlink_audio.modulate` | 48 kHz audio; samples per symbol = 48000 / symbol rate (80, 40, 20) |
+| Carrier | `fmlink_audio.carrier_for` | per port and symbol rate (table below) |
 | Batch | `Station._queue_burst`, `_flush_tx_batch` | bursts queued within 50 ms share one transmission: later ones follow 50 ms apart without a lead-in, up to `--max-tx-s` (30 s). An AX.25 window from the KISS host goes out in one key-up |
-| Transmit | `openwave_radio.RadioTransport._tx_loop`, `ptt_play.key_and_play` | waits `--turnaround-ms` (600) after the last received burst, keys DTR or RTS, waits 0.2 s, plays with `aplay`, releases; the receiver is muted while keyed and 0.4 s after |
+| Transmit | `fmlink_radio.RadioTransport._tx_loop`, `ptt_play.key_and_play` | waits `--turnaround-ms` (600) after the last received burst, keys DTR or RTS, waits 0.2 s, plays with `aplay`, releases; the receiver is muted while keyed and 0.4 s after |
 
 ## 4. Receive chain
 
@@ -113,7 +113,7 @@ flowchart LR
     crc -- no --> fail["crc_fail / bad_length<br/>logged; sender retries"]
 ```
 
-- **Burst detection** (`openwave_radio.BurstDetector`): the receiver
+- **Burst detection** (`fmlink_radio.BurstDetector`): the receiver
   doesn't know when a burst will arrive or in which mode. Every 0.5 s it
   tries each candidate (the station's current data mode and the control
   channel's mode 0) on the buffered audio. A decoded burst is handed over
@@ -121,7 +121,7 @@ flowchart LR
   hands over the earliest first. A burst that is heard (marker found) but
   doesn't decode yet is waited on for up to 8 s, in case it is still
   arriving.
-- **Decoding** (`openwave_fec.decode_frames`) starts at the marker
+- **Decoding** (`fmlink_fec.decode_frames`) starts at the marker
   position the demodulator found, decodes the 20-byte header, reads the
   payload length from it, then decodes exactly that many payload bytes and
   checks the CRC.
@@ -131,7 +131,7 @@ flowchart LR
 
 ## 5. Inside the demodulator
 
-`openwave_audio.demodulate` - all of a burst's synchronization comes from
+`fmlink_audio.demodulate` - all of a burst's synchronization comes from
 the one known marker:
 
 ```mermaid
@@ -195,7 +195,7 @@ sequenceDiagram
 
 - **Fragmentation**: messages over 1024 bytes are split; the receiver
   reassembles by sequence number and fragment index
-  (`openwave_link.LinkReceiver`, `FragmentReassembler`) and suppresses
+  (`fmlink_link.LinkReceiver`, `FragmentReassembler`) and suppresses
   duplicates from retries.
 - **ACK and retry** (`--ack`), two ways:
   - **Batched** (both stations negotiated `CAP_BATCH`; the default): as
@@ -214,7 +214,7 @@ sequenceDiagram
   - The pick comes from `MODE_SNR_TABLE`, judging each row at its own
     symbol rate (a faster mode sees more of the noise).
   - It switches to `FADING_MODE_SNR_TABLE` when a burst shows fading
-    dropouts (`openwave_audio.burst_quality`).
+    dropouts (`fmlink_audio.burst_quality`).
   - It is capped by the audio port's maximum symbol rate.
 - **AX.25** (packet type `0x05`, the KISS TNC): bypasses fragmentation,
   ACKs and negotiation. Every received AX.25 frame goes up to the KISS
@@ -241,14 +241,14 @@ connector) uses 2000 Hz for every mode, up to mode 3.
 
 | File | Role |
 |---|---|
-| `openwave_link.py` | header, frame building/parsing, callsigns, fragmentation, ACK/control frames, mode tables, `select_mode_for_snr` |
-| `openwave_fec.py` | convolutional codes, Viterbi, interleaver, `encode_frame` / `decode_frames` |
-| `openwave_sync.py` | marker search in bits (uncoded path) |
-| `modulate.py`, `demodulate.py`, `openwave_modem.py` | symbol mapping and hard decisions |
-| `openwave_pulse.py` | RRC filter taps |
-| `openwave_audio.py` | audio PHY: carriers, `modulate`, `demodulate` (correlation, equalizer, PLL), burst quality |
-| `openwave_radio.py` | real-radio transport: burst detection, PTT + playback, turnaround |
+| `fmlink_link.py` | header, frame building/parsing, callsigns, fragmentation, ACK/control frames, mode tables, `select_mode_for_snr` |
+| `fmlink_fec.py` | convolutional codes, Viterbi, interleaver, `encode_frame` / `decode_frames` |
+| `fmlink_sync.py` | marker search in bits (uncoded path) |
+| `modulate.py`, `demodulate.py`, `fmlink_modem.py` | symbol mapping and hard decisions |
+| `fmlink_pulse.py` | RRC filter taps |
+| `fmlink_audio.py` | audio PHY: carriers, `modulate`, `demodulate` (correlation, equalizer, PLL), burst quality |
+| `fmlink_radio.py` | real-radio transport: burst detection, PTT + playback, turnaround |
 | `ptt_play.py`, `radio_stations.py` | PTT keying; finding AIOC / Digirig interfaces |
 | `ota_station.py` | the station: link layer, negotiation, ACKs, live chat CLI |
-| `openwave_tnc.py`, `openwave_kiss.py` | KISS TNC on top of the station |
-| `OpenWave_Specification.txt` | the normative wire format |
+| `fmlink_tnc.py`, `fmlink_kiss.py` | KISS TNC on top of the station |
+| `FMlink_Specification.txt` | the normative wire format |

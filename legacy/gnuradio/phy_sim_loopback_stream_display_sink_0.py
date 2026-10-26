@@ -1,6 +1,6 @@
 """
 Uses the 'sync' tag from the access-code correlator to know exactly where the
-header starts, then uses openwave_link.FrameParser to collect exactly
+header starts, then uses fmlink_link.FrameParser to collect exactly
 Header+Payload+CRC32 bytes (per the header's real Payload Length field) and
 verify the CRC before publishing. No zero-run-terminator guessing - the header
 tells us exactly how many bytes to expect, and the CRC tells us whether we got
@@ -20,7 +20,7 @@ import pmt
 import sys, os
 if os.getcwd() not in sys.path:
     sys.path.insert(0, os.getcwd())
-import openwave_link as link
+import fmlink_link as link
 
 
 class blk(gr.sync_block):

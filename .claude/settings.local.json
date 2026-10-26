@@ -9,7 +9,7 @@
       "Read(//usr/lib/python3/dist-packages/gnuradio/grc/core/**)",
       "Bash(python3 -c ' *)",
       "Bash(grcc test2.grc -o .)",
-      "Bash(python3 -c \"import openwave_link as link; print\\('import ok'\\); print\\(link.LinkReceiver, link.iter_frames\\)\")",
+      "Bash(python3 -c \"import fmlink_link as link; print\\('import ok'\\); print\\(link.LinkReceiver, link.iter_frames\\)\")",
       "Bash(./run_tests.sh)"
     ]
   }

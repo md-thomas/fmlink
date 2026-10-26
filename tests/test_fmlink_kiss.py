@@ -1,6 +1,6 @@
 """
-Tests for openwave_kiss.py (KISS framing, AX.25 address helpers) and
-openwave_tnc.py (two TNCs relaying KISS frames through ota_sim). The TNC
+Tests for fmlink_kiss.py (KISS framing, AX.25 address helpers) and
+fmlink_tnc.py (two TNCs relaying KISS frames through ota_sim). The TNC
 tests need ota_sim installed (pip install -e ../ota_sim) and are skipped
 otherwise.
 """
@@ -8,13 +8,13 @@ import asyncio
 import os
 import unittest
 
-import openwave_kiss as kiss
-import openwave_link as link
+import fmlink_kiss as kiss
+import fmlink_link as link
 
 try:
     from ota_sim import FMLink
     from ota_sim.simulator import OTASimulator
-    import openwave_tnc as tnc
+    import fmlink_tnc as tnc
     OTA_SIM_AVAILABLE = True
 except ImportError:
     OTA_SIM_AVAILABLE = False
@@ -91,7 +91,7 @@ class Ax25AddressTests(unittest.TestCase):
     def test_too_short(self):
         self.assertEqual(kiss.ax25_endpoints(b'short'), ('', ''))
 
-    def test_ssid_15_fits_an_openwave_callsign(self):
+    def test_ssid_15_fits_an_fmlink_callsign(self):
         call = kiss.ax25_address(kiss.ax25_address_field('VE3XYZ-15'))
         self.assertEqual(call, 'VE3XYZ-15')
         link.pack_callsign(call)  # 9 characters: must not raise

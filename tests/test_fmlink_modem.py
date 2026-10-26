@@ -1,9 +1,9 @@
 """
-Unit tests for openwave_modem.py, the PHY-layer bits<->symbols mapping.
+Unit tests for fmlink_modem.py, the PHY-layer bits<->symbols mapping.
 
 Pure Python, no GNU Radio dependency - fast, run first.
 
-    python3 -m unittest tests.test_openwave_modem -v
+    python3 -m unittest tests.test_fmlink_modem -v
 """
 import os
 import random
@@ -11,8 +11,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import openwave_modem as modem
-import openwave_link as link
+import fmlink_modem as modem
+import fmlink_link as link
 
 
 class BitPackingTests(unittest.TestCase):

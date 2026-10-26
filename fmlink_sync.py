@@ -1,10 +1,10 @@
 """
-OpenWave frame synchronization: find frame boundaries in a noisy/imperfect
+FMlink frame synchronization: find frame boundaries in a noisy/imperfect
 bitstream via correlation against the known PREAMBLE+SYNC_WORD pattern,
-tolerating some number of bit errors - unlike openwave_link.iter_frames()/
+tolerating some number of bit errors - unlike fmlink_link.iter_frames()/
 describe_frames(), which require an exact byte match and so gain nothing
 from PREAMBLE being a PRN sequence under real noise (see
-openwave_link.py's docstring: the whole point of a PRN preamble is a sharp
+fmlink_link.py's docstring: the whole point of a PRN preamble is a sharp
 correlation peak that's still findable with some bits wrong - a byte-exact
 search throws that property away, since a single flipped bit anywhere in
 the 36-byte marker breaks an exact match completely).
@@ -13,14 +13,14 @@ This mirrors what digital_correlate_access_code_tag_bb does in the real GNU
 Radio flowgraphs (rx_rtlsdr.grc/phy_sim_loopback.grc): a sliding Hamming-
 distance correlator over the recovered bitstream, not a literal string
 match. Use iter_frames_correlated()/describe_frames_correlated() here in
-place of openwave_link.iter_frames()/describe_frames() when data may have
-come through a noisy channel (e.g. channel.py) - see openwave_cli.py's
+place of fmlink_link.iter_frames()/describe_frames() when data may have
+come through a noisy channel (e.g. channel.py) - see fmlink_cli.py's
 recv/dump --correlate flag.
 """
 import numpy as np
 
-import openwave_link as link
-import openwave_modem as modem
+import fmlink_link as link
+import fmlink_modem as modem
 
 # The IQ PHY's marker (the default everywhere here): 288 bits, the 32-byte
 # preamble + 4-byte sync word. The audio PHY uses link.AUDIO_MARKER (16-byte
@@ -109,7 +109,7 @@ def extract_frame_at(bits, header_start):
     """Given a full bit array and the bit offset where a header should
     start (i.e. right after a preamble+sync-word match - see
     best_sync_offset()), pack the remaining bits into bytes and run them
-    through openwave_link.FrameParser exactly as the byte-oriented path
+    through fmlink_link.FrameParser exactly as the byte-oriented path
     does, so header parsing/CRC checking can't drift between the two.
 
     Returns (status, header, payload):
@@ -130,7 +130,7 @@ def extract_frame_at(bits, header_start):
 
 
 def iter_frames_correlated(data, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION, marker=None):
-    """Like openwave_link.iter_frames(), but finds each frame's start via
+    """Like fmlink_link.iter_frames(), but finds each frame's start via
     Hamming-distance correlation instead of an exact byte match - tolerates
     bit errors in the marker itself. Yields (status, header, payload)
     tuples, status in ('ok', 'crc_fail', 'bad_length', 'gap') - stops
@@ -182,7 +182,7 @@ def iter_frames_correlated(data, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION, 
 
 
 def describe_frames_correlated(data, max_error_fraction=DEFAULT_MAX_ERROR_FRACTION):
-    """Like openwave_link.describe_frames(), but using the same tolerant
+    """Like fmlink_link.describe_frames(), but using the same tolerant
     correlation-based sync search as iter_frames_correlated(). Yields one
     dict per frame found:
       {'offset': int, 'sync_errors': int, 'status': 'ok'|'crc_fail'|'bad_length'|'gap',

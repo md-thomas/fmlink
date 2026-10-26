@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live OpenWave station: builds/parses real OpenWave frames and pushes them
+Live FMlink station: builds/parses real FMlink frames and pushes them
 through the actual modem chain (modulate -> pulse-shape on TX, matched-
 filter -> demodulate -> sync/FEC on RX) to/from a peer station, relayed
 through an `ota_sim` network simulator (see /data/Projects/ota_sim) that
@@ -15,7 +15,7 @@ split across two or three separate machines - each just needs to be told
 the others' network addresses (--sim-host/--sim-port).
 
 By default stations exchange complex baseband IQ. With --phy audio they
-exchange real 48 kHz audio on a carrier tone instead (openwave_audio.py),
+exchange real 48 kHz audio on a carrier tone instead (fmlink_audio.py),
 for a radio's audio port, through the simulator's --channel fm FM
 transceiver model. --audio-port mic|data picks the radio connection and
 caps the usable modes to what its passband carries.
@@ -27,7 +27,7 @@ Known v1 limitations:
     (and --fec on/off) - the receiver has to already know which modulation
     to demodulate with. --auto negotiates this automatically: the station
     that gets a message ready FIRST measures its own link and tells the
-    peer to use that mode too (see negotiate()/openwave_link.py's
+    peer to use that mode too (see negotiate()/fmlink_link.py's
     MODE_SNR_TABLE) - lazily, on that station's own first send, not
     eagerly at startup. Session-scoped, not continuous - re-run it anytime
     with the /renegotiate command. /ping and /ping survey give a live look
@@ -86,16 +86,16 @@ except ImportError:
 
 import numpy as np
 
-import openwave_audio as audio_phy
-import openwave_fec as fec
-import openwave_link as link
-import openwave_modem as modem
-import openwave_pulse as pulse
-import openwave_sync as sync
+import fmlink_audio as audio_phy
+import fmlink_fec as fec
+import fmlink_link as link
+import fmlink_modem as modem
+import fmlink_pulse as pulse
+import fmlink_sync as sync
 from modulate import MODULATORS
 from demodulate import DEMODULATORS
 
-import openwave_radio as radio
+import fmlink_radio as radio
 import radio_stations
 
 try:
@@ -120,7 +120,7 @@ DEFAULT_FEC_PRESET = 'r1_4_k7'
 # negotiated data mode.
 #
 # NOT r1_4_k9 (the data channel's own most-robust floor preset - see
-# openwave_link.py's MODE_SNR_TABLE): measured directly while building
+# fmlink_link.py's MODE_SNR_TABLE): measured directly while building
 # this - a Control frame's fixed ~120-byte overhead (preamble+header+CRC+
 # padding) already costs ~81KB at BPSK+r1_4_k9 after pulse-shaping, over
 # the old single-UDP-datagram ceiling (~64KB) before any actual payload
@@ -190,7 +190,7 @@ def _human_size(num_bytes, short=False):
 
 
 def _snr_db_to_evm_percent(snr_db):
-    """Converts openwave_modem.py's estimate_snr_db() output back to an
+    """Converts fmlink_modem.py's estimate_snr_db() output back to an
     EVM_rms percentage - the conventional RF unit for this exact same
     measurement. estimate_snr_db() computes SNR_dB = 10*log10(1/noise_power)
     with signal energy normalized to 1, so noise_power (mean-square error)
@@ -207,7 +207,7 @@ def _snr_db_to_evm_percent(snr_db):
 # output, grouped the way _link_stats_lines()/_link_counts_compact() render
 # them - zero-value counters are always omitted (except 'ok', the anchor
 # metric), so a clean session doesn't drown in "Bad length:0  Truncated:0
-# ..." noise. LinkReceiver.stats_line() itself is untouched (openwave_cli.py
+# ..." noise. LinkReceiver.stats_line() itself is untouched (fmlink_cli.py
 # still uses it directly) - this is a separate, more scannable rendering
 # just for this file's own logging.
 _FRAME_COUNT_LABELS = (('crc_fail', 'crc-fail'), ('bad_length', 'bad-length'),
@@ -306,12 +306,12 @@ def _ping_survey_summary(rows):
 
 
 def _waveform_modes_table():
-    lines = ["Waveform Modes (openwave_link.py's WAVEFORM_MODES):"]
+    lines = ["Waveform Modes (fmlink_link.py's WAVEFORM_MODES):"]
     for mode_id, info in sorted(link.WAVEFORM_MODES.items()):
         lines.append(f"  {mode_id}: {info['modulation']:<5} {info['symbol_rate']:>5} sym/s  "
                      f"(mode's own default fec_preset: {info['fec_preset']})")
     lines.append("")
-    lines.append(f"FEC presets (openwave_fec.py's PRESETS): {', '.join(sorted(fec.PRESETS))}")
+    lines.append(f"FEC presets (fmlink_fec.py's PRESETS): {', '.join(sorted(fec.PRESETS))}")
     return "\n".join(lines)
 
 
@@ -342,7 +342,7 @@ def _help_text():
 
 
 class Station:
-    """One live OpenWave station. connect() to an ota_sim simulator, then
+    """One live FMlink station. connect() to an ota_sim simulator, then
     send text via send_text(); received, decoded messages arrive via the
     on_message callback. Talks to a peer only indirectly, through the
     simulator's relay - never directly to the peer's address."""
@@ -352,7 +352,7 @@ class Station:
                  on_message=None, verbose=False, on_log=None, on_symbols=None, on_ax25=None,
                  phy='iq', audio_port=None, lead_in_s=audio_phy.DEFAULT_LEAD_IN_S,
                  max_tx_s=DEFAULT_MAX_TX_S, batching=True, on_event=None):
-        # Structured events for a live display (openwave_web): on_event(dict)
+        # Structured events for a live display (fmlink_web): on_event(dict)
         # with a 'type' - see _emit() for the list. None (the default) costs
         # nothing.
         self._on_event = on_event
@@ -375,11 +375,11 @@ class Station:
         # Optional GUI hooks - both None by default, in which case behavior
         # is identical to before they existed (_log() prints to stderr as
         # always; nothing extra happens in _handle_received_samples()). See
-        # openwave_ui, which uses these instead of scraping stderr or
+        # fmlink_ui, which uses these instead of scraping stderr or
         # duplicating the RX pipeline to get at received symbols.
         self._on_log = on_log
         self._on_symbols = on_symbols
-        # openwave_tnc.py's hook: called with each received AX.25 frame
+        # fmlink_tnc.py's hook: called with each received AX.25 frame
         # (packet type AX.25), which bypasses the chat link layer entirely.
         self._on_ax25 = on_ax25
         # Ceiling on what --auto is willing to pick (see
@@ -391,7 +391,7 @@ class Station:
         #
         # phy='audio' (a radio's audio port, through ota_sim's FM channel)
         # adds a second, HARD ceiling: the port's passband simply can't
-        # carry faster symbol rates (see openwave_audio.PORT_PROFILES), so
+        # carry faster symbol rates (see fmlink_audio.PORT_PROFILES), so
         # it caps manual /mode and /ping survey too, and /bandwidth wide
         # can't lift it.
         if phy not in ('iq', 'audio'):
@@ -639,9 +639,9 @@ class Station:
 
     def send_ax25(self, ax25_frame, src_call='', dst_call=''):
         """Transmit one AX.25 frame (as KISS carries it) as a single
-        OpenWave frame of packet type AX.25, at the current mode/FEC. No
-        OpenWave ACK or fragmentation: AX.25 does its own. src_call /
-        dst_call go in the OpenWave header (callsigns it can pack, else
+        FMlink frame of packet type AX.25, at the current mode/FEC. No
+        FMlink ACK or fragmentation: AX.25 does its own. src_call /
+        dst_call go in the FMlink header (callsigns it can pack, else
         left blank) - informational, the AX.25 frame carries the real
         addresses. Returns the burst's airtime in seconds."""
         def packable(call):
@@ -670,7 +670,7 @@ class Station:
     async def connect_radio(self, station, tx_level=0.5, capture=None, player=None, turnaround_s=None):
         """Use a radio's audio interface (a radio_stations.py station)
         instead of a simulator. capture / player replace the real audio
-        in and out (openwave_radio.SimulatedAir uses that for testing)."""
+        in and out (fmlink_radio.SimulatedAir uses that for testing)."""
         if self.phy != 'audio':
             raise ValueError("a radio needs --phy audio")
         self._radio_interface = dict(station)   # for link_state()'s 'radio'
@@ -734,7 +734,7 @@ class Station:
         marker_index None (SNR estimated blind afterwards). Audio: each
         (modulation, symbol rate) needs its own demodulation - sps, the
         correlation reference and the drift tracker's decisions all depend
-        on it - cached per pair, with openwave_audio's data-aided snr_db
+        on it - cached per pair, with fmlink_audio's data-aided snr_db
         and where the frame's marker starts in the symbols."""
         if self.phy == 'iq':
             samples = np.frombuffer(payload, dtype=np.complex64)
@@ -767,7 +767,7 @@ class Station:
 
     def _burst_quality(self, frames, modulation, symbols, marker_index, symbol_rate,
                        use_fec, fec_generators, fec_k):
-        """openwave_audio.burst_quality() for a decoded audio burst (average
+        """fmlink_audio.burst_quality() for a decoded audio burst (average
         SNR and fading), or None if nothing decoded. A frame that passed
         CRC can be rebuilt exactly - header, payload, CRC, FEC - so its
         transmitted symbols are known end to end, and the per-symbol error
@@ -915,7 +915,7 @@ class Station:
                            points=np.round(np.stack([pts.real, pts.imag], axis=1), 3).tolist())
         if self.verbose:
             # Full explanation of what this number is/isn't (blind estimate,
-            # no pilot symbols) lives once in openwave_modem.py's
+            # no pilot symbols) lives once in fmlink_modem.py's
             # estimate_snr_db() docstring - repeating it on every burst
             # under --verbose was pure noise.
             self._log(f"[rx] SNR {self._snr_note()} ({matched_modulation})")
@@ -988,7 +988,7 @@ class Station:
 
     def _handle_trailing_bursts(self, payload, recover, modulation, phy_params, frames):
         """A transmission can carry several bursts back to back (burst
-        batching). Over a real radio openwave_radio's BurstDetector splits
+        batching). Over a real radio fmlink_radio's BurstDetector splits
         them before they get here; the simulator delivers the whole
         transmission at once. So after decoding a burst, decode whatever
         follows it in the same audio, if there's enough left to hold one."""
@@ -1030,7 +1030,7 @@ class Station:
 
     def _handle_control_frame(self, header, payload):
         """Dispatches a decoded PACKET_TYPE_CONTROL frame - see
-        openwave_link.py's CONTROL_OP_* constants and this class's
+        fmlink_link.py's CONTROL_OP_* constants and this class's
         negotiate() for the full two-phase handshake (probe so the
         initiator has something to measure, then an authoritative
         MODE_SET both stations end up sharing)."""
@@ -1131,11 +1131,11 @@ class Station:
         (1) probe the peer, since a station can only ever measure signals
         arriving AT it, never what it sends - this station has nothing to
         measure until the peer replies; (2) having now measured its OWN
-        reception of that reply, pick a mode/FEC (openwave_link.py's
+        reception of that reply, pick a mode/FEC (fmlink_link.py's
         MODE_SNR_TABLE/select_mode_for_snr()) and authoritatively tell
         the peer to use it too, via _announce_mode() - both stations end
         up on the SAME mode for BOTH directions, not two independently-
-        chosen ones (see openwave_link.py's CONTROL_OP_* module comment
+        chosen ones (see fmlink_link.py's CONTROL_OP_* module comment
         for the full rationale). Session-scoped: call once before the
         first send_text() (already done automatically - see send_text()),
         or again at any time via /renegotiate; not continuous. Known gap:
@@ -1197,7 +1197,7 @@ class Station:
         finally:
             self._negotiating = False
 
-    # -- settings changed while running (openwave_web, /commands) -----
+    # -- settings changed while running (fmlink_web, /commands) -----
     def _mode_not_allowed(self, mode_id):
         """Why mode_id can't be used now (a str), or None if it can."""
         if mode_id not in link.WAVEFORM_MODES:
@@ -1622,7 +1622,7 @@ class Station:
         With --ack, fragments are sent stop-and-wait: each one is
         transmitted and its OWN ACK awaited (with retry) before the next
         is sent, so a lost fragment only costs that fragment a retry, not
-        the whole message - see openwave_link.py's LinkReceiver, which
+        the whole message - see fmlink_link.py's LinkReceiver, which
         acks every fragment individually as it arrives, not just the last
         one. If any single fragment exhausts its retries, the remaining
         fragments aren't sent - a still-incomplete message isn't worth
@@ -2145,7 +2145,7 @@ async def connect_from_args(station, args):
     """Connect station to a real radio (args.radio, with args.ptt_line and
     args.tx_level) or the ota_sim simulator (args.sim_host/args.sim_port);
     exits with a message on failure. Returns a short description of the
-    link. Shared with openwave_tnc.py."""
+    link. Shared with fmlink_tnc.py."""
     if args.radio is not None:
         try:
             st = dict(radio_stations.pick_local(args.radio or None))
@@ -2172,7 +2172,7 @@ async def connect_from_args(station, args):
 
 async def run(args):
     # --auto's whole point is picking the mode/FEC for you from the
-    # threshold table (see openwave_link.py's MODE_SNR_TABLE), which is
+    # threshold table (see fmlink_link.py's MODE_SNR_TABLE), which is
     # denominated in FEC-preset terms - so it implies FEC is in play even
     # if --fec itself wasn't passed. --fec/--fec-preset still work
     # standalone without --auto, unchanged.
@@ -2279,7 +2279,7 @@ def main():
                               'matching --mode/--fec on both ends - whichever station gets a '
                               'message ready first probes the peer, measures its OWN reception of '
                               'the reply, and picks the best mode/FEC both stations then use (see '
-                              'openwave_link.py\'s MODE_SNR_TABLE). Implies FEC is available even '
+                              'fmlink_link.py\'s MODE_SNR_TABLE). Implies FEC is available even '
                               'without --fec. Runs lazily on this station\'s own first send, not '
                               'eagerly at startup; session-scoped, not continuous - re-run anytime '
                               'with /renegotiate.')

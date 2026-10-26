@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: GPL-3.0
 #
 # GNU Radio Python Flow Graph
-# Title: OpenWave pi/4-QPSK PHY Test
-# Description: OpenWave phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.
+# Title: FMlink pi/4-QPSK PHY Test
+# Description: FMlink phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.
 # GNU Radio version: 3.10.12.0
 
 from PyQt5 import Qt
@@ -34,10 +34,10 @@ import threading
 
 class test2(gr.top_block, Qt.QWidget):
 
-    def __init__(self, msg="OpenWave pi/4-QPSK PHY test 123!", symbol_rate=4800):
-        gr.top_block.__init__(self, "OpenWave pi/4-QPSK PHY Test", catch_exceptions=True)
+    def __init__(self, msg="FMlink pi/4-QPSK PHY test 123!", symbol_rate=4800):
+        gr.top_block.__init__(self, "FMlink pi/4-QPSK PHY Test", catch_exceptions=True)
         Qt.QWidget.__init__(self)
-        self.setWindowTitle("OpenWave pi/4-QPSK PHY Test")
+        self.setWindowTitle("FMlink pi/4-QPSK PHY Test")
         qtgui.util.check_set_qss()
         try:
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
@@ -272,10 +272,10 @@ class test2(gr.top_block, Qt.QWidget):
 
 
 def argument_parser():
-    description = 'OpenWave phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.'
+    description = 'FMlink phase 1 - pi/4-QPSK PHY + preamble/sync-word framing. No header/CRC32/FEC/interleaving yet.'
     parser = ArgumentParser(description=description)
     parser.add_argument(
-        "-m", "--msg", dest="msg", type=str, default="OpenWave pi/4-QPSK PHY test 123!",
+        "-m", "--msg", dest="msg", type=str, default="FMlink pi/4-QPSK PHY test 123!",
         help="Set msg [default=%(default)r]")
     parser.add_argument(
         "-r", "--symbol-rate", dest="symbol_rate", type=intx, default=4800,

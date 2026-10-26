@@ -1,16 +1,16 @@
 """
-Unit tests for openwave_sync.py, tolerant preamble/sync-word correlation.
+Unit tests for fmlink_sync.py, tolerant preamble/sync-word correlation.
 
-    python3 -m unittest tests.test_openwave_sync -v
+    python3 -m unittest tests.test_fmlink_sync -v
 """
 import os
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import openwave_sync as sync
-import openwave_link as link
-import openwave_modem as modem
+import fmlink_sync as sync
+import fmlink_link as link
+import fmlink_modem as modem
 
 
 def _corrupt_bits(bits, indices):
@@ -177,7 +177,7 @@ class IterFramesCorrelatedTests(unittest.TestCase):
 
 
 class SyncGapTests(unittest.TestCase):
-    """Same bug/fix as openwave_fec.decode_frames()'s SyncGapTests, for the
+    """Same bug/fix as fmlink_fec.decode_frames()'s SyncGapTests, for the
     non-FEC --correlate path: obliterating a middle frame's marker must be
     reported as an explicit 'gap', not silently skipped by locking onto a
     later frame's marker with no indication anything was lost."""

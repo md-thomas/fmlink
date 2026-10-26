@@ -14,9 +14,9 @@ import unittest
 
 import numpy as np
 
-import openwave_audio as audio_phy
-import openwave_fec as fec
-import openwave_link as link
+import fmlink_audio as audio_phy
+import fmlink_fec as fec
+import fmlink_link as link
 
 try:
     from ota_sim import FMLink, OTALink
@@ -152,9 +152,9 @@ class OTAStationIntegrationTests(unittest.TestCase):
 
     def test_negotiate_selects_mode_from_channel_snr(self):
         # Regression coverage for the exact miscalibration this feature hit
-        # live: a channel at openwave_fec.py's proven-good 0dB anchor must
+        # live: a channel at fmlink_fec.py's proven-good 0dB anchor must
         # select r1_2_k3, and one at its proven-bad -6dB anchor must fall
-        # back to r1_4_k9 - see openwave_link.py's MODE_SNR_TABLE comment
+        # back to r1_4_k9 - see fmlink_link.py's MODE_SNR_TABLE comment
         # for the real measurements behind these thresholds.
         async def negotiate_at(base_snr_db, seed):
             channel = OTALink(distance_m=1000, reference_distance_m=1000,
@@ -1140,12 +1140,12 @@ class BatchingOverFMTests(unittest.TestCase):
 
 class BatchingOverRadioTests(unittest.TestCase):
     """A batched message through the real radio transport over an in-memory
-    'air' (openwave_radio.SimulatedAir): the burst detector must hand the
+    'air' (fmlink_radio.SimulatedAir): the burst detector must hand the
     station each segment of one transmission cleanly, so the whole message
     goes in one round with no resends."""
 
     def test_one_round_no_resends(self):
-        import openwave_radio as radio
+        import fmlink_radio as radio
 
         async def scenario():
             air = radio.SimulatedAir(noise_rms=0.02)
@@ -1183,7 +1183,7 @@ class BatchingOverRadioTests(unittest.TestCase):
 @unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class EventFeedTests(unittest.TestCase):
     """Station(on_event=...): the structured events a live display
-    (openwave_web) gets - every one JSON-serializable."""
+    (fmlink_web) gets - every one JSON-serializable."""
 
     def test_a_message_exchange_over_fm(self):
         import json
@@ -1246,7 +1246,7 @@ class EventFeedTests(unittest.TestCase):
 
 class RadioEventTests(unittest.TestCase):
     def test_tx_and_level_events_over_simulated_air(self):
-        import openwave_radio as radio
+        import fmlink_radio as radio
 
         async def scenario():
             air = radio.SimulatedAir(noise_rms=0.02)
@@ -1329,7 +1329,7 @@ class LiveSettingsTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_radio_settings(self):
-        import openwave_radio as radio
+        import fmlink_radio as radio
 
         async def scenario():
             st, _ = self._station()
@@ -1389,7 +1389,7 @@ class RadioTestTests(unittest.TestCase):
     """Station.radio_test() and link_state()'s 'radio', over SimulatedAir."""
 
     def test_carrier_and_tone(self):
-        import openwave_radio as radio
+        import fmlink_radio as radio
 
         async def scenario():
             air = radio.SimulatedAir(noise_rms=0.0)

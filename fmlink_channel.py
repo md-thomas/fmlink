@@ -1,12 +1,12 @@
 """
-OpenWave channel simulation: inject noise onto real baseband sample files,
+FMlink channel simulation: inject noise onto real baseband sample files,
 to test the modem/link-layer chain under realistic conditions instead of a
 clean round trip.
 
 Operates at the sample level (post pulse-shaping) - noise is a sample-level
 phenomenon, not a symbol-level one, so this deliberately sits between
 pulseshape.py and matchedfilter.py in the pipeline, not before modulate.py.
-See openwave_pulse.py's module docstring for the equivalent reasoning about
+See fmlink_pulse.py's module docstring for the equivalent reasoning about
 why symbol_rate has no meaning before pulse shaping.
 
 AWGN only for now, matching the archived phy_sim_loopback.grc's

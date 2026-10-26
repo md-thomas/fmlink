@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two complete stations talking over SimulatedAir (openwave_radio), in real
+"""Two complete stations talking over SimulatedAir (fmlink_radio), in real
 time and in one process: the radio transport end to end - burst detection,
 half-duplex muting, PTT queueing, reply timeouts - with no hardware.
 
@@ -15,7 +15,7 @@ import sys
 import time
 
 import ota_station as ota
-import openwave_radio as radio
+import fmlink_radio as radio
 
 
 async def run(args):

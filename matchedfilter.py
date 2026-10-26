@@ -8,14 +8,14 @@ producing a raw complex symbol file compatible with demodulate.py. --alpha/
     python3 matchedfilter.py -i shaped.cfile -o symbols.cfile
 
 This is the other half of the pulse_shape()/matched_filter() round trip -
-see openwave_pulse.py's module docstring for why a single RRC filter alone
+see fmlink_pulse.py's module docstring for why a single RRC filter alone
 isn't zero-ISI, and why both halves are needed for a clean constellation.
 """
 import argparse
 import sys
 
-import openwave_pulse as pulse
-import openwave_modem as modem
+import fmlink_pulse as pulse
+import fmlink_modem as modem
 
 
 def main():

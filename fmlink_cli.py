@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Command-line, file-based testing for OpenWave's link layer - build and parse
-real over-the-air frame bytes using openwave_link.py directly, with no GNU
+Command-line, file-based testing for FMlink's link layer - build and parse
+real over-the-air frame bytes using fmlink_link.py directly, with no GNU
 Radio dependency and no hardware. Useful for verifying framing/CRC/ACK/
 fragmentation/addressing logic end-to-end before it ever touches a modem.
 
@@ -9,17 +9,17 @@ Payload is application-layer content and opaque to the link layer - `send`
 accepts either plain text or a JSON value (encoded to UTF-8 either way);
 `recv` tries to json.loads() each decoded message and pretty-prints it if it
 parses, falling back to plain text otherwise. The link layer itself doesn't
-know or care which it was - see openwave_link.py's docstring.
+know or care which it was - see fmlink_link.py's docstring.
 
 Examples:
-    python3 openwave_cli.py send "hello world" -o burst.bin
-    python3 openwave_cli.py send --json '{"cmd": "ping", "n": 1}' -o burst.bin --append
-    python3 openwave_cli.py recv -i burst.bin
+    python3 fmlink_cli.py send "hello world" -o burst.bin
+    python3 fmlink_cli.py send --json '{"cmd": "ping", "n": 1}' -o burst.bin --append
+    python3 fmlink_cli.py recv -i burst.bin
 
     # simulate two stations exchanging addressed traffic in one file:
-    python3 openwave_cli.py send "for w1aw" -o net.bin --src K0MDT --dst W1AW
-    python3 openwave_cli.py send "for all"  -o net.bin --src K0MDT --dst ALL --append
-    python3 openwave_cli.py recv -i net.bin --station-id W1AW
+    python3 fmlink_cli.py send "for w1aw" -o net.bin --src K0MDT --dst W1AW
+    python3 fmlink_cli.py send "for all"  -o net.bin --src K0MDT --dst ALL --append
+    python3 fmlink_cli.py recv -i net.bin --station-id W1AW
 
 See `send -h` / `recv -h` for all options.
 """
@@ -29,8 +29,8 @@ import json
 import os
 import sys
 
-import openwave_link as link
-import openwave_sync as sync
+import fmlink_link as link
+import fmlink_sync as sync
 
 
 def _encode_payload(args):
@@ -257,7 +257,7 @@ def cmd_recv(args):
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    # Not required: a bare `openwave_cli.py` with no command prints help
+    # Not required: a bare `fmlink_cli.py` with no command prints help
     # (see the args.command is None check below) instead of an argparse error.
     sub = parser.add_subparsers(dest='command')
 
@@ -313,7 +313,7 @@ def main():
                          help='Find frames via tolerant Hamming-distance correlation against the '
                               'preamble+sync-word instead of an exact byte match - use this for '
                               'data that may have come through a noisy channel (e.g. channel.py). '
-                              'See openwave_sync.py for why the exact-match default gains nothing '
+                              'See fmlink_sync.py for why the exact-match default gains nothing '
                               'from the preamble being a PRN sequence.')
     p_dump.add_argument('--max-error-fraction', type=float, default=sync.DEFAULT_MAX_ERROR_FRACTION,
                          help='With --correlate, max fraction of the 288-bit marker allowed to be '
@@ -339,7 +339,7 @@ def main():
                          help='Find frames via tolerant Hamming-distance correlation against the '
                               'preamble+sync-word instead of an exact byte match - use this for '
                               'data that may have come through a noisy channel (e.g. channel.py). '
-                              'See openwave_sync.py for why the exact-match default gains nothing '
+                              'See fmlink_sync.py for why the exact-match default gains nothing '
                               'from the preamble being a PRN sequence.')
     p_recv.add_argument('--max-error-fraction', type=float, default=sync.DEFAULT_MAX_ERROR_FRACTION,
                          help='With --correlate, max fraction of the 288-bit marker allowed to be '

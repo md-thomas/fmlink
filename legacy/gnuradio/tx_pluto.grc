@@ -6,7 +6,7 @@ options:
     cmake_opt: ''
     comment: ''
     copyright: ''
-    description: OpenWave hardware bring-up - TX half, drives a PlutoSDR. Repeats the message as a beacon so the RX side (rx_rtlsdr.grc, RTL-SDR) can be tuned/found without coordinating manual send timing across two separate radios.
+    description: FMlink hardware bring-up - TX half, drives a PlutoSDR. Repeats the message as a beacon so the RX side (rx_rtlsdr.grc, RTL-SDR) can be tuned/found without coordinating manual send timing across two separate radios.
     gen_cmake: 'On'
     gen_linking: dynamic
     generate_options: qt_gui
@@ -22,7 +22,7 @@ options:
     run_options: prompt
     sizing_mode: fixed
     thread_safe_setters: ''
-    title: OpenWave TX (PlutoSDR)
+    title: FMlink TX (PlutoSDR)
     window_size: (600,300)
   states:
     bus_sink: false
@@ -79,7 +79,7 @@ blocks:
 - name: radio_rate
   id: variable
   parameters:
-    comment: Pluto's actual DAC sample rate. Fixed at 960 kHz - a clean integer multiple of baseband_rate for every OpenWave mode (600/1200/2400/4800/9600 baud * sps=4), and comfortably within Pluto's valid sample-rate range.
+    comment: Pluto's actual DAC sample rate. Fixed at 960 kHz - a clean integer multiple of baseband_rate for every FMlink mode (600/1200/2400/4800/9600 baud * sps=4), and comfortably within Pluto's valid sample-rate range.
     value: '960000'
   states:
     bus_sink: false
@@ -243,7 +243,7 @@ blocks:
     label: ''
     short_id: m
     type: str
-    value: '"OpenWave pi/4-QPSK PHY test 123!"'
+    value: '"FMlink pi/4-QPSK PHY test 123!"'
   states:
     bus_sink: false
     bus_source: false
@@ -257,7 +257,7 @@ blocks:
   id: parameter
   parameters:
     alias: ''
-    comment: symbol rate in baud - one of the OpenWave modes 600/1200/2400/4800/9600. Must match rx_rtlsdr.grc's symbol_rate.
+    comment: symbol rate in baud - one of the FMlink modes 600/1200/2400/4800/9600. Must match rx_rtlsdr.grc's symbol_rate.
     hide: none
     label: ''
     short_id: r
@@ -503,9 +503,9 @@ blocks:
 - name: str_to_pdu_0
   id: epy_block
   parameters:
-    _source_code: "\"\"\"\nWraps an incoming string message (from a QT GUI Message Edit Box or the\nbeacon strobe) into full OpenWave link-layer frame(s) - preamble, sync word,\nheader (with real Payload Length, Sequence Number, and Flags fields), payload,\nand CRC32 - using the shared openwave_link module so TX and RX can't drift out\nof sync on the framing format. Ready for PDU to Tagged Stream.\n\nMessages longer than openwave_link.MAX_PAYLOAD_LEN are automatically split\ninto multiple fragment frames (openwave_link.build_fragmented_frames) - each\nfragment is published as a separate PDU/burst, transparently to whoever\ncalled handle_msg. Sequence Number increments once per fragment (not once per\nlogical message): a fragmented message consumes several consecutive seq\nnumbers, one per fragment, since that's how RX's FragmentReassembler\ncorrelates them (see openwave_link.py's module docstring for the protocol-\ndesign gap this works around - there's no dedicated fragment-index field).\n\
-      \nack_requested sets the Flags byte's ACK Requested bit and engages\nopenwave_link.RetryManager, but ONLY for messages that fit in a single frame.\nRetryManager tracks one pending frame at a time, so partially tracking just a\nfragmented message's last fragment wouldn't actually guarantee the whole\nmessage arrived - fragmented sends are deliberately not ACK/retry-tracked in\nthis phase, regardless of ack_requested.\n\nIf 'tick' (wired to a periodic message strobe in the .grc) fires and the\npending (unfragmented) frame has timed out, it's retransmitted, up to\nack_max_retries times before giving up (published on 'delivery_failed'). Feed\na received ACK's seq into 'ack_received' to resolve a pending retry - nothing\nin this flowgraph currently wires that from a real over-the-air ACK (see\nstream_display_sink_0's docstring for why), so on tx_pluto.grc/\nphy_sim_loopback.grc as they stand today, ack_requested frames will always\neventually hit 'delivery_failed' - the retry logic itself\
-      \ is real and tested,\njust not yet connected to a real return path.\n\"\"\"\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport openwave_link as link\n\n\nclass blk(gr.basic_block):\n    \"\"\"String to OpenWave Frame PDU\"\"\"\n\n    def __init__(self, lead_pad=24, end_pad=24, ack_requested=False,\n                 ack_max_retries=3, ack_timeout_s=2.0):\n        gr.basic_block.__init__(self, name='String to OpenWave Frame PDU', in_sig=[], out_sig=[])\n        self.lead_pad = lead_pad\n        self.end_pad = end_pad\n        self.ack_requested = ack_requested\n        self.flags = link.FLAG_ACK_REQUESTED if ack_requested else 0\n        self.seq = 0\n        self.retry_mgr = link.RetryManager(max_retries=ack_max_retries, timeout_s=ack_timeout_s)\n        self._pending_payload = None\n        self.message_port_register_in(pmt.intern('msg'))\n        self.message_port_register_in(pmt.intern('ack_received'))\n\
+    _source_code: "\"\"\"\nWraps an incoming string message (from a QT GUI Message Edit Box or the\nbeacon strobe) into full FMlink link-layer frame(s) - preamble, sync word,\nheader (with real Payload Length, Sequence Number, and Flags fields), payload,\nand CRC32 - using the shared fmlink_link module so TX and RX can't drift out\nof sync on the framing format. Ready for PDU to Tagged Stream.\n\nMessages longer than fmlink_link.MAX_PAYLOAD_LEN are automatically split\ninto multiple fragment frames (fmlink_link.build_fragmented_frames) - each\nfragment is published as a separate PDU/burst, transparently to whoever\ncalled handle_msg. Sequence Number increments once per fragment (not once per\nlogical message): a fragmented message consumes several consecutive seq\nnumbers, one per fragment, since that's how RX's FragmentReassembler\ncorrelates them (see fmlink_link.py's module docstring for the protocol-\ndesign gap this works around - there's no dedicated fragment-index field).\n\
+      \nack_requested sets the Flags byte's ACK Requested bit and engages\nfmlink_link.RetryManager, but ONLY for messages that fit in a single frame.\nRetryManager tracks one pending frame at a time, so partially tracking just a\nfragmented message's last fragment wouldn't actually guarantee the whole\nmessage arrived - fragmented sends are deliberately not ACK/retry-tracked in\nthis phase, regardless of ack_requested.\n\nIf 'tick' (wired to a periodic message strobe in the .grc) fires and the\npending (unfragmented) frame has timed out, it's retransmitted, up to\nack_max_retries times before giving up (published on 'delivery_failed'). Feed\na received ACK's seq into 'ack_received' to resolve a pending retry - nothing\nin this flowgraph currently wires that from a real over-the-air ACK (see\nstream_display_sink_0's docstring for why), so on tx_pluto.grc/\nphy_sim_loopback.grc as they stand today, ack_requested frames will always\neventually hit 'delivery_failed' - the retry logic itself\
+      \ is real and tested,\njust not yet connected to a real return path.\n\"\"\"\nfrom gnuradio import gr\nimport pmt\nimport sys, os\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nimport fmlink_link as link\n\n\nclass blk(gr.basic_block):\n    \"\"\"String to FMlink Frame PDU\"\"\"\n\n    def __init__(self, lead_pad=24, end_pad=24, ack_requested=False,\n                 ack_max_retries=3, ack_timeout_s=2.0):\n        gr.basic_block.__init__(self, name='String to FMlink Frame PDU', in_sig=[], out_sig=[])\n        self.lead_pad = lead_pad\n        self.end_pad = end_pad\n        self.ack_requested = ack_requested\n        self.flags = link.FLAG_ACK_REQUESTED if ack_requested else 0\n        self.seq = 0\n        self.retry_mgr = link.RetryManager(max_retries=ack_max_retries, timeout_s=ack_timeout_s)\n        self._pending_payload = None\n        self.message_port_register_in(pmt.intern('msg'))\n        self.message_port_register_in(pmt.intern('ack_received'))\n\
       \        self.message_port_register_in(pmt.intern('tick'))\n        self.message_port_register_out(pmt.intern('pdus'))\n        self.message_port_register_out(pmt.intern('delivery_failed'))\n        self.set_msg_handler(pmt.intern('msg'), self.handle_msg)\n        self.set_msg_handler(pmt.intern('ack_received'), self.handle_ack_received)\n        self.set_msg_handler(pmt.intern('tick'), self.handle_tick)\n\n    def _publish_frame(self, frame):\n        pdu = pmt.cons(pmt.make_dict(), pmt.init_u8vector(len(frame), list(frame)))\n        self.message_port_pub(pmt.intern('pdus'), pdu)\n\n    def _send_single_frame(self, payload, seq):\n        \"\"\"Used only for retransmitting an already-unfragmented pending frame -\n        fragmented messages are never retry-tracked, see class docstring.\"\"\"\n        frame = link.build_frame(payload, lead_pad=self.lead_pad, end_pad=self.end_pad,\n                                  seq=seq, flags=self.flags)\n        self._publish_frame(frame)\n\n\
       \    def handle_msg(self, msg):\n        if pmt.is_pair(msg):\n            msg = pmt.cdr(msg)\n        text = pmt.symbol_to_string(msg) if pmt.is_symbol(msg) else str(msg)\n        payload = text.encode('utf-8')\n\n        frames, next_seq = link.build_fragmented_frames(\n            payload, seq_start=self.seq, flags=self.flags,\n            lead_pad=self.lead_pad, end_pad=self.end_pad,\n        )\n        fragmented = len(frames) > 1\n        first_seq = self.seq\n        self.seq = next_seq\n\n        for frame in frames:\n            self._publish_frame(frame)\n\n        if self.ack_requested and not fragmented:\n            self._pending_payload = payload\n            self.retry_mgr.note_sent(first_seq)\n\n    def handle_ack_received(self, msg):\n        acked_seq = pmt.to_long(msg)\n        self.retry_mgr.note_ack(acked_seq)\n\n    def handle_tick(self, msg):\n        status = self.retry_mgr.poll()\n        if status == 'retry':\n            seq = self.retry_mgr.pending_seq\n\
       \            self._send_single_frame(self._pending_payload, seq)\n            self.retry_mgr.note_sent(seq)\n        elif status == 'give_up':\n            self.message_port_pub(pmt.intern('delivery_failed'), pmt.from_long(self.seq))\n            self._pending_payload = None\n"
@@ -520,7 +520,7 @@ blocks:
     ack_max_retries: '3'
     ack_timeout_s: '2.0'
   states:
-    _io_cache: ('String to OpenWave Frame PDU', 'blk', [('lead_pad', '24'), ('end_pad', '24'), ('ack_requested', 'False'), ('ack_max_retries', '3'), ('ack_timeout_s', '2.0')], [('msg', 'message', 1), ('ack_received', 'message', 1), ('tick', 'message', 1)], [('pdus', 'message', 1), ('delivery_failed', 'message', 1)], 'String to OpenWave Frame PDU', ['lead_pad', 'end_pad', 'ack_requested', 'ack_max_retries', 'ack_timeout_s'])
+    _io_cache: ('String to FMlink Frame PDU', 'blk', [('lead_pad', '24'), ('end_pad', '24'), ('ack_requested', 'False'), ('ack_max_retries', '3'), ('ack_timeout_s', '2.0')], [('msg', 'message', 1), ('ack_received', 'message', 1), ('tick', 'message', 1)], [('pdus', 'message', 1), ('delivery_failed', 'message', 1)], 'String to FMlink Frame PDU', ['lead_pad', 'end_pad', 'ack_requested', 'ack_max_retries', 'ack_timeout_s'])
     bus_sink: false
     bus_source: false
     bus_structure: null

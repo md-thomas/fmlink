@@ -1,28 +1,30 @@
-# OpenWave - Implementation Overview
+# FMlink - Implementation Overview
+
+*(Formerly OpenWave - renamed 2026-10-25.)*
 
 This file explains what's actually in this repo and how the pieces fit
-together. OpenWave is a link-layer/framing protocol (header, CRC, ACK,
+together. FMlink is a link-layer/framing protocol (header, CRC, ACK,
 fragmentation, FEC) designed to work over a pluggable PHY rather than being
-tied to any one modulation - see `openwave_link.py`'s `WAVEFORM_MODES`. The
+tied to any one modulation - see `fmlink_link.py`'s `WAVEFORM_MODES`. The
 pure-Python CLI pipeline below (BPSK/QPSK/16-QAM today) is the actively
 developed PHY implementation. For the protocol/wire-format spec itself
 (frame layout, header fields, Waveform Modes), see
-[OpenWave_Specification.txt](OpenWave_Specification.txt). For the current
+[FMlink_Specification.txt](FMlink_Specification.txt). For the current
 status of each piece and what's not done yet, see
 [tasklist.txt](tasklist.txt).
 
 ## File map
 
-**`openwave_link.py`**
+**`fmlink_link.py`**
 The link layer. Header build/parse, CRC32, ACK/retry, fragmentation, the
 preamble/sync-word, and a full RX dispatch implementation (`LinkReceiver`)
 - all pure Python, zero GNU Radio dependency. This is the single source of
 truth for the framing format, and the `WAVEFORM_MODES` table is the
 PHY-plugin contract (modulation/symbol rate/FEC preset per Waveform Mode
-ID). See its module docstring and `tests/test_openwave_link.py` for the
+ID). See its module docstring and `tests/test_fmlink_link.py` for the
 full API.
 
-**`openwave_cli.py`**
+**`fmlink_cli.py`**
 Command-line, file-based testing of the link layer - build and parse real
 frame bytes with no GNU Radio and no hardware. `send` writes a frame to a
 file (plain text, `--json`, `--file` for raw binary payloads like a PNG, or
@@ -32,38 +34,38 @@ labels every field of every frame in a file; `recv` decodes a file through
 the full `LinkReceiver` pipeline (`--output-file` / `--save-attachment` to
 write `--file`/`--attach` content back out without lossy text decoding).
 Both `dump`/`recv` take an optional `--correlate` flag (see
-`openwave_sync.py` below) for data that came through a noisy channel. Run
-`python3 openwave_cli.py help` (or `send -h` / `recv -h`) for full usage
+`fmlink_sync.py` below) for data that came through a noisy channel. Run
+`python3 fmlink_cli.py help` (or `send -h` / `recv -h`) for full usage
 and examples.
 
-**`openwave_sync.py`**
+**`fmlink_sync.py`**
 Tolerant frame synchronization: finds the preamble+sync-word via a sliding
 Hamming-distance correlator (like the archived flowgraphs'
 `digital_correlate_access_code_tag_bb`) instead of requiring an exact byte
 match. This is what actually lets the PRN preamble's noise resilience do
 anything in this file-based pipeline - see its module docstring. Used via
-`openwave_cli.py`'s `--correlate` flag.
+`fmlink_cli.py`'s `--correlate` flag.
 
-**`openwave_modem.py`**
+**`fmlink_modem.py`**
 PHY-layer bits <-> symbols mapping: BPSK, QPSK, and 16-QAM today (see
 `tasklist.txt` Phase 6 for the eventual multi-mode plan, e.g. 8PSK/OFDM).
 Pure Python, zero dependencies. Deliberately has no symbol-rate concept -
 see its module docstring for why that's a hard boundary until pulse
 shaping.
 
-**`openwave_pulse.py`**
+**`fmlink_pulse.py`**
 RRC pulse shaping: symbols <-> real timed samples. Needs numpy - the first
 stage where a real DSP dependency became unavoidable. `alpha=0.35` and an
 11-symbol filter span match the convention used by the archived
 flowgraphs' `firdes.root_raised_cosine()` calls.
 
-**`openwave_channel.py`**
+**`fmlink_channel.py`**
 AWGN channel simulation - add noise to a sample file, either by direct
 `noise_voltage` or a target SNR in dB measured against the file's own
-signal power. Sample-level, same reasoning as `openwave_pulse.py` for why
+signal power. Sample-level, same reasoning as `fmlink_pulse.py` for why
 this only makes sense after pulse shaping, not before.
 
-**`openwave_audio.py`**
+**`fmlink_audio.py`**
 Audio-subcarrier PHY: symbols <-> real 48 kHz audio on a carrier tone, for
 driving a radio's audio port instead of exchanging complex baseband IQ.
 The receiver recovers timing, carrier phase and level by correlating
@@ -79,7 +81,7 @@ with a visualization step in the middle. See "PHY-Layer Pipeline" below for
 the full command sequence, what each stage does, and why matched filtering
 is required (not optional) for a clean constellation.
 
-**`openwave_fec.py`**
+**`fmlink_fec.py`**
 Forward error correction: convolutional encoding + hard-decision Viterbi
 decoding (numpy-vectorized - see its module docstring), fully parameterized
 by generator polynomials/constraint length K rather than hardcoded to one
@@ -97,20 +99,20 @@ an FM fade reaches the decoder as scattered errors it can correct.
 for comparisons; both ends must match.
 
 **`fec_encode.py` / `fec_decode.py`**
-CLI wrappers around `openwave_fec.py`: encode a built frame (or a whole
+CLI wrappers around `fmlink_fec.py`: encode a built frame (or a whole
 `build_fragmented_frames()` run - every fragment is protected
 independently) before `modulate.py`, and decode+correct a possibly-noisy
-received frame after `demodulate.py`, using `openwave_sync.py`'s tolerant
+received frame after `demodulate.py`, using `fmlink_sync.py`'s tolerant
 correlator to find each fragment's sync (falling back to an unbounded
 search and reporting an explicit `gap` status if a fragment's marker didn't
-survive the channel at all - see `openwave_sync.py`'s
+survive the channel at all - see `fmlink_sync.py`'s
 `FRAGMENT_GAP_SEARCH_BITS` for why this matters: an unbounded-only search
 would silently lock onto a LATER fragment instead, with no indication the
 one in between was lost). See `-h` on either for full usage; see "FEC +
 Full File Transfer Testing" below for how they fit into the full pipeline.
 
-**`openwave_fec_generate_presets.py`**
-Regenerates/extends `openwave_fec.py`'s `PRESETS` table via
+**`fmlink_fec_generate_presets.py`**
+Regenerates/extends `fmlink_fec.py`'s `PRESETS` table via
 `find_generators()`'s free-distance search - prints ready-to-paste Python
 source, doesn't edit the file for you. Run with `-h` for options (which
 rates/K values to search, candidate count, RNG seed).
@@ -134,7 +136,7 @@ takes settings changes while running (`update_settings()`, also the
 `/tx-level`, `/turnaround`, `/max-tx`, `/batch` commands) - what the web
 interface below is built on.
 
-**Web interface: [openwave_web](../openwave_web)** (a separate repo, next
+**Web interface: [fmlink_web](../fmlink_web)** (a separate repo, next
 to this one)
 Runs one station with a browser interface, opened from any computer or
 phone on the network: chat with delivery progress, the link's SNR over
@@ -144,7 +146,7 @@ batching, ...), and PTT / test-tone checks. FastAPI backend in the
 station's own process, Svelte frontend.
 
 **Real-radio support** (all described in [RADIO_SETUP.md](RADIO_SETUP.md)):
-`openwave_radio.py` (the radio transport `ota_station.py --radio` uses:
+`fmlink_radio.py` (the radio transport `ota_station.py --radio` uses:
 continuous burst detection, queued PTT transmit, half-duplex muting, and an
 in-memory `SimulatedAir` for hardware-free tests), `radio_stations.py`
 (auto-detects AIOC and Digirig interfaces; `stations.toml` holds per-interface
@@ -156,13 +158,13 @@ overrides), `ptt_play.py` (key PTT, play a WAV, release), `level_meter.py`
 hardware), and `audio_wav_test.py` (generate/decode burst WAV files
 offline).
 
-**`openwave_kiss.py` / `openwave_tnc.py`**
-OpenWave as a KISS TNC, so standard packet software can use it as its
-modem. `openwave_kiss.py` is the KISS framing codec (plain KISS plus the
+**`fmlink_kiss.py` / `fmlink_tnc.py`**
+FMlink as a KISS TNC, so standard packet software can use it as its
+modem. `fmlink_kiss.py` is the KISS framing codec (plain KISS plus the
 SMACK and FlexNet CRC variants Linux's `mkiss` driver uses) and AX.25
-address helpers. `openwave_tnc.py` serves KISS over TCP and a
+address helpers. `fmlink_tnc.py` serves KISS over TCP and a
 pseudo-terminal (for `kissattach`) on top of the station's modem, over the
-simulator or a real radio. See "Packet radio and Winlink: OpenWave as a KISS
+simulator or a real radio. See "Packet radio and Winlink: FMlink as a KISS
 TNC" below, and [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) for the design and
 milestones.
 
@@ -182,21 +184,21 @@ the link layer's negotiation and ACK flow, and the modes and carriers.
 **`legacy/gnuradio/`**
 The project's original GNU Radio pi/4-QPSK PHY chain (`phy_sim_loopback.grc`,
 `tx_pluto.grc`, `rx_rtlsdr.grc`, and early prototypes) - the initial
-testbench OpenWave was built and validated against, archived (not deleted)
+testbench FMlink was built and validated against, archived (not deleted)
 once the project repositioned around a pluggable PHY. See
 [legacy/gnuradio/README.md](legacy/gnuradio/README.md) for the full
 flowgraph walkthrough and how to run its GNU-Radio-dependent tests.
 
 **`tests/`**
 Regression suite - run everything with `./run_tests.sh`, or a single module
-with `./run_tests.sh tests.test_openwave_link`. All of these are fast,
+with `./run_tests.sh tests.test_fmlink_link`. All of these are fast,
 pure-Python, and need no GNU Radio:
-- `test_openwave_link.py` - link layer: header/CRC/ACK/fragmentation
-- `test_openwave_modem.py` - bits<->symbols mapping (BPSK/QPSK/16-QAM)
-- `test_openwave_pulse.py` - RRC pulse shaping/matched filtering
-- `test_openwave_channel.py` - AWGN channel simulation
-- `test_openwave_sync.py` - tolerant Hamming-distance sync correlator
-- `test_openwave_fec.py` - convolutional encode/Viterbi decode, FEC
+- `test_fmlink_link.py` - link layer: header/CRC/ACK/fragmentation
+- `test_fmlink_modem.py` - bits<->symbols mapping (BPSK/QPSK/16-QAM)
+- `test_fmlink_pulse.py` - RRC pulse shaping/matched filtering
+- `test_fmlink_channel.py` - AWGN channel simulation
+- `test_fmlink_sync.py` - tolerant Hamming-distance sync correlator
+- `test_fmlink_fec.py` - convolutional encode/Viterbi decode, FEC
   presets, multi-fragment FEC, sync-gap handling
 
 The GNU-Radio-dependent tests (former `test_phy_loopback.py`/
@@ -214,25 +216,25 @@ even after `--attach`'s base64 inflation (~33%). Live in the sibling
 `web_siggen` project, not this repo - regenerate with a short PIL/numpy
 script if ever needed again at a different size.
 
-## openwave_cli.py - File-Based Link-Layer Testing
+## fmlink_cli.py - File-Based Link-Layer Testing
 
-Run `python3 openwave_cli.py help` (or with no arguments) for full usage.
+Run `python3 fmlink_cli.py help` (or with no arguments) for full usage.
 Quick reference:
 
 **`send`: build a frame and write it to a file**
 ```bash
-python3 openwave_cli.py send "hello world" -o burst.bin
-python3 openwave_cli.py send --json '{"cmd": "ping"}' -o burst.bin
-python3 openwave_cli.py send "for w1aw" -o net.bin --src K0MDT --dst W1AW
-python3 openwave_cli.py send "long msg..." -o frag.bin --chunk-size 4
+python3 fmlink_cli.py send "hello world" -o burst.bin
+python3 fmlink_cli.py send --json '{"cmd": "ping"}' -o burst.bin
+python3 fmlink_cli.py send "for w1aw" -o net.bin --src K0MDT --dst W1AW
+python3 fmlink_cli.py send "long msg..." -o frag.bin --chunk-size 4
 ```
 
 Negative testing - inject a specific kind of bad frame on purpose:
 ```bash
-python3 openwave_cli.py send "x" -o bad.bin --corrupt-crc
-python3 openwave_cli.py send "x" -o bad.bin --corrupt-payload
-python3 openwave_cli.py send "x" -o bad.bin --corrupt-header
-python3 openwave_cli.py send "x" -o bad.bin --bad-length 9999
+python3 fmlink_cli.py send "x" -o bad.bin --corrupt-crc
+python3 fmlink_cli.py send "x" -o bad.bin --corrupt-payload
+python3 fmlink_cli.py send "x" -o bad.bin --corrupt-header
+python3 fmlink_cli.py send "x" -o bad.bin --bad-length 9999
 ```
 
 Send a whole binary file (e.g. a PNG/JPG) as the payload, no text -
@@ -240,41 +242,41 @@ exercises fragmentation on real, non-repeating binary content instead of
 just text (a good stress test - a several-hundred-KB image needs dozens of
 fragments):
 ```bash
-python3 openwave_cli.py send --file photo.png -o img.bin
+python3 fmlink_cli.py send --file photo.png -o img.bin
 ```
 
 Send a text message WITH a file attached - a JSON envelope
 (`{text, filename, attachment_b64}`) over the existing `--json` payload
 path, since the link layer only ever sees opaque bytes either way:
 ```bash
-python3 openwave_cli.py send "check this out" --attach photo.png -o msg.bin
+python3 fmlink_cli.py send "check this out" --attach photo.png -o msg.bin
 ```
 
 **`dump`: hex-dump and label every field of every frame in a file**
 ```bash
-python3 openwave_cli.py dump -i burst.bin
+python3 fmlink_cli.py dump -i burst.bin
 ```
 
 **`recv`: decode a file through the full LinkReceiver pipeline**
 ```bash
-python3 openwave_cli.py recv -i burst.bin --station-id W1AW
+python3 fmlink_cli.py recv -i burst.bin --station-id W1AW
 ```
 
 Recover a `send --file` binary payload - plain `recv` would corrupt it via
 lossy UTF-8 text decoding, so this writes the raw undecoded bytes instead
 of printing them:
 ```bash
-python3 openwave_cli.py recv -i img.bin --output-file recovered.png
+python3 fmlink_cli.py recv -i img.bin --output-file recovered.png
 ```
 
 Recover a `send --attach` message: text still prints normally, and
 `--save-attachment` extracts+writes the attachment (base64-decoded):
 ```bash
-python3 openwave_cli.py recv -i msg.bin --save-attachment recovered.png
+python3 fmlink_cli.py recv -i msg.bin --save-attachment recovered.png
 ```
 
 None of this touches GNU Radio or any hardware - it exercises
-`openwave_link.py` directly, which is useful both for quick sanity-checking
+`fmlink_link.py` directly, which is useful both for quick sanity-checking
 the framing logic and for offline analysis of a real capture (see the
 archived `rx_rtlsdr.grc`'s `capture_file` parameter,
 [legacy/gnuradio/README.md](legacy/gnuradio/README.md)).
@@ -288,7 +290,7 @@ testing/understanding the modem in isolation, and a step toward the
 eventual GNU-Radio-free stack (see `tasklist.txt`'s "No GNU Radio,
 eventually" note under Phase 5).
 
-Requires numpy (`openwave_pulse.py`) and plotly (`plot_constellation.py`
+Requires numpy (`fmlink_pulse.py`) and plotly (`plot_constellation.py`
 only). Neither is a GNU Radio dependency - if the system Python is
 externally managed (PEP 668, e.g. Debian/Ubuntu) and you don't want a venv:
 ```bash
@@ -299,61 +301,61 @@ All intermediate files below go to a scratch directory under `/tmp`, not
 the repo, so nothing generated by hand-testing ends up tracked or clutters
 `git status`:
 ```bash
-mkdir -p /tmp/openwave-manual && cd /tmp/openwave-manual
+mkdir -p /tmp/fmlink-manual && cd /tmp/fmlink-manual
 ```
 (Run the `python3 ...` commands below from the repo root as usual - just
-point their `-i`/`-o` paths at `/tmp/openwave-manual/...` as shown.)
+point their `-i`/`-o` paths at `/tmp/fmlink-manual/...` as shown.)
 
 Full pipeline, one stage at a time:
 
 ```bash
-# 1. Build a real OpenWave frame (see openwave_cli.py above)
-python3 openwave_cli.py send "hello world" -o /tmp/openwave-manual/test.bin --src K0MDT --dst W1AW
+# 1. Build a real FMlink frame (see fmlink_cli.py above)
+python3 fmlink_cli.py send "hello world" -o /tmp/fmlink-manual/test.bin --src K0MDT --dst W1AW
 
 # 2. Inspect the frame's fields by hand
-python3 openwave_cli.py dump -i /tmp/openwave-manual/test.bin
+python3 fmlink_cli.py dump -i /tmp/fmlink-manual/test.bin
 
 # 3. Modulate: bits -> BPSK symbols (no sample rate involved yet)
-python3 modulate.py -t bpsk -i /tmp/openwave-manual/test.bin -o /tmp/openwave-manual/symbols.cfile
+python3 modulate.py -t bpsk -i /tmp/fmlink-manual/test.bin -o /tmp/fmlink-manual/symbols.cfile
 
 # 4. Pulse-shape: symbols -> oversampled RRC baseband samples
-python3 pulseshape.py -i /tmp/openwave-manual/symbols.cfile -o /tmp/openwave-manual/shaped.cfile
+python3 pulseshape.py -i /tmp/fmlink-manual/symbols.cfile -o /tmp/fmlink-manual/shaped.cfile
 
 # 5. Plot BEFORE matched filtering - expect a smeared line, not clean
 #    points (a single RRC filter alone is NOT zero-ISI)
-python3 plot_constellation.py -i /tmp/openwave-manual/shaped.cfile -o /tmp/openwave-manual/before_mf.html \
+python3 plot_constellation.py -i /tmp/fmlink-manual/shaped.cfile -o /tmp/fmlink-manual/before_mf.html \
     --title "before matched filter"
 
 # 6. (Optional) simulate a noisy channel - insert here, between pulse
 #    shaping and the matched filter (noise is a sample-level thing).
 #    Skip this step entirely for a clean round trip.
-python3 channel.py -i /tmp/openwave-manual/shaped.cfile -o /tmp/openwave-manual/noisy.cfile --snr-db 10
+python3 channel.py -i /tmp/fmlink-manual/shaped.cfile -o /tmp/fmlink-manual/noisy.cfile --snr-db 10
 #    (or: --noise-voltage 0.05 for a direct value instead of target SNR)
 
 # 7. Matched filter + decimate: back down to one sample/symbol.
 #    Input is noisy.cfile if you did step 6, shaped.cfile if you skipped it.
-python3 matchedfilter.py -i /tmp/openwave-manual/noisy.cfile -o /tmp/openwave-manual/recovered_symbols.cfile
+python3 matchedfilter.py -i /tmp/fmlink-manual/noisy.cfile -o /tmp/fmlink-manual/recovered_symbols.cfile
 
 # 8. Plot AFTER matched filtering - expect two clean dots at +/-1.0 with
 #    no noise, or two fuzzy clusters around +/-1.0 with noise added
 #    (TX RRC + RX RRC in cascade = a full raised-cosine response,
 #    which IS zero-ISI at the correct symbol-spaced sampling instant)
-python3 plot_constellation.py -i /tmp/openwave-manual/recovered_symbols.cfile -o /tmp/openwave-manual/after_mf.html \
+python3 plot_constellation.py -i /tmp/fmlink-manual/recovered_symbols.cfile -o /tmp/fmlink-manual/after_mf.html \
     --title "after matched filter"
 
 # 9. Demodulate: symbols -> bits/bytes
-python3 demodulate.py -t bpsk -i /tmp/openwave-manual/recovered_symbols.cfile -o /tmp/openwave-manual/out.bin
+python3 demodulate.py -t bpsk -i /tmp/fmlink-manual/recovered_symbols.cfile -o /tmp/fmlink-manual/out.bin
 
 # 10. Verify the round trip reproduced the original frame exactly
 #     (expect this to fail at low enough SNR - that's the point)
-cmp /tmp/openwave-manual/test.bin /tmp/openwave-manual/out.bin && echo "IDENTICAL"
+cmp /tmp/fmlink-manual/test.bin /tmp/fmlink-manual/out.bin && echo "IDENTICAL"
 
 # 11. Confirm it still decodes correctly through the link layer
-python3 openwave_cli.py recv -i /tmp/openwave-manual/out.bin
+python3 fmlink_cli.py recv -i /tmp/fmlink-manual/out.bin
 ```
 
 Notes:
-- `openwave_cli.py`'s `dump`/`recv` only understand byte-level frame files
+- `fmlink_cli.py`'s `dump`/`recv` only understand byte-level frame files
   (`test.bin`/`out.bin`) - never point them at a `.cfile` (raw complex
   samples).
 - Steps 3+9 alone (skip the rest) also round-trip correctly, if you just
@@ -367,12 +369,12 @@ Notes:
   display/X11 forwarding required on a remote box. It deliberately uses
   plain SVG rendering (Plotly's `go.Scatter`, not `go.Scattergl`) rather
   than WebGL, so it works even in browsers/VMs without WebGL support.
-- By default, `openwave_cli.py recv`/`dump` use exact byte matching to find
-  a frame (`openwave_link.iter_frames()`/`describe_frames()`) - a single
+- By default, `fmlink_cli.py recv`/`dump` use exact byte matching to find
+  a frame (`fmlink_link.iter_frames()`/`describe_frames()`) - a single
   bit error anywhere in the 36-byte preamble+sync-word breaks that match
   completely, so at low SNR you'll see `OK:0` with no CRC-fail count
   either (frame not found at all), not a rising CRC-fail count. Pass
-  `--correlate` to use `openwave_sync.py`'s tolerant Hamming-distance
+  `--correlate` to use `fmlink_sync.py`'s tolerant Hamming-distance
   correlator instead (matching what the archived flowgraphs'
   `digital_correlate_access_code_tag_bb` did) - it finds frames the
   exact-match path misses entirely, informally down to roughly ~2dB SNR
@@ -381,17 +383,17 @@ Notes:
   Transfer Testing" below for how FEC pushes that floor much lower.
   Example:
   ```bash
-  python3 channel.py -i /tmp/openwave-manual/shaped.cfile -o /tmp/openwave-manual/noisy.cfile --snr-db 1.5 --seed 4
-  python3 matchedfilter.py -i /tmp/openwave-manual/noisy.cfile -o /tmp/openwave-manual/recovered_symbols.cfile
-  python3 demodulate.py -t bpsk -i /tmp/openwave-manual/recovered_symbols.cfile -o /tmp/openwave-manual/out.bin
-  python3 openwave_cli.py recv -i /tmp/openwave-manual/out.bin              # OK:0 - not found
-  python3 openwave_cli.py recv -i /tmp/openwave-manual/out.bin --correlate  # OK:1 - decoded
+  python3 channel.py -i /tmp/fmlink-manual/shaped.cfile -o /tmp/fmlink-manual/noisy.cfile --snr-db 1.5 --seed 4
+  python3 matchedfilter.py -i /tmp/fmlink-manual/noisy.cfile -o /tmp/fmlink-manual/recovered_symbols.cfile
+  python3 demodulate.py -t bpsk -i /tmp/fmlink-manual/recovered_symbols.cfile -o /tmp/fmlink-manual/out.bin
+  python3 fmlink_cli.py recv -i /tmp/fmlink-manual/out.bin              # OK:0 - not found
+  python3 fmlink_cli.py recv -i /tmp/fmlink-manual/out.bin --correlate  # OK:1 - decoded
   ```
 
 ## FEC + Full File Transfer Testing
 
 Everything above tests the modem chain one stage at a time by hand. FEC
-(`openwave_fec.py`) sits between send/fec_encode and demodulate/fec_decode
+(`fmlink_fec.py`) sits between send/fec_encode and demodulate/fec_decode
 in that same chain, and `pipeline_test.sh` / `file_xfer_test.sh` wrap the
 *whole* thing - frame build through FEC/modem/noise/FEC-decode back to a
 verified round trip - into single commands, so you don't have to chain
@@ -405,9 +407,9 @@ real payloads and pass/fail sweeps across SNR/FEC combinations, use
 `file_xfer_test.sh` instead (below).
 
 What it actually runs, stage by stage:
-1. `openwave_cli.py send` builds the frame (`--mode` sets its Waveform
+1. `fmlink_cli.py send` builds the frame (`--mode` sets its Waveform
    Mode ID - header metadata only, does not itself select the modulation
-   used in step 3; see `--modtype` below), then `openwave_cli.py dump`
+   used in step 3; see `--modtype` below), then `fmlink_cli.py dump`
    hex-dumps it.
 2. *(only with `--fec`)* `fec_encode.py` encodes the frame with the given
    preset; prints the byte overhead added (e.g. `+66.7%`) since that
@@ -425,7 +427,7 @@ What it actually runs, stage by stage:
 7. Verification: without `--fec`, `cmp`s the recovered bytes against the
    original and prints `IDENTICAL` on an exact match (fec_decode.py instead
    rebuilds a fresh canonical frame on success, so this byte-for-byte check
-   only applies to the uncoded path). Finally `openwave_cli.py recv`
+   only applies to the uncoded path). Finally `fmlink_cli.py recv`
    confirms the link layer itself decodes it - when noisy and uncoded, this
    step runs *twice*, once with plain exact-byte-match sync and once with
    `--correlate`, so the tolerant correlator's benefit is visible in every
@@ -459,7 +461,7 @@ for realistic payloads and for sweeping SNR/FEC combinations.
 Both scripts write every intermediate file (frames, symbols, plots,
 recovered attachment) to a fresh `mktemp -d` directory under `/tmp` - never
 to the repo - named like
-`/tmp/openwave_file_xfer_test.mode<M>_snr<SNR>_fec<PRESET>.<random>`, so
+`/tmp/fmlink_file_xfer_test.mode<M>_snr<SNR>_fec<PRESET>.<random>`, so
 several runs (including different configs) can run at once without
 clobbering each other, and each run prints its own "Working dir:" line so
 you can go find the plots/files afterward.
@@ -469,17 +471,17 @@ presets (higher constraint length K, lower rate 1/N) correct more errors
 but cost more transmitted bytes and more Viterbi decode time (state count
 scales as `2**(K-1)`). Don't reach for a stronger preset than your SNR
 actually needs - see the empirically-measured SNR-to-preset table in
-`openwave_fec.py` right after `PRESETS` for concrete measured pass rates
+`fmlink_fec.py` right after `PRESETS` for concrete measured pass rates
 (e.g. `r1_2_k3` is already 100% reliable at 3dB; -6dB needs at least
 `r1_4_k9`). Sweep your own SNR/preset combination with a shell loop over
 `file_xfer_test.sh`'s exit code (0 = pass) - see
-`openwave_fec_generate_presets.py` if you need a preset that isn't in the
+`fmlink_fec_generate_presets.py` if you need a preset that isn't in the
 table at all.
 
 Sync gaps: if a fragment's marker doesn't survive the noise,
-`fec_decode.py` (and `openwave_cli.py recv --correlate`, for the non-FEC
+`fec_decode.py` (and `fmlink_cli.py recv --correlate`, for the non-FEC
 path) reports an explicit `gap` status for it rather than silently
-skipping straight to the next fragment - see `openwave_sync.py`'s
+skipping straight to the next fragment - see `fmlink_sync.py`'s
 `FRAGMENT_GAP_SEARCH_BITS`. A lost fragment's data is still unrecoverable
 either way (that's real information loss, not a bookkeeping problem), but
 a gap is now always visible in `fec_decode.py`'s per-fragment status
@@ -493,7 +495,7 @@ gathers a signal's energy from many places that are all known to belong
 together, and the noise in those places doesn't line up the way the
 signal does. Combining N samples, symbols or coded bits adds the signal
 up N times over, but the noise only about sqrt(N) times. That improvement
-is the processing gain, 10*log10(N) dB. OpenWave stacks several stages
+is the processing gain, 10*log10(N) dB. FMlink stacks several stages
 of it:
 
 - **The matched filter** combines the samples within each symbol. With
@@ -543,7 +545,7 @@ Two limits on all this:
   6-10 dB carrier-to-noise. The audio falls apart into clicks and noise,
   and the squelch closes (about 6 dB here). Processing gain applies to
   the audio that comes out of the radio, so it can't recover a signal the
-  radio itself has lost. On FM, OpenWave's gain goes into surviving
+  radio itself has lost. On FM, FMlink's gain goes into surviving
   fades, clicks and interference near that floor, not into going below
   it. Getting far below the noise, as FT8 or WSPR do, needs an SSB
   (linear) radio path.
@@ -568,26 +570,26 @@ On the other computer swap the two callsigns. This transmits: use a clear
 frequency and low power. Each run writes a session log to `logs/`.
 
 Or run each station with its web page instead (from
-[openwave_web](../openwave_web), then open `http://<computer>:8080`):
+[fmlink_web](../fmlink_web), then open `http://<computer>:8080`):
 
 ```
-cd ~/Projects/openwave_web && ./run.sh --station-id K0MDT-1 --dst K0MDT-2 --radio
+cd ~/Projects/fmlink_web && ./run.sh --station-id K0MDT-1 --dst K0MDT-2 --radio
 ```
 
-## Packet radio and Winlink: OpenWave as a KISS TNC
+## Packet radio and Winlink: FMlink as a KISS TNC
 
-`openwave_tnc.py` makes OpenWave a **KISS TNC**: the modem that packet
+`fmlink_tnc.py` makes FMlink a **KISS TNC**: the modem that packet
 software expects underneath it. Linux's AX.25 stack talks to it through
 `kissattach`, and through that stack Pat (Winlink client, including
 peer-to-peer), digipeating and the Linux RMS Gateway can all run over
-OpenWave's modem (FEC, interleaving, audio PHY) instead of 1200-baud AFSK.
+FMlink's modem (FEC, interleaving, audio PHY) instead of 1200-baud AFSK.
 The TNC is just a modem: AX.25 does the addressing, connections and
-retries, so OpenWave's own chat link layer isn't used.
+retries, so FMlink's own chat link layer isn't used.
 
 ```
 python3 -m ota_sim.simulator --channel fm --port mic --base-snr-db 15
-./openwave_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --pty-link ~/kiss-a
-./openwave_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --pty-link ~/kiss-b
+./fmlink_tnc.py --callsign K0MDT-1 --sim-host 127.0.0.1 --mode 2 --pty-link ~/kiss-a
+./fmlink_tnc.py --callsign K0MDT-2 --sim-host 127.0.0.1 --mode 2 --pty-link ~/kiss-b
 sudo kissattach ~/kiss-a owa      # ports owa/owb defined in /etc/ax25/axports
 sudo kissattach ~/kiss-b owb
 ```
@@ -602,7 +604,7 @@ two TNCs and the simulated FM link: `beacon` frames and full
 **Pat peer-to-peer works over the air (2026-10-07):** a Winlink message
 from K0MDT-1 to K0MDT-2 over two HTs in 42 s (18.6 s over the simulator).
 The setup for laptops and a Raspberry Pi is in
-[RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-openwave).
+[RADIO_SETUP.md](RADIO_SETUP.md#winlink-peer-to-peer-pat-over-fmlink).
 [KISS_TNC_SCOPE.md](KISS_TNC_SCOPE.md) has the setup (including
 `axports`/`ax25d` configuration), the test notes and the remaining
 milestones (digipeating, a gateway).
@@ -611,7 +613,7 @@ milestones (digipeating, a gateway).
 
 Everything above is a one-shot, file-based, single-process pipeline.
 `ota_station.py` is different: it's a live, interactive process that
-builds/parses real OpenWave frames and pushes them through the actual
+builds/parses real FMlink frames and pushes them through the actual
 modem chain (modulate -> pulse-shape on TX, matched-filter -> demodulate
 -> sync/FEC on RX) to/from a peer station, in real time - type a line,
 press Enter, it's framed, modulated, and sent; incoming decoded messages
@@ -623,7 +625,7 @@ this repo) that models path loss, fading, AWGN, and configurable latency
 between two peers talking in raw IQ samples. With `--channel fm`, it
 instead models a pair of FM transceivers carrying audio between their
 audio ports (see "Audio PHY over a simulated FM radio" below). `ota_sim` has no
-OpenWave-specific code at all - it only relays whatever bytes a peer sends
+FMlink-specific code at all - it only relays whatever bytes a peer sends
 it, so it's reusable by any project that needs two simulated radios
 talking to each other, not just this one. See `../ota_sim/README.md` for
 the simulator itself.
@@ -689,10 +691,10 @@ table of the Waveform Modes and FEC presets available. The audio-PHY flags
 a simulated FM radio" below. Key flags:
 
 `--mode N` (0-5) selects a Waveform Mode ID - modulation and symbol rate
-per `openwave_link.py`'s `WAVEFORM_MODES` (0/1 BPSK, 2/3/4 QPSK, 5 16-QAM,
+per `fmlink_link.py`'s `WAVEFORM_MODES` (0/1 BPSK, 2/3/4 QPSK, 5 16-QAM,
 each step roughly doubling raw throughput). `--fec` FEC-encodes/decodes
 using `--fec-preset` (default: `r1_4_k7`, independent of the mode's own
-documented default preset - see `openwave_fec.py`'s `PRESETS` for the
+documented default preset - see `fmlink_fec.py`'s `PRESETS` for the
 full list). `--ack` requests ACKs and retries on timeout, **per fragment**
 (stop-and-wait): a multi-fragment message sends one fragment, waits for
 its own ACK (retrying just that fragment on timeout), then sends the
@@ -731,7 +733,7 @@ what it sends, so: (1) the initiator (whichever station's operator typed
 first) probes the peer, purely to get something back to measure; (2)
 having now measured its own reception of that reply (a blind EVM-style
 estimate - no pilot symbols, computed straight off the received symbols),
-it picks the best mode/FEC from `MODE_SNR_TABLE` (`openwave_link.py`) and
+it picks the best mode/FEC from `MODE_SNR_TABLE` (`fmlink_link.py`) and
 authoritatively tells the peer to use it too, waiting for confirmation
 before either side trusts the link is in sync. A station that never
 initiates (never had its own message to send first) never negotiates on
@@ -765,7 +767,7 @@ message):
   deployment can carry, not just a hint for automatic selection, so it
   can't be bypassed by hand either.
 - **`/fec PRESET`** - same idea, but for the FEC preset alone (keeps the
-  current mode) - see `openwave_fec.py`'s `PRESETS` for the list, or run
+  current mode) - see `fmlink_fec.py`'s `PRESETS` for the list, or run
   `/fec` with no argument to see the current preset and the full list.
   Turns FEC on if this station was started without `--fec`/`--auto` -
   otherwise the preset you just set would silently go unused.
@@ -817,7 +819,7 @@ Up/down-arrow command history and basic line editing work at the prompt
   changed underneath it and a message would land using the wrong one.
 `MODE_SNR_TABLE`'s BPSK (modes 0/1) and QPSK (modes 2/3/4, all one
 reliability tier - see below) thresholds are grounded in real round-trip
-reliability measurements (see its comment in `openwave_link.py`). The
+reliability measurements (see its comment in `fmlink_link.py`). The
 16-QAM (mode 5) threshold is deliberately conservative for the same
 reason: under real fading, the control probe's own SNR reading is noisy
 enough that it can't reliably distinguish a link where 16-QAM will
@@ -849,7 +851,7 @@ time and text-level throughput; on receive, a short `[stats]` block -
 ```
 (zero-value counters omitted, unlike the single dense line
 `LinkReceiver.stats_line()` itself prints - that's still what
-`openwave_cli.py` uses, unchanged). Per-burst `[rx] SNR ~XdB (modulation)`
+`fmlink_cli.py` uses, unchanged). Per-burst `[rx] SNR ~XdB (modulation)`
 lines (a blind EVM-style estimate off whatever actually decoded the
 burst) also print under `--verbose` for every received burst, not just
 during negotiation. A session summary - messages/bytes sent and received
@@ -894,11 +896,11 @@ their audio ports. `--phy audio` makes a station send real 48 kHz audio
 instead of IQ:
 
 - **TX:** each burst is RRC-shaped symbols on a carrier tone inside the
-  radio's passband (`openwave_audio.py`), preceded by a lead-in of silence
+  radio's passband (`fmlink_audio.py`), preceded by a lead-in of silence
   (`--lead-in-ms`, default 250) that covers transmitter key-up and the far
   radio's squelch opening. Frames go out without `build_frame()`'s 24+24
   bytes of zero padding, which only the IQ path needs, and with a 16-byte
-  preamble instead of 32 (`openwave_audio.frame_for_audio()`). With frame
+  preamble instead of 32 (`fmlink_audio.frame_for_audio()`). With frame
   format v2's 20-byte header, a mode 0 ACK takes 1.9 s (it was 3.4 s).
 - **The channel:** pair it with `ota_sim`'s `--channel fm`, which models
   the two radios' whole audio-to-audio path: filters, emphasis, deviation
@@ -1018,7 +1020,7 @@ Not yet handled on the audio path:
   would.
 - **The fading table stops at mode 2.** It was measured on the mic port
   only, so the data port's mode 3 is never picked on a fading link.
-- **The GUI** (`openwave_ui`) has no `--phy audio` option yet.
+- **The GUI** (`fmlink_ui`) has no `--phy audio` option yet.
 
 ### Known limitations
 

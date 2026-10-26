@@ -4,7 +4,7 @@ usage() {
     cat <<'EOF'
 Usage: ./file_xfer_test.sh [FILE] [--message TEXT] [--mode MODE] [--snr SNR_DB] [--fec PRESET] [--modtype TYPE]
 
-Sends a message and/or a file through openwave_cli.py's send/recv and
+Sends a message and/or a file through fmlink_cli.py's send/recv and
 verifies the round trip. Exactly one test runs, shaped by what you pass:
   - FILE and --message both given: message + file attachment (send --attach)
   - --message only (no FILE):      plain text message (send)
@@ -14,7 +14,7 @@ verifies the round trip. Exactly one test runs, shaped by what you pass:
   FILE            Path to a file to send as an attachment (positional).
   --message TEXT  Text message to send (combined with FILE if both given).
   --mode MODE     Waveform Mode ID, 0-4 (default: 0) - passed straight to
-                  openwave_cli.py send's --mode. Header metadata only -
+                  fmlink_cli.py send's --mode. Header metadata only -
                   does NOT select the modulation actually used (see
                   --modtype).
   --snr SNR_DB    Push the transfer through the full modem pipeline
@@ -23,8 +23,8 @@ verifies the round trip. Exactly one test runs, shaped by what you pass:
                   link-layer-only send/recv round trip. Omit for the fast
                   link-layer-only test (no RF simulation at all).
   --fec PRESET    FEC configuration to use: r1_2_k3, r1_2_k7 (NASA/Voyager
-                  standard), r1_2_k9, r1_3_k7, etc (see openwave_fec.py's
-                  PRESETS, or run openwave_fec_generate_presets.py -h to
+                  standard), r1_2_k9, r1_3_k7, etc (see fmlink_fec.py's
+                  PRESETS, or run fmlink_fec_generate_presets.py -h to
                   search for/add more) - only meaningful combined with
                   --snr. Omit to run the raw (uncoded) pipeline.
   --modtype TYPE  Modulation scheme to actually use: bpsk (default) or
@@ -82,7 +82,7 @@ fi
 # - the mode/snr/fec label in front of it is purely so several concurrent
 # runs are tellable apart by name in `ls /tmp` or a job list.
 LABEL="mode${MODE}_snr${SNR_DB:-none}_fec${FEC_PRESET:-none}_mod${MOD_TYPE}"
-WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/openwave_file_xfer_test.${LABEL}.XXXXXX")
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/fmlink_file_xfer_test.${LABEL}.XXXXXX")
 
 echo "mode: $MODE  snr: ${SNR_DB:-none (link-layer only)}  fec: ${FEC_PRESET:-none}  modtype: $MOD_TYPE"
 echo "Working dir: $WORKDIR"
@@ -182,17 +182,17 @@ run_transfer() {
 # Build and send (message+file and file-only both go through --attach, just
 # with an empty text field in the file-only case; message-only uses plain send)
 if [ -n "$INPUT_FILE" ]; then
-    python3 openwave_cli.py send "$MESSAGE" --attach "$INPUT_FILE" -o "$WORKDIR/xfer_sent.bin" --src K0MDT --dst W1AW --mode "$MODE"
+    python3 fmlink_cli.py send "$MESSAGE" --attach "$INPUT_FILE" -o "$WORKDIR/xfer_sent.bin" --src K0MDT --dst W1AW --mode "$MODE"
 else
-    python3 openwave_cli.py send "$MESSAGE" -o "$WORKDIR/xfer_sent.bin" --src K0MDT --dst W1AW --mode "$MODE"
+    python3 fmlink_cli.py send "$MESSAGE" -o "$WORKDIR/xfer_sent.bin" --src K0MDT --dst W1AW --mode "$MODE"
 fi
 
 run_transfer "$WORKDIR/xfer_sent.bin" "$WORKDIR/xfer_received.bin"
 
 if [ -n "$INPUT_FILE" ]; then
-    RECV_OUTPUT=$(python3 openwave_cli.py recv -i "$WORKDIR/xfer_received.bin" "${RECV_FLAGS[@]}" --save-attachment "$WORKDIR/xfer_recovered")
+    RECV_OUTPUT=$(python3 fmlink_cli.py recv -i "$WORKDIR/xfer_received.bin" "${RECV_FLAGS[@]}" --save-attachment "$WORKDIR/xfer_recovered")
 else
-    RECV_OUTPUT=$(python3 openwave_cli.py recv -i "$WORKDIR/xfer_received.bin" "${RECV_FLAGS[@]}")
+    RECV_OUTPUT=$(python3 fmlink_cli.py recv -i "$WORKDIR/xfer_received.bin" "${RECV_FLAGS[@]}")
 fi
 echo "$RECV_OUTPUT"
 echo ""

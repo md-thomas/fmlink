@@ -1,13 +1,13 @@
 """
 KISS framing (the protocol between a host's packet software and a TNC) and
-just enough AX.25 address parsing for openwave_tnc.py.
+just enough AX.25 address parsing for fmlink_tnc.py.
 
 KISS wraps each frame between FEND (0xC0) bytes. Inside, the first byte is
 a command: high nibble = TNC port, low nibble = command (0 = a data frame,
 1-6 = TNC parameters, see below). A FEND or FESC (0xDB) in the frame body is
 escaped as FESC TFEND (0xDB 0xDC) or FESC TFESC (0xDB 0xDD). A data frame is
 one AX.25 frame without the HDLC flags or FCS - the TNC adds its own
-integrity check (here, OpenWave's CRC32).
+integrity check (here, FMlink's CRC32).
 
 CRC-protected variants: Linux's mkiss driver (kissattach) by default
 starts in "auto" mode and sends SMACK (command byte | 0x80, CRC-16 appended)

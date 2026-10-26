@@ -1,10 +1,10 @@
 """
-Unit tests for openwave_link.py, the shared link-layer framing module used by
+Unit tests for fmlink_link.py, the shared link-layer framing module used by
 phy_sim_loopback.grc, tx_pluto.grc, and rx_rtlsdr.grc's epy_blocks.
 
 Pure Python, no GNU Radio dependency - fast, run first.
 
-    python3 -m unittest tests.test_openwave_link -v
+    python3 -m unittest tests.test_fmlink_link -v
 """
 import os
 import struct
@@ -12,7 +12,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import openwave_link as link
+import fmlink_link as link
 
 
 class HeaderRoundTripTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class HeaderRoundTripTests(unittest.TestCase):
             link.build_header(0, packet_type=16)
 
     def test_spec_worked_example_bytes(self):
-        # OpenWave_Specification.txt's v2 worked example, byte for byte.
+        # FMlink_Specification.txt's v2 worked example, byte for byte.
         frame = link.build_frame(b'Hello', lead_pad=0, end_pad=0, mode_id=2,
                                  flags=link.FLAG_ACK_REQUESTED, seq=1, src_id=b'K0MDT', dst_id=b'ALL')
         expected = bytes.fromhex(
@@ -180,7 +180,7 @@ class ModeAndStationIdTests(unittest.TestCase):
             self.assertEqual(link.WAVEFORM_MODE_SYMBOL_RATES[mode_id], info['symbol_rate'])
 
     def test_waveform_modes_modulation_names_valid(self):
-        # Hardcoded rather than importing modulate.py, so openwave_link.py's
+        # Hardcoded rather than importing modulate.py, so fmlink_link.py's
         # tests stay independent of the CLI-pipeline modules (matching its
         # existing zero-GNU-Radio-dependency posture).
         known_modulations = {'bpsk', 'qpsk', '16qam'}
@@ -189,7 +189,7 @@ class ModeAndStationIdTests(unittest.TestCase):
                            f"mode {mode_id} has unknown modulation {info['modulation']!r}")
 
     def test_waveform_modes_fec_preset_names_valid(self):
-        import openwave_fec as fec
+        import fmlink_fec as fec
         for mode_id, info in link.WAVEFORM_MODES.items():
             self.assertIn(info['fec_preset'], fec.PRESETS,
                            f"mode {mode_id} has unknown fec_preset {info['fec_preset']!r}")
@@ -198,7 +198,7 @@ class ModeAndStationIdTests(unittest.TestCase):
         # The gap the original 0/1/[gap]/3/4 spread skipped - see
         # WAVEFORM_MODES' comment. Renumbered into its natural
         # throughput-order slot (not appended at the end) -
-        # OpenWave_Specification.txt's worked example and every other
+        # FMlink_Specification.txt's worked example and every other
         # mode-number reference were updated to match.
         self.assertEqual(link.WAVEFORM_MODES[2]['modulation'], 'qpsk')
         self.assertEqual(link.WAVEFORM_MODES[2]['symbol_rate'], 1200)
@@ -265,7 +265,7 @@ class FrameBuildAndParseTests(unittest.TestCase):
         return status, payload
 
     def test_clean_round_trip(self):
-        payload = b'Hello OpenWave!'
+        payload = b'Hello FMlink!'
         frame = link.build_frame(payload, lead_pad=4, end_pad=4)
         start = self._header_start(frame)
         status, result = self._feed_all(link.FrameParser(), frame[start:])
@@ -301,7 +301,7 @@ class FrameBuildAndParseTests(unittest.TestCase):
         self.assertTrue(link.parse_flags(parser.last_header['flags'])['ack_requested'])
 
     def test_corrupted_header_byte_detected(self):
-        frame = bytearray(link.build_frame(b'Hello OpenWave!'))
+        frame = bytearray(link.build_frame(b'Hello FMlink!'))
         start = self._header_start(bytes(frame))
         frame[start + 5] ^= 0xFF  # flip a bit inside the header
         status, result = self._feed_all(link.FrameParser(), bytes(frame[start:]))
@@ -309,7 +309,7 @@ class FrameBuildAndParseTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_corrupted_payload_byte_fails_crc(self):
-        payload = b'Hello OpenWave!'
+        payload = b'Hello FMlink!'
         frame = bytearray(link.build_frame(payload))
         start = self._header_start(bytes(frame))
         frame[start + link.HEADER_LEN + 3] ^= 0xFF  # inside the payload, not the header
@@ -318,7 +318,7 @@ class FrameBuildAndParseTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_corrupted_crc_trailer_detected(self):
-        payload = b'Hello OpenWave!'
+        payload = b'Hello FMlink!'
         frame = bytearray(link.build_frame(payload))
         start = self._header_start(bytes(frame))
         frame[start + link.HEADER_LEN + len(payload)] ^= 0xFF  # first CRC byte
@@ -327,7 +327,7 @@ class FrameBuildAndParseTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_truncated_frame_stays_incomplete(self):
-        frame = link.build_frame(b'Hello OpenWave!')
+        frame = link.build_frame(b'Hello FMlink!')
         start = self._header_start(frame)
         parser = link.FrameParser()
         status, result = None, None
@@ -337,7 +337,7 @@ class FrameBuildAndParseTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_reset_clears_partial_state(self):
-        frame = link.build_frame(b'Hello OpenWave!')
+        frame = link.build_frame(b'Hello FMlink!')
         start = self._header_start(frame)
         parser = link.FrameParser()
         for b in frame[start:start + 10]:
@@ -1263,7 +1263,7 @@ class LinkReceiverTests(unittest.TestCase):
         self.assertEqual(receiver.counts['crc_fail'], 1)
 
     def test_feed_crc_failure_accepts_truncated(self):
-        # 'truncated' is a real status openwave_fec.py's decode_frames()
+        # 'truncated' is a real status fmlink_fec.py's decode_frames()
         # can yield (unlike the uncoded sync path, which swallows it) -
         # counts must have a slot for it or this raises KeyError, which is
         # exactly what happened live before 'truncated' was added here.

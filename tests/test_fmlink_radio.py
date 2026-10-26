@@ -1,15 +1,15 @@
 """
-Tests for openwave_radio.BurstDetector: finding bursts in a stream of
+Tests for fmlink_radio.BurstDetector: finding bursts in a stream of
 audio as a radio's receive path hands it over.
 """
 import unittest
 
 import numpy as np
 
-import openwave_audio as audio
-import openwave_fec as fec
-import openwave_link as link
-import openwave_radio as radio
+import fmlink_audio as audio
+import fmlink_fec as fec
+import fmlink_link as link
+import fmlink_radio as radio
 from modulate import MODULATORS
 
 RATE = audio.AUDIO_SAMPLE_RATE

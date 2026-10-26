@@ -1,7 +1,7 @@
 """
-Unit tests for openwave_channel.py, AWGN channel simulation.
+Unit tests for fmlink_channel.py, AWGN channel simulation.
 
-    python3 -m unittest tests.test_openwave_channel -v
+    python3 -m unittest tests.test_fmlink_channel -v
 """
 import os
 import sys
@@ -10,9 +10,9 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import openwave_channel as channel
-import openwave_pulse as pulse
-import openwave_modem as modem
+import fmlink_channel as channel
+import fmlink_pulse as pulse
+import fmlink_modem as modem
 
 
 class AddAwgnTests(unittest.TestCase):
@@ -75,7 +75,7 @@ class PipelineIntegrationTests(unittest.TestCase):
     matched_filter), and that a clean/high-SNR channel still round-trips."""
 
     def test_no_noise_still_round_trips(self):
-        import openwave_link as link
+        import fmlink_link as link
         frame = link.build_frame(b'no noise here', seq=1)
         symbols = modem.modulate_bpsk(frame)
         shaped = pulse.pulse_shape(symbols)
@@ -88,7 +88,7 @@ class PipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(recovered, frame)
 
     def test_high_snr_still_round_trips(self):
-        import openwave_link as link
+        import fmlink_link as link
         frame = link.build_frame(b'high snr test message', seq=2)
         symbols = modem.modulate_bpsk(frame)
         shaped = pulse.pulse_shape(symbols)
@@ -104,7 +104,7 @@ class PipelineIntegrationTests(unittest.TestCase):
     def test_very_low_snr_corrupts_the_frame(self):
         # sanity check that noise actually does something - at a low enough
         # SNR the frame should NOT decode identically anymore
-        import openwave_link as link
+        import fmlink_link as link
         frame = link.build_frame(b'this should get corrupted by heavy noise', seq=3)
         symbols = modem.modulate_bpsk(frame)
         shaped = pulse.pulse_shape(symbols)

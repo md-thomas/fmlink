@@ -13,10 +13,10 @@ import wave
 
 import numpy as np
 
-import openwave_audio as audio
-import openwave_fec as fec
-import openwave_link as link
-import openwave_modem as modem
+import fmlink_audio as audio
+import fmlink_fec as fec
+import fmlink_link as link
+import fmlink_modem as modem
 from demodulate import DEMODULATORS
 from modulate import MODULATORS
 

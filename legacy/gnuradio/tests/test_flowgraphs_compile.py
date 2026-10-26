@@ -8,7 +8,7 @@ install.
 
 IMPORTANT: must be run with the actual repository root as the current
 working directory - NOT legacy/gnuradio/. The generated epy_blocks resolve
-`import openwave_link` via os.getcwd(), and openwave_link.py lives at the
+`import fmlink_link` via os.getcwd(), and fmlink_link.py lives at the
 repo root, not alongside these archived flowgraphs.
 
     cd <repo-root>
@@ -25,11 +25,11 @@ import yaml
 
 # Directory the archived .grc files actually live in.
 FLOWGRAPH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Real repo root, where openwave_link.py lives - this test process's own
+# Real repo root, where fmlink_link.py lives - this test process's own
 # import AND the compiled epy_block's os.getcwd()-based import both need it.
 REPO_ROOT = os.path.dirname(os.path.dirname(FLOWGRAPH_DIR))
 sys.path.insert(0, REPO_ROOT)
-import openwave_link as link
+import fmlink_link as link
 
 # Explicit list, not a glob over *.grc - legacy/gnuradio/ also has older,
 # unrelated prototype flowgraphs (test.grc, test1.grc, predating the current
@@ -72,7 +72,7 @@ class AccessCodeConsistencyTests(unittest.TestCase):
     namespace with other blocks' parameter expressions in this GNU Radio
     version (confirmed empirically: even a minimal `import math` / `math.pi`
     reproduction fails the same way), so it can't be a live reference to
-    openwave_link.PREAMBLE/SYNC_WORD. This is the guard against that literal
+    fmlink_link.PREAMBLE/SYNC_WORD. This is the guard against that literal
     silently drifting out of sync if PREAMBLE or SYNC_WORD ever change."""
 
     EXPECTED = ''.join(format(b, '08b') for b in (link.PREAMBLE[-4:] + link.SYNC_WORD))

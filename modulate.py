@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Modulate a byte file (e.g. from openwave_cli.py send, or an rx_rtlsdr.grc
-capture) into a raw complex symbol file, using openwave_modem.py's bits<->
+Modulate a byte file (e.g. from fmlink_cli.py send, or an rx_rtlsdr.grc
+capture) into a raw complex symbol file, using fmlink_modem.py's bits<->
 symbols mapping. No pulse shaping and no sample rate involved - one complex
 sample per symbol, written as raw interleaved float32 I/Q (GNU Radio's
-.cfile convention). See openwave_modem.py's module docstring for why symbol
+.cfile convention). See fmlink_modem.py's module docstring for why symbol
 rate deliberately isn't a parameter here.
 
     python3 modulate.py -t bpsk -i test.bin -o test.cfile
@@ -14,7 +14,7 @@ See demodulate.py for the inverse.
 import argparse
 import sys
 
-import openwave_modem as modem
+import fmlink_modem as modem
 
 MODULATORS = {
     'bpsk': modem.modulate_bpsk,

@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: GPL-3.0
 #
 # GNU Radio Python Flow Graph
-# Title: OpenWave RX (RTL-SDR)
-# Description: OpenWave hardware bring-up - RX half, RTL-SDR.
+# Title: FMlink RX (RTL-SDR)
+# Description: FMlink hardware bring-up - RX half, RTL-SDR.
 # GNU Radio version: 3.10.12.0
 
 from PyQt5 import Qt
@@ -35,9 +35,9 @@ import threading
 class test3_rx(gr.top_block, Qt.QWidget):
 
     def __init__(self, center_freq_default=433000000, rtl_gain=40.0, rtl_ppm=0.0, symbol_rate=600):
-        gr.top_block.__init__(self, "OpenWave RX (RTL-SDR)", catch_exceptions=True)
+        gr.top_block.__init__(self, "FMlink RX (RTL-SDR)", catch_exceptions=True)
         Qt.QWidget.__init__(self)
-        self.setWindowTitle("OpenWave RX (RTL-SDR)")
+        self.setWindowTitle("FMlink RX (RTL-SDR)")
         qtgui.util.check_set_qss()
         try:
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
@@ -371,7 +371,7 @@ class test3_rx(gr.top_block, Qt.QWidget):
 
 
 def argument_parser():
-    description = 'OpenWave hardware bring-up - RX half, RTL-SDR.'
+    description = 'FMlink hardware bring-up - RX half, RTL-SDR.'
     parser = ArgumentParser(description=description)
     parser.add_argument(
         "-f", "--center-freq-default", dest="center_freq_default", type=intx, default=433000000,

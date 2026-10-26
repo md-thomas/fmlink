@@ -18,7 +18,7 @@ import argparse
 
 import plotly.graph_objects as go
 
-import openwave_modem as modem
+import fmlink_modem as modem
 
 
 def main():

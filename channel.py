@@ -2,7 +2,7 @@
 """
 Simulate a noisy channel: add complex AWGN to a raw sample file (e.g. from
 pulseshape.py), producing a degraded sample file for testing the rest of
-the pipeline (matchedfilter.py, demodulate.py, openwave_cli.py recv) under
+the pipeline (matchedfilter.py, demodulate.py, fmlink_cli.py recv) under
 realistic conditions instead of a clean round trip.
 
     python3 channel.py -i shaped.cfile -o noisy.cfile --snr-db 10
@@ -12,13 +12,13 @@ This belongs between pulseshape.py and matchedfilter.py in the pipeline -
 noise is a sample-level phenomenon, so it doesn't make sense before pulse
 shaping. Matches phy_sim_loopback.grc's channels_channel_model_0 block,
 which also only simulates AWGN today (frequency/timing offset left at
-none) - see openwave_channel.py for the implementation.
+none) - see fmlink_channel.py for the implementation.
 """
 import argparse
 import sys
 
-import openwave_channel as channel
-import openwave_modem as modem
+import fmlink_channel as channel
+import fmlink_modem as modem
 
 
 def main():

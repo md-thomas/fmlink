@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 FEC-decode a received (possibly noisy) frame file - finds sync via
-openwave_sync's tolerant correlator, then Viterbi-decodes the Header and
+fmlink_sync's tolerant correlator, then Viterbi-decodes the Header and
 Payload+CRC blocks, correcting bit errors within the code's capability.
 Handles multi-fragment messages (as build_fragmented_frames() produces):
 every fragment found is decoded independently and, on success, rebuilt as
 a standard, uncoded frame (no lead/end-pad) - the concatenation of all
 successfully-recovered fragments is written out, ready for
-openwave_cli.py dump/recv to read directly (no --correlate needed -
+fmlink_cli.py dump/recv to read directly (no --correlate needed -
 decode_frames() already found sync and CRC-verified each corrected
 fragment).
 
@@ -17,16 +17,16 @@ fragment).
 Prints each fragment's status (ok/crc_fail/bad_length/truncated) to
 stderr as it's decoded, plus a final summary; exits non-zero unless every
 fragment found was recovered ('ok') - a partial recovery is still written
-to --output (useful for debugging), but openwave_cli.py recv's
+to --output (useful for debugging), but fmlink_cli.py recv's
 FragmentReassembler will correctly refuse to reassemble an incomplete run
-into a fake "complete" message (see openwave_link.py's FragmentReassembler
+into a fake "complete" message (see fmlink_link.py's FragmentReassembler
 docstring), so a partial file on its own isn't usable as-is.
 """
 import argparse
 import sys
 
-import openwave_fec as fec
-import openwave_link as link
+import fmlink_fec as fec
+import fmlink_link as link
 
 
 def _resolve_config(args):
@@ -53,7 +53,7 @@ def main():
     parser.add_argument('--interleaver', choices=fec.INTERLEAVERS, default=fec.DEFAULT_INTERLEAVER,
                          help=f'Must match fec_encode.py (default: {fec.DEFAULT_INTERLEAVER})')
     parser.add_argument('--max-error-fraction', type=float, default=None,
-                         help='Sync correlator tolerance (default: openwave_sync default)')
+                         help='Sync correlator tolerance (default: fmlink_sync default)')
     args = parser.parse_args()
 
     generators, k = _resolve_config(args)

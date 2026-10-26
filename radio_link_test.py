@@ -31,8 +31,8 @@ import time
 import wave
 
 import audio_wav_test as awt
-import openwave_audio as audio
-import openwave_link as link
+import fmlink_audio as audio
+import fmlink_link as link
 import ptt_play
 import radio_stations as stations_mod
 
@@ -113,7 +113,7 @@ def start_recorder(rx, seconds, path):
 
 
 def run_burst(args, tx, rx, mode, index, workdir):
-    text = f"{args.src} OpenWave test mode {mode} #{index + 1}"
+    text = f"{args.src} FMlink test mode {mode} #{index + 1}"
     level = args.level if args.level is not None else tx.get('level', 0.5)
     samples = awt.build_samples(text, mode, args.fec, args.port, args.src, level, args.lead_in)
     airtime = len(samples) / audio.AUDIO_SAMPLE_RATE

@@ -1,5 +1,5 @@
 """
-Tests for openwave_audio.py: the audio-subcarrier PHY (symbols <-> real
+Tests for fmlink_audio.py: the audio-subcarrier PHY (symbols <-> real
 audio for a radio's audio port). The FM-channel tests at the bottom need
 ota_sim installed (pip install -e ../ota_sim) and are skipped otherwise.
 """
@@ -7,10 +7,10 @@ import unittest
 
 import numpy as np
 
-import openwave_audio as audio_phy
-import openwave_fec as fec
-import openwave_link as link
-import openwave_modem as modem
+import fmlink_audio as audio_phy
+import fmlink_fec as fec
+import fmlink_link as link
+import fmlink_modem as modem
 from demodulate import DEMODULATORS
 from modulate import MODULATORS
 

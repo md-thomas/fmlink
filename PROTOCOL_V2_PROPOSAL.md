@@ -1,10 +1,10 @@
-# Proposal: OpenWave frame format v2 (compact header, shorter audio preamble)
+# Proposal: FMlink frame format v2 (compact header, shorter audio preamble)
 
 Status: **accepted and implemented (2026-10-05)** as frame format v2:
 compact 20-byte header with flag bit 5 for header extensions, the
 callsign alphabet as drafted, a 16-byte audio preamble, 1-byte FEC preset
 IDs, and compatibility option A (clean switch). The spec
-(`OpenWave_Specification.txt`) is the authoritative description; this file
+(`FMlink_Specification.txt`) is the authoritative description; this file
 records the reasoning and measurements.
 
 Re-measured after implementation, through the v2 production code (same 9
@@ -186,7 +186,7 @@ just read the version and adapt. Options:
 - **A. Clean switch (recommended).** v2 only; both stations and every
   tool move together. There are no deployed radios, and all ends run this
   codebase. Simplest code, smallest test surface. Old capture files
-  (`openwave_cli.py`, `fec_*.py` outputs) stop decoding unless a
+  (`fmlink_cli.py`, `fec_*.py` outputs) stop decoding unless a
   `--v1`-style option is kept for them.
 - **B. The sync word selects the format.** v2 frames use a different
   4-byte sync word, so the receiver knows the format from the marker it
@@ -206,16 +206,16 @@ just read the version and adapt. Options:
 
 ## Implementation outline (after approval)
 
-- `openwave_link.py`: v2 `build_header`/`parse_header`, callsign
+- `fmlink_link.py`: v2 `build_header`/`parse_header`, callsign
   pack/unpack, `HEADER_LEN = 20`, `VERSION = 2`, `FLAG_HEADER_EXTENSION`.
   Receivers skip an extension block, so its application payload is
   delivered intact; senders don't set the flag yet. Frame builders take
   the PHY's preamble length.
-- `openwave_sync.py` / `openwave_fec.py`: marker length as a parameter
+- `fmlink_sync.py` / `fmlink_fec.py`: marker length as a parameter
   (32 bytes IQ, 16 bytes audio) instead of the fixed 288 bits.
-- `openwave_audio.py` / `ota_station.py`: 16-byte marker on the audio
+- `fmlink_audio.py` / `ota_station.py`: 16-byte marker on the audio
   path; preset IDs in Control payloads if adopted.
-- `OpenWave_Specification.txt`: new header layout, callsign encoding,
+- `FMlink_Specification.txt`: new header layout, callsign encoding,
   preamble per PHY, preset ID table, a new worked example.
 - Tests: header and callsign round trips, the new worked example
   byte-for-byte, a frame with an extension block (incl. unknown entry

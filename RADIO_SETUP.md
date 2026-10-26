@@ -1,4 +1,4 @@
-# OpenWave on real radios
+# FMlink on real radios
 
 How to run `ota_station.py` over two real FM radios, one per computer, with
 no simulator and no connection between the computers except the radio link.
@@ -8,7 +8,7 @@ ACKs all worked.
 
 > **This transmits.** Use a clear frequency and low power, and run it only
 > where you are licensed to. Each station's callsign goes in every frame's
-> source field and in the messages you type; OpenWave frames are not
+> source field and in the messages you type; FMlink frames are not
 > encrypted. Station identification and band-plan rules are your
 > responsibility.
 
@@ -34,12 +34,12 @@ What does **not** work:
   Use a USB interface.
 - Bluetooth KISS TNCs (Mobilinkd etc.). They modulate and demodulate
   themselves and only hand over packets, never the radio's audio, which the
-  OpenWave audio PHY needs.
+  FMlink audio PHY needs.
 
 ## One-time setup, per computer
 
 ```
-cd ~/Projects/openwave && git pull
+cd ~/Projects/fmlink && git pull
 pip install numpy scipy pyserial     # if not already installed
 ```
 
@@ -190,7 +190,7 @@ station's `--station-id`.
 **Station 1** (for example the AIOC laptop):
 
 ```
-cd ~/Projects/openwave
+cd ~/Projects/fmlink
 ./radio_stations.py                       # confirm the interface is found
 ./level_meter.py                          # set the radio volume (Ctrl-C when "good")
 ./ota_station.py --station-id K0MDT-1 --dst K0MDT-2 \
@@ -200,7 +200,7 @@ cd ~/Projects/openwave
 **Station 2** (for example the Digirig laptop):
 
 ```
-cd ~/Projects/openwave
+cd ~/Projects/fmlink
 ./radio_stations.py
 ./level_meter.py
 ./ota_station.py --station-id K0MDT-2 --dst K0MDT-1 \
@@ -228,14 +228,14 @@ The station keeps its sound card open, so stop it (Ctrl-C) before running
 resource busy". (The web interface below has its own live level meter, so
 it doesn't need stopping for that.)
 
-**From a browser:** the [openwave_web](../openwave_web) repo runs the same
+**From a browser:** the [fmlink_web](../fmlink_web) repo runs the same
 station with a web page - chat, link SNR and constellation, the receive
 level with its history, settings changed while running, PTT and test-tone
 checks:
 
 ```
-cd ~/Projects/openwave_web && ./run.sh --station-id K0MDT-1 --dst K0MDT-2 --radio --tx-level 0.6   # server1
-cd ~/Projects/openwave_web && ./run.sh --station-id K0MDT-2 --dst K0MDT-1 --radio                 # lenovo
+cd ~/Projects/fmlink_web && ./run.sh --station-id K0MDT-1 --dst K0MDT-2 --radio --tx-level 0.6   # server1
+cd ~/Projects/fmlink_web && ./run.sh --station-id K0MDT-2 --dst K0MDT-1 --radio                 # lenovo
 ```
 
 then open `http://server1:8080` / `http://lenovo-laptop:8080` (or the IP
@@ -363,7 +363,7 @@ to the peak:
 
 The receiver now equalizes each burst: a 9-tap FIR (taps every half
 symbol, +-2 symbols) fitted by least squares to the burst's known marker,
-applied before the tracking loop (`openwave_audio.demodulate`, on by
+applied before the tracking loop (`fmlink_audio.demodulate`, on by
 default). Same on-air recordings (5 bursts per row, `radio_link_test.py
 --keep`), decoded with it off and on; SNR over every symbol after the
 marker, against what was transmitted:
@@ -544,7 +544,7 @@ threshold effect and fades, so keep some extra margin.
 | `radio_stations.py` shows nothing | check `lsusb` for the adapter and `arecord -l` for its sound card |
 | stations hear nothing from each other | wrong PTT line (try `--ptt-line dtr` or `rts`; the radio's TX light shows it keying), TX level too low or too high, different frequencies, or squelch closed |
 | SignaLink doesn't key up, or clips the start of each burst | VOX needs a moment of audio energy before it engages, which is why `ptt_play.py` gives it a short tone first instead of relying on the lead-in's silence. The "PTT test" (silent carrier) won't key a VOX radio at all - use the test tone instead |
-| receiver goes completely deaf after a wall of `overrun!!!` lines and `arecord: pcm_read: read error` in the log - every mode then fails, even ones that worked moments before | the capture hit a fatal ALSA error and `_rx_loop` gave up on it for good (fixed: it now reopens the capture after `RadioTransport.CAPTURE_RETRY_S` (2 s) instead); on an older checkout, restart the station. The recurring overrun itself is usually a CPU-starved receiver (see "high CPU on a small computer" below). This looked exactly like a SignaLink-specific mode 3 bandwidth limit on 2026-10-24 until both stations were confirmed running this fix - see `openwave_audio.py`'s PORT_PROFILES comment |
+| receiver goes completely deaf after a wall of `overrun!!!` lines and `arecord: pcm_read: read error` in the log - every mode then fails, even ones that worked moments before | the capture hit a fatal ALSA error and `_rx_loop` gave up on it for good (fixed: it now reopens the capture after `RadioTransport.CAPTURE_RETRY_S` (2 s) instead); on an older checkout, restart the station. The recurring overrun itself is usually a CPU-starved receiver (see "high CPU on a small computer" below). This looked exactly like a SignaLink-specific mode 3 bandwidth limit on 2026-10-24 until both stations were confirmed running this fix - see `fmlink_audio.py`'s PORT_PROFILES comment |
 | the sender keeps retrying and the peer reports "duplicate" | the peer's ACK is not getting back: check the levels and PTT in that direction; the transport already waits a 0.6 s turnaround before replying |
 | high CPU on a small computer | the receiver re-decodes its audio buffer every 0.5 s (about half a core with 2-3 candidate modes) |
 | `[radio tx error]` | the line after it names the `aplay` or serial error |
@@ -552,7 +552,7 @@ threshold effect and fades, so keep some extra margin.
 
 ## How it works (short)
 
-`openwave_radio.py` gives `ota_station.py` a radio in place of the simulator,
+`fmlink_radio.py` gives `ota_station.py` a radio in place of the simulator,
 with the same send / receive-callback interface, so the protocol code is
 unchanged:
 
@@ -568,9 +568,9 @@ unchanged:
   time afterwards. The station's reply timeouts allow 2 seconds per
   direction for key-up, detection and decode.
 
-## Winlink peer-to-peer (Pat) over OpenWave
+## Winlink peer-to-peer (Pat) over FMlink
 
-`openwave_tnc.py` runs OpenWave as a KISS TNC on the radio, Linux's AX.25
+`fmlink_tnc.py` runs FMlink as a KISS TNC on the radio, Linux's AX.25
 stack attaches to it, and Pat (a Winlink client) sends Winlink messages
 station to station over it. **Works on the air (2026-10-07):** Pat K0MDT-1
 (AIOC + TIDRADIO HT) -> Pat K0MDT-2 (Digirig + Baofeng) at mode 2, low power
@@ -592,7 +592,7 @@ sudo modprobe ax25 && sudo modprobe mkiss
 printf 'ax25\nmkiss\n' | sudo tee /etc/modules-load.d/ax25.conf
 
 # The AX.25 port: name "ow", this station's callsign (K0MDT-2 on the other one)
-printf 'ow\tK0MDT-1\t9600\t255\t2\tOpenWave TNC\n' | sudo tee -a /etc/ax25/axports
+printf 'ow\tK0MDT-1\t9600\t255\t2\tFMlink TNC\n' | sudo tee -a /etc/ax25/axports
 
 # Pat (check `dpkg --print-architecture`: amd64 on Intel/AMD laptops)
 wget https://github.com/la5nta/pat/releases/download/v1.0.0/pat_1.0.0_linux_amd64.deb
@@ -622,12 +622,12 @@ while it runs (a Pi Zero is unlikely to keep up).
 sudo apt update
 sudo apt install git python3-numpy python3-scipy python3-serial alsa-utils \
                  ax25-tools ax25-apps
-git clone https://github.com/md-thomas/openwave.git ~/Projects/openwave
-cd ~/Projects/openwave
+git clone https://github.com/md-thomas/fmlink.git ~/Projects/fmlink
+cd ~/Projects/fmlink
 sudo usermod -aG dialout $USER          # PTT serial port; log out and back in
 sudo modprobe ax25 && sudo modprobe mkiss
 printf 'ax25\nmkiss\n' | sudo tee /etc/modules-load.d/ax25.conf
-printf 'ow\tK0MDT-2\t9600\t255\t2\tOpenWave TNC\n' | sudo tee -a /etc/ax25/axports
+printf 'ow\tK0MDT-2\t9600\t255\t2\tFMlink TNC\n' | sudo tee -a /etc/ax25/axports
 wget https://github.com/la5nta/pat/releases/download/v1.0.0/pat_1.0.0_linux_arm64.deb
 sudo apt install ./pat_1.0.0_linux_arm64.deb    # 32-bit Pi OS: the _linux_armhf.deb
 ./radio_stations.py                     # is the AIOC / Digirig found?
@@ -643,7 +643,7 @@ On **both** stations:
 
 ```bash
 # 1. The TNC on the radio (leave running; add --tx-level if you use one with ota_station)
-./openwave_tnc.py --callsign K0MDT-1 --radio --mode 2 --kiss-port 0 --pty-link ~/kiss-ow \
+./fmlink_tnc.py --callsign K0MDT-1 --radio --mode 2 --kiss-port 0 --pty-link ~/kiss-ow \
     --log-file ~/tnc-K0MDT-1.log
 # 2. Attach it to the kernel (any KISS framing mode works, including the default)
 sudo kissattach ~/kiss-ow ow

@@ -2,7 +2,7 @@
 """
 Apply RRC pulse shaping to a raw complex symbol file (e.g. from modulate.py),
 producing an oversampled complex sample file - this is where symbol_rate/sps
-actually enter the pipeline (see openwave_pulse.py's module docstring).
+actually enter the pipeline (see fmlink_pulse.py's module docstring).
 
     python3 pulseshape.py -i test.cfile -o shaped.cfile
     python3 pulseshape.py -i test.cfile -o shaped.cfile --sps 8 --alpha 0.5
@@ -14,8 +14,8 @@ half of the round trip that does.
 import argparse
 import sys
 
-import openwave_pulse as pulse
-import openwave_modem as modem
+import fmlink_pulse as pulse
+import fmlink_modem as modem
 
 
 def main():
