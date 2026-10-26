@@ -2,6 +2,9 @@
 
 *(Formerly OpenWave - renamed 2026-10-25.)*
 
+**Setting up a station on a new computer?** Start with
+[INSTALL.md](INSTALL.md).
+
 This file explains what's actually in this repo and how the pieces fit
 together. FMlink is a link-layer/framing protocol (header, CRC, ACK,
 fragmentation, FEC) designed to work over a pluggable PHY rather than being
