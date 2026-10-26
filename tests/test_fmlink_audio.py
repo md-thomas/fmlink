@@ -14,6 +14,8 @@ import fmlink_modem as modem
 from demodulate import DEMODULATORS
 from modulate import MODULATORS
 
+import sibling_ota_sim  # noqa: F401 - finds ../ota_sim if it isn't installed
+
 try:
     from ota_sim import FMLink
     OTA_SIM_AVAILABLE = True

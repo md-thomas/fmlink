@@ -11,6 +11,8 @@ import unittest
 import fmlink_kiss as kiss
 import fmlink_link as link
 
+import sibling_ota_sim  # noqa: F401 - finds ../ota_sim if it isn't installed
+
 try:
     from ota_sim import FMLink
     from ota_sim.simulator import OTASimulator

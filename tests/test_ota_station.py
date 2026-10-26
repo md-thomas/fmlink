@@ -5,9 +5,10 @@ subprocesses), sends a real message end to end through the actual
 modem chain (modulate/pulse-shape -> simulated channel -> matched-filter/
 demodulate/sync), and confirms it arrives correctly.
 
-Requires ota_sim to be installed (pip install -e ../ota_sim from this
-repo) - skipped entirely if it isn't, matching the project's existing
-optional-dependency skip pattern (see legacy/gnuradio/tests/).
+Requires ota_sim, installed (pip install -e ../ota_sim from this repo)
+or checked out next to it (see sibling_ota_sim.py) - skipped if neither,
+matching the project's existing optional-dependency skip pattern (see
+legacy/gnuradio/tests/).
 """
 import asyncio
 import unittest
@@ -17,6 +18,8 @@ import numpy as np
 import fmlink_audio as audio_phy
 import fmlink_fec as fec
 import fmlink_link as link
+
+import sibling_ota_sim  # noqa: F401 - finds ../ota_sim if it isn't installed
 
 try:
     from ota_sim import FMLink, OTALink
@@ -1138,6 +1141,7 @@ class BatchingOverFMTests(unittest.TestCase):
         asyncio.run(scenario())
 
 
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class BatchingOverRadioTests(unittest.TestCase):
     """A batched message through the real radio transport over an in-memory
     'air' (fmlink_radio.SimulatedAir): the burst detector must hand the
@@ -1244,6 +1248,7 @@ class EventFeedTests(unittest.TestCase):
         self.assertIn('display bug', errors.getvalue())   # reported, not raised
 
 
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class RadioEventTests(unittest.TestCase):
     def test_tx_and_level_events_over_simulated_air(self):
         import fmlink_radio as radio
@@ -1269,6 +1274,7 @@ class RadioEventTests(unittest.TestCase):
         asyncio.run(scenario())
 
 
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class LiveSettingsTests(unittest.TestCase):
     """Station.update_settings(): settings changed while running, all-or-nothing."""
 
@@ -1385,6 +1391,7 @@ class LiveSettingsOverFMTests(unittest.TestCase):
         asyncio.run(scenario())
 
 
+@unittest.skipUnless(OTA_SIM_AVAILABLE, 'ota_sim not installed (pip install -e ../ota_sim)')
 class RadioTestTests(unittest.TestCase):
     """Station.radio_test() and link_state()'s 'radio', over SimulatedAir."""
 
