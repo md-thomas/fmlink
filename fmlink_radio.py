@@ -247,6 +247,26 @@ class RadioTransport:
         self._stop.set()
         self._tx_queue.put(None)
 
+    def ptt_reset(self, ptt_port, ptt_line):
+        """Force PTT released and clear this transport's own 'transmitting'
+        state, independent of whatever _tx_loop is doing - for a radio
+        stuck keyed because its USB device dropped mid-burst, so the
+        normal release in ptt_play.key_and_play's finally never reached
+        the hardware. Returns True if the serial release itself succeeded
+        (False if there's no PTT line, or opening the port failed - the
+        radio may still be unplugged); the software-side state is cleared
+        either way, so sends aren't stuck waiting on a turnaround that
+        will never come."""
+        self._transmitting = False
+        self._mute_until = 0.0
+        self._event(type='tx', state='released', seconds=0.0)
+        try:
+            ptt_play.release(ptt_port, ptt_line)
+            return True
+        except Exception as exc:
+            self._log(f"[ptt reset] {exc!r}")
+            return False
+
     def _burst(self, segment, result):
         self._last_rx_end = time.monotonic() - result['lag_s']
         mod, rate = result['attempt'][0], result['attempt'][1]

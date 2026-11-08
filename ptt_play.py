@@ -42,6 +42,24 @@ def _vox_preroll_wav(src_path, out_path, seconds=VOX_PREROLL_S, hz=VOX_PREROLL_H
         w.writeframes(bytes(tone) + frames)
 
 
+def release(ptt_port, ptt_line):
+    """Force PTT released, independent of any key_and_play() in progress -
+    for a radio stuck keyed because its USB device dropped mid-transmission,
+    so the normal release in key_and_play's finally never reached the
+    hardware. No-op for ptt_line == 'vox' (no line to release) or without a
+    ptt_port. Raises if the port can't be opened (e.g. the radio is still
+    unplugged)."""
+    if ptt_line == 'vox' or not ptt_port:
+        return
+    import serial
+    ptt = serial.Serial(ptt_port, 9600, dsrdtr=False, rtscts=False)
+    try:
+        ptt.dtr = False
+        ptt.rts = False
+    finally:
+        ptt.close()
+
+
 def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2):
     if ptt_line == 'vox':
         # No PTT line to drive - the radio keys and releases itself off the

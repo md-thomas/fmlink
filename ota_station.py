@@ -575,6 +575,20 @@ class Station:
         self._sim.send(audio_phy.audio_to_pcm16(samples))   # scaled to the TX level by the transport
         self._emit('tx', state='queued', bursts=0, seconds=float(seconds), test=kind)
 
+    def ptt_reset(self):
+        """Force PTT released - for a radio stuck keyed (e.g. its USB
+        device dropped mid-transmission, so the normal release never
+        reached the hardware). Clears this station's own 'mid-transmission'
+        state even if the serial release itself fails, so sends aren't
+        stuck waiting on a turnaround that will never come. Raises
+        ValueError off a radio."""
+        if not isinstance(self._sim, radio.RadioTransport):
+            raise ValueError('ptt reset needs a real radio (--radio)')
+        iface = self._radio_interface or {}
+        ok = self._sim.ptt_reset(iface.get('ptt_port'), iface.get('ptt_line'))
+        self._log('[ptt reset] released' if ok else
+                   '[ptt reset] could not reach the serial port - check the radio is plugged in')
+
     def link_state(self):
         """The station's current setup, as a 'link' event carries it."""
         return {
