@@ -236,6 +236,11 @@ class RadioTransport:
         self._mute_until = 0.0
         self._threads = []
         self.connected = False
+        # True from the moment a burst is dequeued (even before it's keyed -
+        # it may still be waiting out the turnaround) until _tx_loop is done
+        # with it - lets abort_tx() catch it in that pre-key window too,
+        # not just once self._transmitting is actually True.
+        self._tx_busy = False
 
     async def connect(self):
         self.connected = True
@@ -274,21 +279,27 @@ class RadioTransport:
             return False
 
     def abort_tx(self):
-        """Stop the in-progress transmission right away - the player
+        """Stop whatever _tx_loop is doing with the current burst right
+        now, even if it hasn't keyed up yet (still waiting out the
+        turnaround) - self._tx_busy covers that whole span, not just
+        self._transmitting's narrower 'actually keyed' window. The player
         (make_player) checks self._abort_tx while its audio is playing and
         cuts it short, releasing PTT immediately rather than waiting for
         the rest. Also drops anything else already queued behind it (a
         multi-burst message's remaining segments), since cancelling means
-        stop sending this, not skip ahead to its next piece. A no-op if
-        nothing is transmitting. Returns whether anything was."""
-        was_transmitting = self._transmitting
+        stop sending this, not skip ahead to its next piece. Safe to call
+        any time, including completely idle - nothing to abort there, and
+        setting self._abort_tx now doesn't linger to kill a later burst
+        (_tx_loop clears it fresh when it picks one up). Returns whether
+        there was anything to abort."""
+        had_work = self._tx_busy or not self._tx_queue.empty()
         self._abort_tx.set()
         try:
             while True:
                 self._tx_queue.get_nowait()
         except queue.Empty:
             pass
-        return was_transmitting
+        return had_work
 
     def _burst(self, segment, result):
         self._last_rx_end = time.monotonic() - result['lag_s']
@@ -353,6 +364,8 @@ class RadioTransport:
             pcm = self._tx_queue.get()
             if pcm is None:
                 return
+            self._tx_busy = True
+            self._abort_tx.clear()   # a stale abort from before this burst existed mustn't kill it
             x = audio.pcm16_to_audio(pcm)
             peak = np.abs(x).max()
             if peak > 0:
@@ -361,25 +374,35 @@ class RadioTransport:
             # is briefly deaf (PTT release, its receive mute) - don't key up
             # on top of that. Some radios need longer: a TIDRADIO HT sends a
             # carrier without its mic audio for 2-3 s after receiving
-            # (--turnaround-ms).
-            time.sleep(min(max(2.0, self.turnaround_s),
-                           max(0.0, self._last_rx_end + self.turnaround_s - time.monotonic())))
-            self._transmitting = True
+            # (--turnaround-ms). Waited out in small steps, checking for an
+            # abort, so cancelling here skips keying entirely instead of
+            # only taking effect once the radio's already keyed and playing.
+            deadline = time.monotonic() + min(max(2.0, self.turnaround_s),
+                                              max(0.0, self._last_rx_end + self.turnaround_s - time.monotonic()))
+            while (time.monotonic() < deadline and not self._abort_tx.is_set()
+                   and not self._stop.is_set()):
+                time.sleep(max(0.0, min(0.05, deadline - time.monotonic())))
             started = time.monotonic()
-            self._trace(f"[radio tx] keying, {len(pcm) / 2 / RATE:.2f} s of audio at peak "
-                        f"{self.tx_level:g}")
-            self._event(type='tx', state='keyed', seconds=len(pcm) / 2 / RATE)
             try:
-                self._player(pcm)
                 if self._abort_tx.is_set():
-                    self._trace(f"[radio tx] aborted after {time.monotonic() - started:.2f} s")
+                    self._trace("[radio tx] aborted before keying")
                     self._log("[radio tx] transmission aborted")
                 else:
-                    self._trace(f"[radio tx] released after {time.monotonic() - started:.2f} s")
+                    self._transmitting = True
+                    self._trace(f"[radio tx] keying, {len(pcm) / 2 / RATE:.2f} s of audio at peak "
+                                f"{self.tx_level:g}")
+                    self._event(type='tx', state='keyed', seconds=len(pcm) / 2 / RATE)
+                    self._player(pcm)
+                    if self._abort_tx.is_set():
+                        self._trace(f"[radio tx] aborted after {time.monotonic() - started:.2f} s")
+                        self._log("[radio tx] transmission aborted")
+                    else:
+                        self._trace(f"[radio tx] released after {time.monotonic() - started:.2f} s")
             except Exception as exc:
                 self._log(f"[radio tx error] {exc!r} - burst NOT sent")
             finally:
                 self._abort_tx.clear()
+                self._tx_busy = False
                 self._mute_until = time.monotonic() + self.settle_s
                 self._transmitting = False
                 self._event(type='tx', state='released', seconds=time.monotonic() - started)
