@@ -184,8 +184,10 @@ def arecord_chunks(device, channels=1):
         proc.terminate()
 
 
-def make_player(station):
-    """player(pcm16 bytes): key the station's PTT, play, release."""
+def make_player(station, abort=None):
+    """player(pcm16 bytes): key the station's PTT, play, release. abort: a
+    threading.Event shared with the RadioTransport using this player - see
+    RadioTransport.abort_tx()."""
     def play(pcm):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, 'tx.wav')
@@ -193,7 +195,7 @@ def make_player(station):
                 w.setnchannels(1); w.setsampwidth(2); w.setframerate(RATE)
                 w.writeframes(pcm)
             ptt_play.key_and_play(path, station['tx_device'], station['ptt_port'], station['ptt_line'],
-                                  station.get('key_delay', 0.2))
+                                  station.get('key_delay', 0.2), abort=abort)
     return play
 
 
@@ -213,7 +215,7 @@ class RadioTransport:
 
     def __init__(self, on_burst, attempts_fn, carrier_hz, capture, player, loop, tx_level=0.5,
                  log=print, settle_s=0.4, turnaround_s=DEFAULT_TURNAROUND_S, trace=None,
-                 on_event=None):
+                 on_event=None, abort_tx=None):
         self._on_burst, self._loop, self._player = on_burst, loop, player
         self._capture, self._log = capture, log
         self._trace = trace or (lambda msg: None)   # detail for a log file, not the terminal
@@ -226,6 +228,10 @@ class RadioTransport:
         self._detector = BurstDetector(attempts_fn, carrier_hz, self._burst)
         self._tx_queue = queue.Queue()
         self._stop = threading.Event()
+        # Shared with the player (see make_player) so abort_tx() can stop
+        # whatever it's doing right now, not just this transport's own
+        # bookkeeping - cleared after every burst, keyed or not.
+        self._abort_tx = abort_tx if abort_tx is not None else threading.Event()
         self._transmitting = False
         self._mute_until = 0.0
         self._threads = []
@@ -266,6 +272,23 @@ class RadioTransport:
         except Exception as exc:
             self._log(f"[ptt reset] {exc!r}")
             return False
+
+    def abort_tx(self):
+        """Stop the in-progress transmission right away - the player
+        (make_player) checks self._abort_tx while its audio is playing and
+        cuts it short, releasing PTT immediately rather than waiting for
+        the rest. Also drops anything else already queued behind it (a
+        multi-burst message's remaining segments), since cancelling means
+        stop sending this, not skip ahead to its next piece. A no-op if
+        nothing is transmitting. Returns whether anything was."""
+        was_transmitting = self._transmitting
+        self._abort_tx.set()
+        try:
+            while True:
+                self._tx_queue.get_nowait()
+        except queue.Empty:
+            pass
+        return was_transmitting
 
     def _burst(self, segment, result):
         self._last_rx_end = time.monotonic() - result['lag_s']
@@ -348,10 +371,15 @@ class RadioTransport:
             self._event(type='tx', state='keyed', seconds=len(pcm) / 2 / RATE)
             try:
                 self._player(pcm)
-                self._trace(f"[radio tx] released after {time.monotonic() - started:.2f} s")
+                if self._abort_tx.is_set():
+                    self._trace(f"[radio tx] aborted after {time.monotonic() - started:.2f} s")
+                    self._log("[radio tx] transmission aborted")
+                else:
+                    self._trace(f"[radio tx] released after {time.monotonic() - started:.2f} s")
             except Exception as exc:
                 self._log(f"[radio tx error] {exc!r} - burst NOT sent")
             finally:
+                self._abort_tx.clear()
                 self._mute_until = time.monotonic() + self.settle_s
                 self._transmitting = False
                 self._event(type='tx', state='released', seconds=time.monotonic() - started)

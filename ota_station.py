@@ -63,6 +63,7 @@ import itertools
 import os
 import signal
 import sys
+import threading
 import time
 
 try:
@@ -575,6 +576,20 @@ class Station:
         self._sim.send(audio_phy.audio_to_pcm16(samples))   # scaled to the TX level by the transport
         self._emit('tx', state='queued', bursts=0, seconds=float(seconds), test=kind)
 
+    def abort_tx(self):
+        """Stop the current transmission right away - cuts the in-progress
+        audio short and releases PTT immediately instead of waiting for
+        the rest of it, and drops anything else already queued behind it
+        (a multi-burst message's remaining segments). Works on a VOX
+        interface too (it stops the audio, which is all software can do
+        there - see ptt_reset()). Raises ValueError off a radio. Returns
+        whether anything was actually transmitting to abort."""
+        if not isinstance(self._sim, radio.RadioTransport):
+            raise ValueError('abort needs a real radio (--radio)')
+        aborted = self._sim.abort_tx()
+        self._log('[tx] transmission aborted' if aborted else '[tx] abort requested - nothing was transmitting')
+        return aborted
+
     def ptt_reset(self):
         """Force PTT released - for a radio stuck keyed (e.g. its USB
         device dropped mid-transmission, so the normal release never
@@ -692,6 +707,7 @@ class Station:
         if self.phy != 'audio':
             raise ValueError("a radio needs --phy audio")
         self._radio_interface = dict(station)   # for link_state()'s 'radio'
+        abort_tx = threading.Event()   # shared with the player - see RadioTransport.abort_tx()
 
         def attempts():
             return [(modulation, rate, use_fec, gens, k)
@@ -699,7 +715,8 @@ class Station:
         self._sim = await radio.RadioTransport(
             self._burst_received, attempts, self._carrier_for,
             capture or (lambda: radio.arecord_chunks(station['rx_device'], station['rx_channels'])),
-            player or radio.make_player(station), asyncio.get_running_loop(), tx_level, self._log,
+            player or radio.make_player(station, abort=abort_tx), asyncio.get_running_loop(), tx_level,
+            self._log, abort_tx=abort_tx,
             trace=self._trace, on_event=self._radio_event if self._on_event else None,
             **({} if turnaround_s is None else {'turnaround_s': turnaround_s}),
         ).connect()

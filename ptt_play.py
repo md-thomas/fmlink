@@ -60,7 +60,35 @@ def release(ptt_port, ptt_line):
         ptt.close()
 
 
-def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2):
+def _run_aplay(cmd, abort=None, timeout=60, poll_s=0.05):
+    """Like subprocess.run(cmd, check=True, timeout=timeout), but polls
+    abort (a threading.Event) while aplay runs and kills it early if set -
+    for cancelling a transmission already in progress. An abort ends the
+    call quietly (the caller releases PTT normally either way); a real
+    aplay failure still raises CalledProcessError."""
+    proc = subprocess.Popen(cmd)
+    try:
+        deadline = time.monotonic() + timeout
+        while proc.poll() is None:
+            if abort is not None and abort.is_set():
+                proc.terminate()
+                proc.wait(timeout=5)
+                return
+            if time.monotonic() > deadline:
+                proc.kill()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            time.sleep(poll_s)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    if proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+
+
+def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2, abort=None):
+    """abort: a threading.Event: if set while the audio is playing, stop
+    it early and release PTT right away instead of waiting for the rest -
+    for cancelling a transmission already in progress."""
     if ptt_line == 'vox':
         # No PTT line to drive - the radio keys and releases itself off the
         # audio (a SignaLink-style interface: no serial port, no CM108-style
@@ -68,7 +96,7 @@ def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2):
         with tempfile.TemporaryDirectory() as tmp:
             preroll_wav = os.path.join(tmp, 'vox_preroll.wav')
             _vox_preroll_wav(wav, preroll_wav)
-            subprocess.run(['aplay', '-q', '-D', device, preroll_wav], check=True, timeout=60)
+            _run_aplay(['aplay', '-q', '-D', device, preroll_wav], abort)
         return
     import serial
     ptt = serial.Serial(ptt_port, 9600, dsrdtr=False, rtscts=False)
@@ -77,7 +105,7 @@ def key_and_play(wav, device, ptt_port, ptt_line, key_delay=0.2):
     try:
         setattr(ptt, ptt_line, True)
         time.sleep(key_delay)
-        subprocess.run(['aplay', '-q', '-D', device, wav], check=True, timeout=60)
+        _run_aplay(['aplay', '-q', '-D', device, wav], abort)
         time.sleep(0.1)
     finally:
         ptt.dtr = False
