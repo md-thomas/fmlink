@@ -311,6 +311,18 @@ class RadioTransport:
                 self._log(f"[radio rx error] {exc!r} - reopening the capture")
                 self._detector.reset()
                 since_step = 0.0
+                # On a half-duplex interface (e.g. some SignaLink USB
+                # codecs) the capture dying can just be the device being
+                # busy with an in-progress transmission, not a real fault -
+                # retrying straight into that reopens into the same busy
+                # device, and on a VOX radio each reopen attempt is itself
+                # enough line noise to re-key it, sustaining a keying loop
+                # (seen live: tone test -> capture dies -> retry -> VOX
+                # re-keys -> capture dies again, repeating for 15+ s until
+                # the interface was unplugged). Wait out the transmission
+                # before trying again.
+                while self._transmitting and not self._stop.is_set():
+                    self._stop.wait(0.2)
                 self._stop.wait(self.CAPTURE_RETRY_S)
 
     def _tx_loop(self):

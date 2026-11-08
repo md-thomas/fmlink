@@ -581,10 +581,14 @@ class Station:
         reached the hardware). Clears this station's own 'mid-transmission'
         state even if the serial release itself fails, so sends aren't
         stuck waiting on a turnaround that will never come. Raises
-        ValueError off a radio."""
+        ValueError off a radio, or on a VOX interface - it keys itself off
+        audio energy, so there's no line for software to release at all."""
         if not isinstance(self._sim, radio.RadioTransport):
             raise ValueError('ptt reset needs a real radio (--radio)')
         iface = self._radio_interface or {}
+        if iface.get('ptt_line') == 'vox':
+            raise ValueError("no PTT line to release on a VOX interface - "
+                              "it keys off audio, not software; unplug it if it's stuck keyed")
         ok = self._sim.ptt_reset(iface.get('ptt_port'), iface.get('ptt_line'))
         self._log('[ptt reset] released' if ok else
                    '[ptt reset] could not reach the serial port - check the radio is plugged in')
