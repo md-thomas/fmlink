@@ -18,11 +18,14 @@ import wave
 
 VOX_PREROLL_S = 0.3        # silence doesn't trigger VOX - a radio with no PTT
 VOX_PREROLL_HZ = 1000.0    # line needs real audio energy before the burst's
-VOX_PREROLL_AMPLITUDE = 0.4  # own lead-in (silence) to have any chance of being keyed in time.
-                            # Quieter than the first value tried (0.6) - that
-                            # was reported intrusive on the far station's
-                            # speaker; lower still (or shorter VOX_PREROLL_S)
-                            # if 0.4 still keys VOX reliably but is too loud.
+VOX_PREROLL_AMPLITUDE = 0.5  # own lead-in (silence) to have any chance of being keyed in time.
+                            # 0.6 keyed VOX reliably but was reported
+                            # intrusive on the far station's speaker; 0.4
+                            # was quiet enough to stop keying VOX at all
+                            # (messages silently never made it to the air).
+                            # Splitting the difference - still needs an
+                            # on-air check both ways (quiet enough, keys
+                            # every time).
 
 
 def _vox_preroll_wav(src_path, out_path, seconds=VOX_PREROLL_S, hz=VOX_PREROLL_HZ,
