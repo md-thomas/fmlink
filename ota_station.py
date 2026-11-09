@@ -366,6 +366,9 @@ class Station:
         self.batching = batching
         self._peer_capabilities = 0
         self._batch_wait = None      # the batch awaiting a selective ACK, while sending
+        self._abort_send = False     # set by abort_tx(); _send_with_retry/_send_batched give
+                                      # up instead of retrying when they see this, cleared fresh
+                                      # at the start of every send_text()
         self._batch_ack_timer = None # pending "batch is over" selective ACK, while receiving
         self._tx_batch = []          # (pcm16 bytes, lead-in samples) waiting to be sent
         self._tx_flush = None        # the scheduled _flush_tx_batch, if any
@@ -577,16 +580,23 @@ class Station:
         self._emit('tx', state='queued', bursts=0, seconds=float(seconds), test=kind)
 
     def abort_tx(self):
-        """Stop the current transmission right away - cuts the in-progress
-        audio short and releases PTT immediately instead of waiting for
-        the rest of it, and drops anything else already queued behind it
-        (a multi-burst message's remaining segments). Works on a VOX
-        interface too (it stops the audio, which is all software can do
-        there - see ptt_reset()). Raises ValueError off a radio. Returns
-        whether anything was actually transmitting to abort."""
-        if not isinstance(self._sim, radio.RadioTransport):
-            raise ValueError('abort needs a real radio (--radio)')
-        aborted = self._sim.abort_tx()
+        """Stop sending the current message right away. On a radio, cuts
+        the in-progress audio short and releases PTT immediately instead
+        of waiting for the rest of it (works on VOX too - stopping the
+        audio is all software can do there, see ptt_reset()); drops
+        anything else already queued behind it too. Either way (radio or
+        simulator), also stops send_text()'s ACK/retry loop - without
+        this, cutting a burst short just makes it look lost, and
+        RetryManager's policy would keep resending the whole message on
+        its own regardless of the abort. Returns whether there was
+        actually a message in flight to abort."""
+        self._abort_send = True
+        batch_in_flight = self._batch_wait is not None
+        if batch_in_flight:
+            self._batch_wait['event'].set()   # wake _send_batched's wait early, not after its timeout
+        radio_aborted = self._sim.abort_tx() if isinstance(self._sim, radio.RadioTransport) else False
+        aborted = (radio_aborted or batch_in_flight
+                   or (self.retry_mgr is not None and self.retry_mgr.is_pending))
         self._log('[tx] transmission aborted' if aborted else '[tx] abort requested - nothing was transmitting')
         return aborted
 
@@ -1676,6 +1686,7 @@ class Station:
         own. Attempted once regardless of outcome - a peer that never
         responds isn't retried on every subsequent send, matching --auto's
         setup-only design."""
+        self._abort_send = False   # a stale abort from before this message existed mustn't kill it
         if self.auto and not self._auto_negotiate_done:
             self._auto_negotiate_done = True
             self._log(f"[negotiate] have a message to send - negotiating with {self.dst_id} first")
@@ -1807,6 +1818,10 @@ class Station:
                                           [:link.HEADER_LEN])['payload_len'] for f in acked_frames]
         overhead = getattr(self._sim, 'overhead_s', 0.0)
         while pending:
+            if self._abort_send:
+                self._log(f"[ack] aborted: {n - len(pending)}/{n} message segments acknowledged - "
+                          f"message incomplete")
+                return False
             batch, airtime = [], 0.0
             for i in pending:
                 burst = self._payload_airtime_s(payload_lens[i])
@@ -1827,6 +1842,10 @@ class Station:
             except asyncio.TimeoutError:
                 pass
             self._batch_wait = None
+            if self._abort_send:
+                self._log(f"[ack] aborted: {n - len(pending)}/{n} message segments acknowledged - "
+                          f"message incomplete")
+                return False
             got = [i for i in pending if i in wait['received']]
             pending = [i for i in pending if i not in wait['received']]
             if got:
@@ -1897,6 +1916,10 @@ class Station:
         self.retry_mgr.timeout_s = self._reply_timeout_s(base_timeout_s)
         while True:
             await asyncio.sleep(RETRY_POLL_INTERVAL_S)
+            if self._abort_send:
+                self.retry_mgr.timeout_s = base_timeout_s
+                self._log(f"[ack] seq {seq} aborted - not retrying")
+                return False
             state = self.retry_mgr.poll()
             if state == 'idle':
                 self.retry_mgr.timeout_s = base_timeout_s
