@@ -580,22 +580,32 @@ class Station:
         self._emit('tx', state='queued', bursts=0, seconds=float(seconds), test=kind)
 
     def abort_tx(self):
-        """Stop sending the current message right away. On a radio, cuts
-        the in-progress audio short and releases PTT immediately instead
-        of waiting for the rest of it (works on VOX too - stopping the
-        audio is all software can do there, see ptt_reset()); drops
-        anything else already queued behind it too. Either way (radio or
-        simulator), also stops send_text()'s ACK/retry loop - without
-        this, cutting a burst short just makes it look lost, and
-        RetryManager's policy would keep resending the whole message on
-        its own regardless of the abort. Returns whether there was
-        actually a message in flight to abort."""
+        """Stop sending the current message right away, including any
+        connection-setup step still in progress - not just the current
+        burst's audio. On a radio, cuts the in-progress audio short and
+        releases PTT immediately instead of waiting for the rest of it
+        (works on VOX too - stopping the audio is all software can do
+        there, see ptt_reset()); drops anything else already queued
+        behind it too. Either way (radio or simulator), also stops:
+          - send_text()'s ACK/retry loop (RetryManager's policy would
+            otherwise keep resending the whole message on its own,
+            regardless of the abort, since a cut-short burst just looks
+            lost rather than cancelled);
+          - negotiate()'s probe and _announce_mode()'s confirm loop (each
+            retries up to NEGOTIATE_MAX_ATTEMPTS on its own - previously
+            not abortable at all, so hitting abort during negotiation
+            did nothing until it ran its own course).
+        Returns whether there was actually something in flight to abort."""
         self._abort_send = True
         batch_in_flight = self._batch_wait is not None
         if batch_in_flight:
             self._batch_wait['event'].set()   # wake _send_batched's wait early, not after its timeout
+        if self._negotiation_event is not None:
+            self._negotiation_event.set()   # wake negotiate()'s probe wait early
+        if self._mode_set_event is not None:
+            self._mode_set_event.set()      # wake _announce_mode()'s confirm wait early
         radio_aborted = self._sim.abort_tx() if isinstance(self._sim, radio.RadioTransport) else False
-        aborted = (radio_aborted or batch_in_flight
+        aborted = (radio_aborted or batch_in_flight or self._negotiating
                    or (self.retry_mgr is not None and self.retry_mgr.is_pending))
         self._log('[tx] transmission aborted' if aborted else '[tx] abort requested - nothing was transmitting')
         return aborted
@@ -1196,6 +1206,7 @@ class Station:
             self._log("[negotiate] already negotiating - ignoring overlapping call")
             return
         self._negotiating = True
+        self._abort_send = False   # a stale abort from before this handshake started mustn't kill it
         try:
             # -- Phase 1: probe, so we have something of the peer's to measure --
             seq = self._seq
@@ -1207,12 +1218,18 @@ class Station:
                 seq, mode_id=CONTROL_MODE_ID, src_id=self.station_id.encode(),
                 dst_id=self.dst_id.encode())
 
-            probed = False
+            probed = aborted = False
             for attempt in range(NEGOTIATE_MAX_ATTEMPTS):
+                if self._abort_send:
+                    aborted = True
+                    break
                 self._transmit_control_frame(request)
                 try:
                     await asyncio.wait_for(self._negotiation_event.wait(),
                                             timeout=self._reply_timeout_s(RETRY_POLL_INTERVAL_S * 10))
+                    if self._abort_send:   # abort_tx() wakes this event too, not just a real reply
+                        aborted = True
+                        break
                     probed = True
                     break
                 except asyncio.TimeoutError:
@@ -1223,6 +1240,9 @@ class Station:
             self._negotiation_seq = None
             self._negotiation_event = None
 
+            if aborted:
+                self._log("[negotiate] aborted - not retrying")
+                return
             if not probed:
                 self._log(f"[negotiate] {self.dst_id} did not respond after "
                           f"{NEGOTIATE_MAX_ATTEMPTS} attempts - keeping "
@@ -1397,12 +1417,18 @@ class Station:
             seq, mode_id, self.fec_preset, capabilities=self._capabilities(), mode_id=CONTROL_MODE_ID,
             src_id=self.station_id.encode(), dst_id=self.dst_id.encode())
 
-        confirmed = False
+        confirmed = aborted = False
         for attempt in range(NEGOTIATE_MAX_ATTEMPTS):
+            if self._abort_send:
+                aborted = True
+                break
             self._transmit_control_frame(set_frame)
             try:
                 await asyncio.wait_for(self._mode_set_event.wait(),
                                         timeout=self._reply_timeout_s(RETRY_POLL_INTERVAL_S * 10))
+                if self._abort_send:   # abort_tx() wakes this event too, not just a real confirm
+                    aborted = True
+                    break
                 confirmed = True
                 break
             except asyncio.TimeoutError:
@@ -1417,6 +1443,8 @@ class Station:
         if confirmed:
             self._log(f"[negotiate] {self.dst_id} confirmed - both directions now "
                       f"{link.format_mode(mode_id)}/{self.fec_preset}")
+        elif aborted:
+            self._log("[negotiate] aborted - not retrying")
         else:
             self._log(f"[negotiate] {self.dst_id} never confirmed "
                       f"{link.format_mode(mode_id)}/{self.fec_preset} after "
@@ -1691,6 +1719,9 @@ class Station:
             self._auto_negotiate_done = True
             self._log(f"[negotiate] have a message to send - negotiating with {self.dst_id} first")
             await self.negotiate()
+            if self._abort_send:
+                self._log("[tx] message aborted during negotiation - not sending")
+                return
             self._log(_mode_banner(self.station_id, self))
 
         text_bytes = text.encode('utf-8')
