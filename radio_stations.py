@@ -51,6 +51,14 @@ def _run(host, command):
                           stdin=subprocess.DEVNULL).stdout
 
 
+def _norm_card_name(name):
+    """Case/whitespace-insensitive: some units report their ALSA card name
+    with different casing or spacing than others of the same interface
+    (e.g. a SignaLink reporting 'USB AUDIO  CODEC' instead of the usual
+    'USB Audio CODEC' - same hardware, different firmware/driver)."""
+    return re.sub(r'\s+', ' ', name.strip()).lower()
+
+
 def detect(host, overrides=None):
     """Stations on one computer (host LOCAL or an ssh name)."""
     overrides = overrides or {}
@@ -60,7 +68,8 @@ def detect(host, overrides=None):
     found = []
     for name, prof in PROFILES.items():
         card = next((cid for cid, cname in cards
-                     if cid == prof.get('card_id') or cname.strip() == prof.get('card_name')), None)
+                     if cid == prof.get('card_id') or (prof.get('card_name') and
+                        _norm_card_name(cname) == _norm_card_name(prof['card_name']))), None)
         if card is None:
             continue
         port = next((f'/dev/serial/by-id/{p}' for p in ports
